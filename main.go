@@ -539,6 +539,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage) {
 	fmt.Println("  - Binary operations: metric_name + 10, metric_name1 * metric_name2")
 	fmt.Println("  - Functions: rate(metric_name), increase(metric_name), abs(metric_name)")
 	fmt.Println("  - Comparisons: metric_name > 100, metric_name == 0")
+	fmt.Println("  - Ad-hoc functions: .labels(metric_name) - show available labels for a metric")
 	fmt.Println()
 
 	// Configure readline
@@ -575,6 +576,11 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage) {
 
 		if query == "quit" || query == "exit" {
 			break
+		}
+
+		// Handle ad-hoc functions before normal PromQL execution
+		if handleAdHocFunction(query, storage) {
+			continue
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -616,62 +622,38 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 	lineStr := string(line)
 	cursorPos := pos
 
-	// Find the current word being typed
+	// Determine current word at cursor
 	currentWord, _ := pac.getCurrentWord(lineStr, cursorPos)
 
-	// Get completions based on context
+	// Fetch context-aware completions (full candidates)
 	completions := pac.getCompletions(lineStr, cursorPos, currentWord)
 
-	// Convert completions to readline format
-	var suggestions [][]rune
-
-	// Check if current word is an exact match to avoid duplication
-	hasExactMatch := false
-	hasPartialMatches := len(completions) > 0
-	for _, completion := range completions {
-		if strings.EqualFold(completion, currentWord) {
-			hasExactMatch = true
-			break
+	// Dedupe and filter to those that extend currentWord
+	uniq := make(map[string]struct{}, len(completions))
+	suffixes := make([][]rune, 0, len(completions))
+	for _, cand := range completions {
+		if _, ok := uniq[cand]; ok {
+			continue
 		}
-	}
-	// If we have an exact match, suggest label selectors
-	if hasExactMatch {
-		suggestions = append(suggestions, []rune("{"))
-		return suggestions, 0
-	}
-
-	// If we have multiple partial matches but no exact match, and the current word is long,
-	// this likely means we're in a second TAB situation where we should show options instead of duplicating
-	if hasPartialMatches && len(completions) > 1 && len(currentWord) > 10 {
-		// Return the full completions but use replacement mode to avoid readline panics
-		for _, completion := range completions {
-			if strings.HasPrefix(strings.ToLower(completion), strings.ToLower(currentWord)) {
-				suggestions = append(suggestions, []rune(completion))
+		uniq[cand] = struct{}{}
+		// Only consider candidates that start with currentWord
+		if strings.HasPrefix(cand, currentWord) {
+			cw := []rune(currentWord)
+			cr := []rune(cand)
+			if len(cr) >= len(cw) {
+				suffixes = append(suffixes, cr[len(cw):])
 			}
 		}
-		// Use replacement mode with the current word length
-		return suggestions, len(currentWord)
 	}
 
-	// Use different approaches based on current word length to avoid readline bugs
-	if len(currentWord) <= 3 {
-		// For short prefixes, use append mode to avoid duplication
-		for _, completion := range completions {
-			if strings.HasPrefix(strings.ToLower(completion), strings.ToLower(currentWord)) {
-				suffix := completion[len(currentWord):]
-				suggestions = append(suggestions, []rune(suffix))
-			}
-		}
-		return suggestions, 0
-	} else {
-		// For longer prefixes, use replacement mode to avoid readline panics
-		for _, completion := range completions {
-			if strings.HasPrefix(strings.ToLower(completion), strings.ToLower(currentWord)) {
-				suggestions = append(suggestions, []rune(completion))
-			}
-		}
-		return suggestions, len(currentWord)
+	if len(suffixes) == 0 {
+		return nil, 0
 	}
+
+	// Return suffixes and replacement length = len(currentWord) in runes.
+	// The upstream readline completer will aggregate LCP and enter select-mode
+	// with arrow-key navigation automatically when multiple remain.
+	return suffixes, runeLen(currentWord)
 }
 
 // getCurrentWord extracts the word currently being typed at the cursor position.
@@ -693,11 +675,6 @@ func (pac *PrometheusAutoCompleter) getCurrentWord(line string, pos int) (string
 
 	// Extract the word from start to cursor position
 	currentWord := line[start:pos]
-
-	// Debug logging (uncomment for troubleshooting)
-	// fmt.Fprintf(os.Stderr, "[DEBUG] Line: '%s', Pos: %d, Start: %d, CurrentWord: '%s'\n",
-	//     line, pos, start, currentWord)
-
 	return currentWord, start
 }
 
@@ -896,6 +873,8 @@ func (pac *PrometheusAutoCompleter) getFunctionCompletions(prefix string) []stri
 		"label_join", "label_replace",
 		// Time functions
 		"deriv", "holt_winters", "delta", "changes", "resets",
+		// Ad-hoc functions (not part of PromQL)
+		".labels",
 	}
 
 	var completions []string
@@ -924,6 +903,30 @@ func (pac *PrometheusAutoCompleter) getOperatorCompletions(prefix string) []stri
 
 	return completions
 }
+
+// longestCommonPrefix finds the common prefix among a slice of strings (case-sensitive)
+func longestCommonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	prefix := strs[0]
+	for _, s := range strs[1:] {
+		// Trim prefix until it is a prefix of s
+		for !strings.HasPrefix(s, prefix) {
+			if len(prefix) == 0 {
+				return ""
+			}
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	return prefix
+}
+
+// runeLen returns the rune length of a string (readline uses rune positions)
+func runeLen(s string) int {
+	return len([]rune(s))
+}
+
 
 // getMixedCompletions provides a mix of all completion types when context is unclear.
 func (pac *PrometheusAutoCompleter) getMixedCompletions(prefix string) []string {
@@ -1037,6 +1040,112 @@ func printUpstreamQueryResult(result *promql.Result) {
 	default:
 		fmt.Printf("Unsupported result type: %T\n", result.Value)
 	}
+}
+
+// handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
+// Returns true if the query was handled as an ad-hoc function, false otherwise
+func handleAdHocFunction(query string, storage *SimpleStorage) bool {
+	// Handle .labels(metric) function
+	if strings.HasPrefix(query, ".labels(") && strings.HasSuffix(query, ")") {
+		// Extract metric name from .labels(metric_name)
+		metricName := strings.TrimSuffix(strings.TrimPrefix(query, ".labels("), ")")
+		metricName = strings.Trim(metricName, " \"'")
+
+		if metricName == "" {
+			fmt.Println("Usage: .labels(metric_name)")
+			fmt.Println("Example: .labels(cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour)")
+			return true
+		}
+
+		// Check if metric exists
+		samples, exists := storage.metrics[metricName]
+		if !exists {
+			fmt.Printf("Metric '%s' not found\n", metricName)
+			fmt.Println("Available metrics:")
+			count := 0
+			for name := range storage.metrics {
+				if count >= 5 {
+					fmt.Printf("... and %d more\n", len(storage.metrics)-5)
+					break
+				}
+				fmt.Printf("  - %s\n", name)
+				count++
+			}
+			return true
+		}
+
+		// Collect all unique labels for this metric
+		labelNames := make(map[string]bool)
+		labelValues := make(map[string]map[string]bool)
+
+		for _, sample := range samples {
+			for labelName, labelValue := range sample.Labels {
+				if labelName != "__name__" { // Skip the metric name label
+					labelNames[labelName] = true
+
+					if labelValues[labelName] == nil {
+						labelValues[labelName] = make(map[string]bool)
+					}
+					labelValues[labelName][labelValue] = true
+				}
+			}
+		}
+
+		// Display results
+		fmt.Printf("Labels for metric '%s' (%d samples):\n", metricName, len(samples))
+		if len(labelNames) == 0 {
+			fmt.Println("  No labels found")
+			return true
+		}
+
+		// Sort label names for consistent output
+		var sortedLabels []string
+		for labelName := range labelNames {
+			sortedLabels = append(sortedLabels, labelName)
+		}
+		sort.Strings(sortedLabels)
+
+		for _, labelName := range sortedLabels {
+			values := labelValues[labelName]
+			valueCount := len(values)
+
+			fmt.Printf("  %s (%d values)", labelName, valueCount)
+
+			// Show first few values as examples
+			if valueCount > 0 {
+				var sortedValues []string
+				for value := range values {
+					sortedValues = append(sortedValues, value)
+				}
+				sort.Strings(sortedValues)
+
+				fmt.Printf(": ")
+				if valueCount <= 3 {
+					// Show all values if 3 or fewer
+					for i, value := range sortedValues {
+						if i > 0 {
+							fmt.Printf(", ")
+						}
+						fmt.Printf("%q", value)
+					}
+				} else {
+					// Show first 3 values and indicate there are more
+					for i := 0; i < 3; i++ {
+						if i > 0 {
+							fmt.Printf(", ")
+						}
+						fmt.Printf("%q", sortedValues[i])
+					}
+					fmt.Printf(", ... and %d more", valueCount-3)
+				}
+			}
+			fmt.Println()
+		}
+
+		return true
+	}
+
+	return false
 }
 
 // testAutoCompletion demonstrates the auto-completion functionality
