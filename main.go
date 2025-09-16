@@ -425,7 +425,6 @@ func main() {
 		fmt.Println("Usage:")
 		fmt.Println("  Load metrics: go run main.go load <file.prom>")
 		fmt.Println("  Interactive query: go run main.go query <file.prom>")
-		fmt.Println("  Test auto-completion: go run main.go test-completion <file.prom>")
 		fmt.Println("")
 		fmt.Println("Features:")
 		fmt.Println("  - Dynamic auto-completion for metric names, labels, and values")
@@ -476,17 +475,6 @@ func main() {
 		fmt.Println()
 
 		runInteractiveQueries(engine, storage)
-
-	case "test-completion":
-		if len(os.Args) < 3 {
-			log.Fatal("Please specify a metrics file")
-		}
-
-		if err := loadMetricsFromFile(storage, os.Args[2]); err != nil {
-			log.Fatalf("Failed to load metrics: %v", err)
-		}
-
-		testAutoCompletion(storage)
 
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
@@ -546,7 +534,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage) {
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          "> ",
 		HistoryFile:     "/tmp/.inmem-promql_history",
-		AutoComplete:    createAutoCompleter(storage),        // Dynamic tab completion
+		AutoComplete:    createAutoCompleter(storage), // Dynamic tab completion
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
 	})
@@ -608,13 +596,21 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage) {
 
 // PrometheusAutoCompleter provides dynamic auto-completion for PromQL queries
 // based on the loaded metrics data, similar to the Prometheus UI experience.
+// AutoCompleteOptions controls optional completion behaviors, configurable via env vars.
+type AutoCompleteOptions struct {
+	AutoBrace       bool // when completing a metric name uniquely, append '{'
+	LabelNameEquals bool // when completing a label name, append '="'
+	AutoCloseQuote  bool // when completing a label value, append closing '"'
+}
+
 type PrometheusAutoCompleter struct {
 	storage *SimpleStorage
+	opts    AutoCompleteOptions
 }
 
 // NewPrometheusAutoCompleter creates a new auto-completer with access to metric data.
 func NewPrometheusAutoCompleter(storage *SimpleStorage) *PrometheusAutoCompleter {
-	return &PrometheusAutoCompleter{storage: storage}
+	return &PrometheusAutoCompleter{storage: storage, opts: loadAutoCompleteOptions()}
 }
 
 // Do implements the readline.AutoCompleter interface to provide dynamic completions.
@@ -622,8 +618,9 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 	lineStr := string(line)
 	cursorPos := pos
 
-	// Determine current word at cursor
+	// Determine current word at cursor and context
 	currentWord, _ := pac.getCurrentWord(lineStr, cursorPos)
+	ctx := pac.analyzeContext(lineStr, cursorPos)
 
 	// Fetch context-aware completions (full candidates)
 	completions := pac.getCompletions(lineStr, cursorPos, currentWord)
@@ -641,7 +638,27 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 			cw := []rune(currentWord)
 			cr := []rune(cand)
 			if len(cr) >= len(cw) {
-				suffixes = append(suffixes, cr[len(cw):])
+				// base suffix beyond current word
+				suf := make([]rune, len(cr[len(cw):]))
+				copy(suf, cr[len(cw):])
+
+				// Optional tweaks based on context
+				switch ctx.Type {
+				case "metric_name":
+					if pac.opts.AutoBrace && len(completions) == 1 {
+						suf = append(suf, '{')
+					}
+case "label_name":
+					if pac.opts.LabelNameEquals {
+						suf = append(suf, '=', '"')
+					}
+				case "label_value":
+					if pac.opts.AutoCloseQuote {
+						suf = append(suf, '"')
+					}
+				}
+
+				suffixes = append(suffixes, suf)
 			}
 		}
 	}
@@ -681,9 +698,9 @@ func (pac *PrometheusAutoCompleter) getCurrentWord(line string, pos int) (string
 // isWordBoundary checks if a character is a word boundary for PromQL
 func isWordBoundary(c byte) bool {
 	return c == ' ' || c == '(' || c == ')' || c == '{' || c == '}' ||
-		   c == ',' || c == '=' || c == '!' || c == '~' || c == '"' ||
-		   c == '\t' || c == '\n' || c == '+' || c == '-' || c == '*' ||
-		   c == '/' || c == '^' || c == '%'
+		c == ',' || c == '=' || c == '!' || c == '~' || c == '"' ||
+		c == '\t' || c == '\n' || c == '+' || c == '-' || c == '*' ||
+		c == '/' || c == '^' || c == '%'
 }
 
 // getCompletions returns appropriate completions based on the query context.
@@ -838,11 +855,11 @@ func (pac *PrometheusAutoCompleter) getLabelValueCompletions(metricName, labelNa
 		metricsToCheck = pac.storage.metrics
 	}
 
-	for _, samples := range metricsToCheck {
+for _, samples := range metricsToCheck {
 		for _, sample := range samples {
 			if value, exists := sample.Labels[labelName]; exists {
 				if strings.HasPrefix(strings.ToLower(value), strings.ToLower(prefix)) {
-					labelValues[`"`+value+`"`] = true // Add quotes for label values
+					labelValues[value] = true // raw value, no quotes; quotes handled in Do
 				}
 			}
 		}
@@ -927,6 +944,31 @@ func runeLen(s string) int {
 	return len([]rune(s))
 }
 
+// getEnvBool reads an environment variable and parses it as boolean.
+// Accepts 1/0, true/false (case-insensitive). Falls back to defVal when unset/invalid.
+func getEnvBool(name string, defVal bool) bool {
+	v := os.Getenv(name)
+	if v == "" {
+		return defVal
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return defVal
+	}
+}
+
+// loadAutoCompleteOptions reads options from environment variables with sane defaults.
+func loadAutoCompleteOptions() AutoCompleteOptions {
+	return AutoCompleteOptions{
+		AutoBrace:       getEnvBool("INMEM_PROMQL_COMPLETION_AUTO_BRACE", true),
+		LabelNameEquals: getEnvBool("INMEM_PROMQL_COMPLETION_LABEL_EQUALS", true),
+		AutoCloseQuote:  getEnvBool("INMEM_PROMQL_COMPLETION_AUTO_CLOSE_QUOTE", true),
+	}
+}
 
 // getMixedCompletions provides a mix of all completion types when context is unclear.
 func (pac *PrometheusAutoCompleter) getMixedCompletions(prefix string) []string {
@@ -1146,64 +1188,4 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 	}
 
 	return false
-}
-
-// testAutoCompletion demonstrates the auto-completion functionality
-// This function shows how the enhanced auto-completer works with loaded metrics
-func testAutoCompletion(storage *SimpleStorage) {
-	fmt.Println("\n=== Auto-Completion Test ===")
-fmt.Println("Testing enhanced auto-completion with loaded metrics...")
-
-	// Create the auto-completer
-	completer := NewPrometheusAutoCompleter(storage)
-
-	// Test 1: Metric name completion
-	fmt.Println("1. Metric name completion for 'cl':")
-	completions := completer.getCompletions("cl", 2, "cl")
-	for _, completion := range completions {
-		fmt.Printf("   - %s\n", completion)
-	}
-
-	// Test 2: Metric name completion for 'cloudcost'
-	fmt.Println("\n2. Metric name completion for 'cloudcost':")
-	completions = completer.getCompletions("cloudcost", 9, "cloudcost")
-	for _, completion := range completions {
-		fmt.Printf("   - %s\n", completion)
-	}
-
-	// Test 3: Label name completion inside selectors
-	fmt.Println("\n3. Label name completion for 'cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{':")
-	completions = completer.getCompletions("cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{", 61, "")
-	for _, completion := range completions {
-		fmt.Printf("   - %s\n", completion)
-	}
-
-	// Test 4: Label value completion
-	fmt.Println("\n4. Label value completion for 'cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{region=':")
-	completions = completer.getCompletions("cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{region=", 68, "")
-	for _, completion := range completions {
-		fmt.Printf("   - %s\n", completion)
-	}
-
-	// Test 5: Function completion
-	fmt.Println("\n5. Function completion for 'su':")
-	completions = completer.getFunctionCompletions("su")
-	for _, completion := range completions {
-		fmt.Printf("   - %s\n", completion)
-	}
-
-	// Test 6: Mixed completion (when context is unclear)
-	fmt.Println("\n6. Mixed completion for 'm':")
-	completions = completer.getCompletions("m", 1, "m")
-	limit := 10 // Limit output for readability
-	for i, completion := range completions {
-		if i >= limit {
-			fmt.Printf("   ... and %d more\n", len(completions)-limit)
-			break
-		}
-		fmt.Printf("   - %s\n", completion)
-	}
-
-	fmt.Println("\n=== Test completed ===")
-	fmt.Println("The auto-completion system is now active. Try the 'query' mode to experience it interactively!")
 }
