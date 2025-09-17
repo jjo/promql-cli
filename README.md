@@ -16,10 +16,17 @@ An in-memory PromQL playground/REPL. It loads Prometheus text exposition format 
 Commands (from the program):
 - Load metrics (parse + summarize):
   - go run . load <file.prom>
-- Interactive query (REPL with autocomplete):
-  - go run . query <file.prom>
+- Query (REPL with autocomplete):
+  - go run . query [flags] <file.prom>
 - Test auto-completion (prints suggestions without REPL):
   - go run . test-completion <file.prom>
+
+Flags (query mode):
+- -q, --query "<expr>"  Execute a single PromQL expression and exit (no REPL)
+- -o, --output json      With -q, output results as JSON (vector/scalar/matrix)
+
+Common flags:
+- -s, --silent           Suppress startup output (banners, summaries)
 
 Ad-hoc commands (REPL only):
 - .help
@@ -27,6 +34,8 @@ Ad-hoc commands (REPL only):
 - .labels <metric>
   - Show the set of labels and example values for a metric present in the loaded dataset
   - Example: `.labels http_requests_total`
+- .metrics
+  - List metric names present in the loaded dataset
 - .seed <metric> [steps=N] [step=1m]
   - Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())
   - Also supports positional form: `.seed <metric> <steps> [<step>]`
@@ -38,8 +47,16 @@ Ad-hoc commands (REPL only):
 
 With the built binary:
 - ./bin/promql-cli load <file.prom>
-- ./bin/promql-cli query <file.prom>
+- ./bin/promql-cli query [flags] <file.prom>
 - ./bin/promql-cli test-completion <file.prom>
+
+Examples (non-interactive and JSON):
+- One-off query and exit:
+  - ./bin/promql-cli query -q 'sum(rate(http_requests_total[5m]))' metrics.prom
+- JSON output (Prometheus-like shape):
+  - ./bin/promql-cli query -q 'up' -o json metrics.prom
+- Suppress startup output:
+  - ./bin/promql-cli query -s metrics.prom
 
 Notes:
 - <file.prom> must be in Prometheus text exposition format.

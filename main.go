@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -422,13 +423,21 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage:")
 		fmt.Println("  Load metrics: go run main.go load <file.prom>")
-		fmt.Println("  Interactive query: go run main.go query <file.prom>")
+		fmt.Println("  Query:        go run main.go query [flags] <file.prom>")
+		fmt.Println("")
+		fmt.Println("Common flags:")
+		fmt.Println("  -s, --silent           Suppress startup output (banners, summaries)")
+		fmt.Println("")
+		fmt.Println("Flags (query mode):")
+		fmt.Println("  -q, --query \"<expr>\"   Execute a single PromQL expression and exit (no REPL)")
+		fmt.Println("  -o, --output json       When used with -q, output JSON (default is text)")
 		fmt.Println("")
 		fmt.Println("Features:")
 		fmt.Println("  - Dynamic auto-completion for metric names, labels, and values")
 		fmt.Println("  - Context-aware suggestions based on query position")
 		fmt.Println("  - Full PromQL function and operator completion")
 		fmt.Println("  - Tab completion similar to Prometheus UI")
+		fmt.Println("  - Ad-hoc commands: .help, .labels, .metrics, .seed, .at")
 		os.Exit(1)
 	}
 
@@ -448,31 +457,133 @@ func main() {
 
 	switch os.Args[1] {
 	case "load":
-		if len(os.Args) < 3 {
+		// Flags: -s/--silent
+		args := os.Args[2:]
+		var (
+			metricsFile string
+			silent      bool
+		)
+		for i := 0; i < len(args); i++ {
+			a := args[i]
+			if a == "-s" || a == "--silent" {
+				silent = true
+				continue
+			}
+			if strings.HasPrefix(a, "-") {
+				log.Fatalf("Unknown flag: %s", a)
+			}
+			if metricsFile == "" {
+				metricsFile = a
+			} else {
+				log.Fatalf("Unexpected extra argument: %s", a)
+			}
+		}
+		if metricsFile == "" {
 			log.Fatal("Please specify a metrics file")
 		}
 
-		if err := loadMetricsFromFile(storage, os.Args[2]); err != nil {
+		if err := loadMetricsFromFile(storage, metricsFile); err != nil {
 			log.Fatalf("Failed to load metrics: %v", err)
 		}
 
-		fmt.Printf("Successfully loaded metrics from %s\n", os.Args[2])
-		printStorageInfo(storage)
+		if !silent {
+			fmt.Printf("Successfully loaded metrics from %s\n", metricsFile)
+			printStorageInfo(storage)
+		}
 
 	case "query":
-		if len(os.Args) < 3 {
+		// Parse flags: -q/--query, -o/--output, and metrics file path
+		args := os.Args[2:]
+		var (
+			metricsFile string
+			oneOffQuery string
+			outputJSON  bool
+			silent      bool
+		)
+		for i := 0; i < len(args); i++ {
+			a := args[i]
+			if a == "-q" || a == "--query" {
+				i++
+				if i >= len(args) {
+					log.Fatal("--query requires an argument")
+				}
+				oneOffQuery = args[i]
+				continue
+			}
+			if strings.HasPrefix(a, "--query=") {
+				oneOffQuery = strings.TrimPrefix(a, "--query=")
+				continue
+			}
+			if a == "-o" || a == "--output" {
+				i++
+				if i >= len(args) {
+					log.Fatal("--output requires an argument (e.g., json)")
+				}
+				if strings.EqualFold(args[i], "json") {
+					outputJSON = true
+				}
+				continue
+			}
+			if strings.HasPrefix(a, "--output=") {
+				val := strings.TrimPrefix(a, "--output=")
+				if strings.EqualFold(val, "json") {
+					outputJSON = true
+				}
+				continue
+			}
+			if a == "-s" || a == "--silent" {
+				silent = true
+				continue
+			}
+			if strings.HasPrefix(a, "-") {
+				log.Fatalf("Unknown flag: %s", a)
+			}
+			// positional -> metrics file
+			if metricsFile == "" {
+				metricsFile = a
+			} else {
+				log.Fatalf("Unexpected extra argument: %s", a)
+			}
+		}
+		if metricsFile == "" {
 			log.Fatal("Please specify a metrics file")
 		}
 
-		if err := loadMetricsFromFile(storage, os.Args[2]); err != nil {
+		if err := loadMetricsFromFile(storage, metricsFile); err != nil {
 			log.Fatalf("Failed to load metrics: %v", err)
 		}
 
-		fmt.Printf("Loaded metrics from %s\n", os.Args[2])
-		printStorageInfo(storage)
-		fmt.Println()
+		if !silent {
+			fmt.Printf("Loaded metrics from %s\n", metricsFile)
+			printStorageInfo(storage)
+			fmt.Println()
+		}
 
-		runInteractiveQueries(engine, storage)
+		if oneOffQuery != "" {
+			// Execute a single expression and exit
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			q, err := engine.NewInstantQuery(ctx, storage, nil, oneOffQuery, time.Now())
+			if err != nil {
+				cancel()
+				log.Fatalf("Error creating query: %v", err)
+			}
+			res := q.Exec(ctx)
+			cancel()
+			if res.Err != nil {
+				log.Fatalf("Error: %v", res.Err)
+			}
+			if outputJSON {
+				if err := printResultJSON(res); err != nil {
+					log.Fatalf("Failed to render JSON: %v", err)
+				}
+			} else {
+				printUpstreamQueryResult(res)
+			}
+			return
+		}
+
+		// Interactive REPL
+		runInteractiveQueries(engine, storage, silent)
 
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
@@ -516,17 +627,19 @@ func printStorageInfo(storage *SimpleStorage) {
 
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
-func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage) {
-	fmt.Println("Enter PromQL queries (or 'quit' to exit):")
-	fmt.Println("Supported queries:")
-	fmt.Println("  - Basic selectors: metric_name, metric_name{label=\"value\"}")
-	fmt.Println("  - Aggregations: sum(metric_name), avg(metric_name), count(metric_name), min(metric_name), max(metric_name)")
-	fmt.Println("  - Group by: sum(metric_name) by (label)")
-	fmt.Println("  - Binary operations: metric_name + 10, metric_name1 * metric_name2")
-	fmt.Println("  - Functions: rate(metric_name), increase(metric_name), abs(metric_name)")
-	fmt.Println("  - Comparisons: metric_name > 100, metric_name == 0")
-fmt.Println("  - Ad-hoc commands: .help, .labels <metric>, .seed <metric> [steps=N] [step=1m], .at <time> <query>")
-	fmt.Println()
+func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent bool) {
+	if !silent {
+		fmt.Println("Enter PromQL queries (or 'quit' to exit):")
+		fmt.Println("Supported queries:")
+		fmt.Println("  - Basic selectors: metric_name, metric_name{label=\"value\"}")
+		fmt.Println("  - Aggregations: sum(metric_name), avg(metric_name), count(metric_name), min(metric_name), max(metric_name)")
+		fmt.Println("  - Group by: sum(metric_name) by (label)")
+		fmt.Println("  - Binary operations: metric_name + 10, metric_name1 * metric_name2")
+		fmt.Println("  - Functions: rate(metric_name), increase(metric_name), abs(metric_name)")
+		fmt.Println("  - Comparisons: metric_name > 100, metric_name == 0")
+		fmt.Println("  - Ad-hoc commands: .help, .labels <metric>, .metrics, .seed <metric> [steps=N] [step=1m], .at <time> <query>")
+		fmt.Println()
+	}
 
 	// Configure readline
 	rl, err := readline.NewEx(&readline.Config{
@@ -538,7 +651,7 @@ fmt.Println("  - Ad-hoc commands: .help, .labels <metric>, .seed <metric> [steps
 	})
 	if err != nil {
 		fmt.Printf("Warning: Could not initialize readline, falling back to basic input: %v\n", err)
-		runBasicInteractiveQueries(engine, storage)
+		runBasicInteractiveQueries(engine, storage, silent)
 		return
 	}
 	defer rl.Close()
@@ -718,18 +831,18 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	// Special handling for ad-hoc commands starting with '.'
 	beforeCursor := line[:pos]
 	trimmed := strings.TrimLeft(beforeCursor, " \t")
-	if strings.HasPrefix(trimmed, ".") {
-		// If typing the command token, suggest available ad-hoc commands
-		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-			cmds := []string{".help", ".labels", ".seed", ".at"}
-			var out []string
-			for _, c := range cmds {
-				if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
-					out = append(out, c)
+		if strings.HasPrefix(trimmed, ".") {
+			// If typing the command token, suggest available ad-hoc commands
+			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
+				cmds := []string{".help", ".labels", ".metrics", ".seed", ".at"}
+				var out []string
+				for _, c := range cmds {
+					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
+						out = append(out, c)
+					}
 				}
+				return out
 			}
-			return out
-		}
 		// If after ".labels " or ".seed ", complete metric names
 		if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
 			return pac.getMetricNameCompletions(currentWord)
@@ -1138,8 +1251,10 @@ func createAutoCompleter(storage *SimpleStorage) readline.AutoCompleter {
 }
 
 // runBasicInteractiveQueries provides a fallback when readline is unavailable
-func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage) {
-	fmt.Println("Using basic input mode (readline unavailable)")
+func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent bool) {
+	if !silent {
+		fmt.Println("Using basic input mode (readline unavailable)")
+	}
 
 	for {
 		fmt.Print("> ")
@@ -1220,6 +1335,87 @@ func printUpstreamQueryResult(result *promql.Result) {
 	}
 }
 
+// printResultJSON renders the result as JSON similar to Prometheus API shapes.
+func printResultJSON(result *promql.Result) error {
+	type sampleJSON struct {
+		Metric map[string]string `json:"metric"`
+		Value  [2]interface{}    `json:"value"` // [timestamp(sec), value]
+	}
+	type seriesJSON struct {
+		Metric map[string]string  `json:"metric"`
+		Values [][2]interface{}   `json:"values"`
+	}
+	type dataJSON struct {
+		ResultType string        `json:"resultType"`
+		Result     interface{}   `json:"result"`
+	}
+	type respJSON struct {
+		Status string   `json:"status"`
+		Data   dataJSON `json:"data"`
+	}
+
+	switch v := result.Value.(type) {
+	case promql.Vector:
+		out := respJSON{Status: "success", Data: dataJSON{ResultType: "vector"}}
+		var arr []sampleJSON
+		for _, s := range v {
+			arr = append(arr, sampleJSON{
+				Metric: labelsToMap(s.Metric),
+				Value:  [2]interface{}{float64(s.T) / 1000.0, s.F},
+			})
+		}
+		out.Data.Result = arr
+		b, err := json.Marshal(out)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+		return nil
+	case promql.Scalar:
+		out := respJSON{Status: "success", Data: dataJSON{ResultType: "scalar"}}
+		out.Data.Result = [2]interface{}{float64(v.T) / 1000.0, v.V}
+		b, err := json.Marshal(out)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+		return nil
+	case promql.Matrix:
+		out := respJSON{Status: "success", Data: dataJSON{ResultType: "matrix"}}
+		var arr []seriesJSON
+		for _, series := range v {
+			var values [][2]interface{}
+			for _, p := range series.Floats {
+				values = append(values, [2]interface{}{float64(p.T) / 1000.0, p.F})
+			}
+			arr = append(arr, seriesJSON{
+				Metric: labelsToMap(series.Metric),
+				Values: values,
+			})
+		}
+		out.Data.Result = arr
+		b, err := json.Marshal(out)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+		return nil
+	default:
+		// Unknown type; just marshal empty
+		out := respJSON{Status: "success", Data: dataJSON{ResultType: fmt.Sprintf("%T", result.Value), Result: nil}}
+		b, err := json.Marshal(out)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+		return nil
+	}
+}
+
+func labelsToMap(l labels.Labels) map[string]string {
+	return l.Map()
+}
+
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 // Returns true if the query was handled as an ad-hoc function, false otherwise
 func handleAdHocFunction(query string, storage *SimpleStorage) bool {
@@ -1231,6 +1427,8 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		fmt.Println("  .labels <metric>")
 		fmt.Println("    Show the set of labels and example values for a metric present in the loaded dataset")
 		fmt.Println("    Example: .labels http_requests_total")
+		fmt.Println("  .metrics")
+		fmt.Println("    List metric names available in the loaded dataset")
 		fmt.Println("  .seed <metric> [steps=N] [step=1m]")
 		fmt.Println("    Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())")
 		fmt.Println("    Also supports positional form: .seed <metric> <steps> [<step>]")
@@ -1239,6 +1437,24 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		fmt.Println("    Evaluate a query at a specific time. Time formats: now, now-5m, now+1h, RFC3339, unix secs/millis")
 		fmt.Println("    Example: .at now-10m sum by (path) (rate(http_requests_total[5m]))")
 		fmt.Println()
+		return true
+	}
+
+	// .metrics: list metric names
+	if strings.TrimSpace(query) == ".metrics" {
+		if len(storage.metrics) == 0 {
+			fmt.Println("No metrics loaded")
+			return true
+		}
+		var names []string
+		for name := range storage.metrics {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Printf("Metrics (%d):\n", len(names))
+		for _, n := range names {
+			fmt.Printf("  - %s\n", n)
+		}
 		return true
 	}
 
