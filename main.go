@@ -15,6 +15,13 @@ import (
 	promparser "github.com/prometheus/prometheus/promql/parser"
 )
 
+// Version info. Overridden at build time via -ldflags.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func init() {
 	// Initialize validation scheme to avoid panics
 	model.NameValidationScheme = model.UTF8Validation
@@ -29,6 +36,7 @@ func main() {
 		fmt.Println("Usage:")
 		fmt.Println("  Load metrics: go run main.go load <file.prom>")
 		fmt.Println("  Query:        go run main.go query [flags] <file.prom>")
+		fmt.Println("  Version:      go run main.go version")
 		fmt.Println("")
 		fmt.Println("Common flags:")
 		fmt.Println("  -s, --silent           Suppress startup output (banners, summaries)")
@@ -44,6 +52,12 @@ func main() {
 		fmt.Println("  - Tab completion similar to Prometheus UI")
 		fmt.Println("  - Ad-hoc commands: .help, .labels, .metrics, .seed, .at")
 		os.Exit(1)
+	}
+
+	// Fast-path for version banner
+	if os.Args[1] == "version" {
+		printVersion()
+		return
 	}
 
 	storage := NewSimpleStorage()
@@ -194,6 +208,13 @@ func main() {
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		os.Exit(1)
 	}
+}
+
+// printVersion prints a human-readable version string.
+func printVersion() {
+	fmt.Printf("promql-cli %s\n", version)
+	fmt.Printf("  commit: %s\n", commit)
+	fmt.Printf("  date:   %s\n", date)
 }
 
 // loadMetricsFromFile loads metrics from a file into the provided storage.

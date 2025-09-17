@@ -1,9 +1,14 @@
 name: Docker build and publish
 
+concurrency:
+  group: docker-publish-${{ github.ref_name }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [ main, master ]
     tags: [ 'v*' ]
+  workflow_dispatch:
 
 jobs:
   docker:
@@ -47,6 +52,22 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/heads/') && (github.ref_name == 'main' || github.ref_name == 'master') }}
             type=sha,prefix=sha-,format=short
             type=ref,event=tag
+          labels: |
+            org.opencontainers.image.title=promql-cli
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.ver.outputs.date || '' }}
+
+      - name: Prepare build args
+        id: ver
+        run: |
+          # Derive version string
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "commit=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -54,7 +75,12 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            COMMIT=${{ steps.ver.outputs.commit }}
+            BUILD_DATE=${{ steps.ver.outputs.date }}

@@ -7,10 +7,18 @@ PKG := github.com/jjo/promql-cli
 TAG ?= latest
 IMAGE := xjjo/$(APP):$(TAG)
 
-GOFLAGS :=
-LDFLAGS := -s -w
+# Git-derived versioning (falls back for non-git envs)
+GIT_VERSION := $(shell git describe --tags --dirty --always 2>/dev/null || echo dev)
+GIT_COMMIT  := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+BUILD_DATE  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: all build run test fmt vet tidy clean docker-build docker-run docker-push
+GOFLAGS :=
+LDFLAGS := -s -w \
+	-X main.version=$(GIT_VERSION) \
+	-X main.commit=$(GIT_COMMIT) \
+	-X main.date=$(BUILD_DATE)
+
+.PHONY: all build run test fmt vet tidy clean docker-build docker-run docker-push version
 
 all: build
 
@@ -19,7 +27,7 @@ $(BIN):
 
 build: $(BIN)
 	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN)/$(APP) ./
-	@echo "Built $(BIN)/$(APP)"
+	@echo "Built $(BIN)/$(APP) (version=$(GIT_VERSION), commit=$(GIT_COMMIT))"
 
 run: build
 	$(BIN)/$(APP) $(ARGS)
@@ -46,7 +54,11 @@ clean:
 # Docker
 
 docker-build:
-	docker build -t $(IMAGE) .
+	docker build \
+		--build-arg VERSION=$(GIT_VERSION) \
+		--build-arg COMMIT=$(shell git rev-parse HEAD 2>/dev/null || echo unknown) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-t $(IMAGE) .
 
 # Example: make docker-run ARGS="query /data/metrics.prom"
 docker-run:
@@ -54,4 +66,10 @@ docker-run:
 
 docker-push:
 	docker push $(IMAGE)
+
+# Show computed version info
+version:
+	@echo "VERSION=$(GIT_VERSION)"
+	@echo "COMMIT=$(GIT_COMMIT)"
+	@echo "DATE=$(BUILD_DATE)"
 
