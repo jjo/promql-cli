@@ -254,7 +254,7 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	if !inLabels && strings.HasPrefix(trimmed, ".") {
 		// If typing the command token, suggest available ad-hoc commands
 		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-			cmds := []string{".help", ".labels", ".metrics", ".seed", ".at"}
+			cmds := []string{".help", ".labels", ".metrics", ".seed", ".scrape", ".drop", ".at"}
 			var out []string
 			for _, c := range cmds {
 				if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
@@ -820,25 +820,84 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, s
 			break
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		executeOne(engine, storage, query)
+	}
+}
 
-		// Execute query using upstream Prometheus engine
-		q, err := engine.NewInstantQuery(ctx, storage, nil, query, time.Now())
-		if err != nil {
-			fmt.Printf("Error creating query: %v\n", err)
-			cancel()
+// executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
+func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
+	query := strings.TrimSpace(line)
+	if query == "" {
+		return
+	}
+
+	// Ad-hoc commands
+	if handleAdHocFunction(query, storage) {
+		return
+	}
+
+	// Support ".at <time> <query>"
+	evalTime := time.Now()
+	if strings.HasPrefix(query, ".at ") {
+		parts := strings.Fields(query)
+		if len(parts) >= 3 {
+			if ts, err := parseEvalTime(parts[1]); err == nil {
+				evalTime = ts
+				query = strings.TrimPrefix(query, ".at "+parts[1]+" ")
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	q, err := engine.NewInstantQuery(ctx, storage, nil, query, evalTime)
+	if err != nil {
+		fmt.Printf("Error creating query: %v\n", err)
+		return
+	}
+
+	result := q.Exec(ctx)
+	if result.Err != nil {
+		fmt.Printf("Error: %v\n", result.Err)
+		return
+	}
+	printUpstreamQueryResult(result)
+}
+
+// runInitCommands executes semicolon-separated commands before interactive session or one-off query.
+// When silent is true, outputs produced by these commands are suppressed.
+func runInitCommands(engine *promql.Engine, storage *SimpleStorage, commands string, silent bool) {
+	if strings.TrimSpace(commands) == "" {
+		return
+	}
+
+	var restore func()
+	if silent {
+		// Temporarily redirect stdout to /dev/null so ad-hoc and query prints are suppressed
+		old := os.Stdout
+		devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err == nil {
+			os.Stdout = devnull
+			restore = func() {
+				_ = devnull.Close()
+				os.Stdout = old
+			}
+		} else {
+			restore = func() {}
+		}
+		defer restore()
+	}
+
+	// Split by ';' and newlines to allow multi-line input
+	seps := strings.NewReplacer("\n", ";", "\r", ";")
+	flat := seps.Replace(commands)
+	parts := strings.Split(flat, ";")
+	for _, p := range parts {
+		cmd := strings.TrimSpace(p)
+		if cmd == "" {
 			continue
 		}
-
-		result := q.Exec(ctx)
-		cancel()
-
-		if result.Err != nil {
-			fmt.Printf("Error: %v\n", result.Err)
-			continue
-		}
-
-		// Print results
-		printUpstreamQueryResult(result)
+		executeOne(engine, storage, cmd)
 	}
 }

@@ -24,6 +24,8 @@ Flags (query mode):
 
 - `-q, --query "<expr>"`  Execute a single PromQL expression and exit (no REPL)
 - `-o, --output json`      With -q, output results as JSON (vector/scalar/matrix)
+- `-c, --command "cmds"`  Run semicolon-separated commands before the session or one-off query
+  - Example: `promql-cli query -c ".scrape http://localhost:9100/metrics" -s -q 'count by (__name__)({__name__!=""}) > 1'`
 
 Common flags:
 
@@ -42,6 +44,12 @@ Ad-hoc commands (REPL only):
   - Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())
   - Also supports positional form: `.seed <metric> <steps> [<step>]`
   - Examples: `.seed http_requests_total steps=10 step=30s` or `.seed http_requests_total 10 30s`
+- `.scrape <URI>`
+  - Fetch metrics from an HTTP(S) endpoint in Prometheus text exposition format and load them into the store
+  - Example: `.scrape http://localhost:9100/metrics`
+- `.drop <metric>`
+  - Remove a metric (all its series) from the in-memory store
+  - Example: `.drop http_requests_total`
 - `.at <time> <query>`
   - Evaluate a query at a specific time
   - Time formats: now, now-5m, now+1h, RFC3339 (2025-09-16T20:40:00Z), unix seconds/millis
@@ -54,6 +62,13 @@ With the built binary:
 - `./bin/promql-cli test-completion <file.prom>`
 
 Examples (non-interactive and JSON):
+
+Initialization examples (`-c`):
+
+- Initialize by scraping and list metrics, then start REPL:
+  - `./bin/promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"`
+- Initialize, then run a one-off query and exit:
+  - `./bin/promql-cli query -c ".scrape http://localhost:9100/metrics" -q 'sum(up)'`
 
 - One-off query and exit:
   - `./bin/promql-cli query -q 'sum(rate(http_requests_total[5m]))' metrics.prom`

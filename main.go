@@ -44,6 +44,7 @@ func main() {
 		fmt.Println("Flags (query mode):")
 		fmt.Println("  -q, --query \"<expr>\"   Execute a single PromQL expression and exit (no REPL)")
 		fmt.Println("  -o, --output json       When used with -q, output JSON (default is text)")
+		fmt.Println("  -c, --command \"cmds\"  Run semicolon-separated commands before the session (e.g., \".scrape URL; .metrics\")")
 		fmt.Println("")
 		fmt.Println("Features:")
 		fmt.Println("  - Dynamic auto-completion for metric names, labels, and values")
@@ -51,6 +52,7 @@ func main() {
 		fmt.Println("  - Full PromQL function and operator completion")
 		fmt.Println("  - Tab completion similar to Prometheus UI")
 		fmt.Println("  - Ad-hoc commands: .help, .labels, .metrics, .seed, .at")
+		fmt.Println("Tip: use -c to run startup commands before the session, e.g. -c \".scrape http://localhost:9100/metrics; .metrics\"")
 		os.Exit(1)
 	}
 
@@ -114,10 +116,11 @@ func main() {
 		// Parse flags: -q/--query, -o/--output, and metrics file path
 		args := os.Args[2:]
 		var (
-			metricsFile string
-			oneOffQuery string
-			outputJSON  bool
-			silent      bool
+			metricsFile  string
+			oneOffQuery  string
+			outputJSON   bool
+			silent       bool
+			initCommands string
 		)
 		for i := 0; i < len(args); i++ {
 			a := args[i]
@@ -150,6 +153,27 @@ func main() {
 				}
 				continue
 			}
+			if a == "-c" || a == "--command" {
+				i++
+				if i >= len(args) {
+					log.Fatal("--command requires an argument")
+				}
+				if initCommands == "" {
+					initCommands = args[i]
+				} else {
+					initCommands = initCommands + "; " + args[i]
+				}
+				continue
+			}
+			if strings.HasPrefix(a, "--command=") {
+				val := strings.TrimPrefix(a, "--command=")
+				if initCommands == "" {
+					initCommands = val
+				} else {
+					initCommands = initCommands + "; " + val
+				}
+				continue
+			}
 			if a == "-s" || a == "--silent" {
 				silent = true
 				continue
@@ -164,18 +188,20 @@ func main() {
 				log.Fatalf("Unexpected extra argument: %s", a)
 			}
 		}
-		if metricsFile == "" {
-			log.Fatal("Please specify a metrics file")
+		if metricsFile != "" {
+			if err := loadMetricsFromFile(storage, metricsFile); err != nil {
+				log.Fatalf("Failed to load metrics: %v", err)
+			}
+			if !silent {
+				fmt.Printf("Loaded metrics from %s\n", metricsFile)
+				printStorageInfo(storage)
+				fmt.Println()
+			}
 		}
 
-		if err := loadMetricsFromFile(storage, metricsFile); err != nil {
-			log.Fatalf("Failed to load metrics: %v", err)
-		}
-
-		if !silent {
-			fmt.Printf("Loaded metrics from %s\n", metricsFile)
-			printStorageInfo(storage)
-			fmt.Println()
+		// Run initialization commands if provided (before one-off or REPL)
+		if initCommands != "" {
+			runInitCommands(engine, storage, initCommands, silent)
 		}
 
 		if oneOffQuery != "" {
