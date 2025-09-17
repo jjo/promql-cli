@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		fmt.Println("    Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())")
 		fmt.Println("    Also supports positional form: .seed <metric> <steps> [<step>]")
 		fmt.Println("    Examples: .seed http_requests_total steps=10 step=30s | .seed http_requests_total 10 30s")
+		fmt.Println("  .scrape <URI>")
+		fmt.Println("    Fetch metrics from an HTTP(S) endpoint in Prometheus text exposition format and load them into the store")
+		fmt.Println("    Example: .scrape http://localhost:9100/metrics")
+		fmt.Println("  .drop <metric>")
+		fmt.Println("    Remove a metric (all its series) from the in-memory store")
+		fmt.Println("    Example: .drop http_requests_total")
 		fmt.Println("  .at <time> <query>")
 		fmt.Println("    Evaluate a query at a specific time. Time formats: now, now-5m, now+1h, RFC3339, unix secs/millis")
 		fmt.Println("    Example: .at now-10m sum by (path) (rate(http_requests_total[5m]))")
@@ -152,6 +159,71 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			fmt.Println()
 		}
 
+		return true
+	}
+
+	// Handle .drop <metric>
+	if strings.HasPrefix(strings.TrimSpace(query), ".drop ") || strings.TrimSpace(query) == ".drop" {
+		metric := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".drop"))
+		metric = strings.TrimSpace(metric)
+		if metric == "" {
+			fmt.Println("Usage: .drop <metric>")
+			fmt.Println("Example: .drop http_requests_total")
+			return true
+		}
+		// Check existence
+		samples, exists := storage.metrics[metric]
+		if !exists {
+			fmt.Printf("Metric '%s' not found\n", metric)
+			return true
+		}
+		removed := len(samples)
+		delete(storage.metrics, metric)
+		// Report new totals
+		totalMetrics := len(storage.metrics)
+		totalSamples := 0
+		for _, ss := range storage.metrics {
+			totalSamples += len(ss)
+		}
+		fmt.Printf("Dropped '%s': -%d samples (now: %d metrics, %d samples)\n", metric, removed, totalMetrics, totalSamples)
+		return true
+	}
+
+	// Handle .scrape <URI>
+	if strings.HasPrefix(strings.TrimSpace(query), ".scrape ") {
+		uri := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".scrape "))
+		if uri == "" {
+			fmt.Println("Usage: .scrape <URI>")
+			fmt.Println("Example: .scrape http://localhost:9100/metrics")
+			return true
+		}
+		beforeMetrics := len(storage.metrics)
+		beforeSamples := 0
+		for _, ss := range storage.metrics {
+			beforeSamples += len(ss)
+		}
+		client := &http.Client{Timeout: 20 * time.Second}
+		resp, err := client.Get(uri)
+		if err != nil {
+			fmt.Printf("Failed to scrape %s: %v\n", uri, err)
+			return true
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			fmt.Printf("Failed to scrape %s: HTTP %d\n", uri, resp.StatusCode)
+			return true
+		}
+		if err := storage.LoadFromReader(resp.Body); err != nil {
+			fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
+			return true
+		}
+		afterMetrics := len(storage.metrics)
+		afterSamples := 0
+		for _, ss := range storage.metrics {
+			afterSamples += len(ss)
+		}
+		fmt.Printf("Scraped %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
+			uri, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
 		return true
 	}
 
