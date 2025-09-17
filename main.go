@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,13 +317,10 @@ func (q *SimpleQuerier) matchesLabelMatchers(sampleLabels map[string]string, mat
 	return true
 }
 
-// getLabelKey creates a unique key for a label set
-func (q *SimpleQuerier) getLabelKey(labels map[string]string) string {
-	var parts []string
-	for k, v := range labels {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, v))
-	}
-	return strings.Join(parts, ",")
+// getLabelKey creates a stable unique key for a label set by sorting labels
+func (q *SimpleQuerier) getLabelKey(lbls map[string]string) string {
+	l := labels.FromMap(lbls)
+	return l.String()
 }
 
 // SimpleSeries implements storage.Series
@@ -527,13 +525,13 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage) {
 	fmt.Println("  - Binary operations: metric_name + 10, metric_name1 * metric_name2")
 	fmt.Println("  - Functions: rate(metric_name), increase(metric_name), abs(metric_name)")
 	fmt.Println("  - Comparisons: metric_name > 100, metric_name == 0")
-	fmt.Println("  - Ad-hoc functions: .labels(metric_name) - show available labels for a metric")
+fmt.Println("  - Ad-hoc commands: .help, .labels <metric>, .seed <metric> [steps=N] [step=1m], .at <time> <query>")
 	fmt.Println()
 
 	// Configure readline
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          "> ",
-		HistoryFile:     "/tmp/.inmem-promql_history",
+		HistoryFile:     "/tmp/.promql-cli_history",
 		AutoComplete:    createAutoCompleter(storage), // Dynamic tab completion
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
@@ -571,10 +569,22 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage) {
 			continue
 		}
 
+		// Support ".at <time> <query>" to set evaluation time
+		evalTime := time.Now()
+		if strings.HasPrefix(query, ".at ") {
+			parts := strings.Fields(query)
+			if len(parts) >= 3 {
+				if ts, err := parseEvalTime(parts[1]); err == nil {
+					evalTime = ts
+					query = strings.TrimPrefix(query, ".at "+parts[1]+" ")
+				}
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
 		// Execute query using upstream Prometheus engine
-		q, err := engine.NewInstantQuery(ctx, storage, nil, query, time.Now())
+		q, err := engine.NewInstantQuery(ctx, storage, nil, query, evalTime)
 		if err != nil {
 			fmt.Printf("Error creating query: %v\n", err)
 			cancel()
@@ -705,6 +715,38 @@ func isWordBoundary(c byte) bool {
 
 // getCompletions returns appropriate completions based on the query context.
 func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, currentWord string) []string {
+	// Special handling for ad-hoc commands starting with '.'
+	beforeCursor := line[:pos]
+	trimmed := strings.TrimLeft(beforeCursor, " \t")
+	if strings.HasPrefix(trimmed, ".") {
+		// If typing the command token, suggest available ad-hoc commands
+		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
+			cmds := []string{".help", ".labels", ".seed", ".at"}
+			var out []string
+			for _, c := range cmds {
+				if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
+					out = append(out, c)
+				}
+			}
+			return out
+		}
+		// If after ".labels " or ".seed ", complete metric names
+		if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
+			return pac.getMetricNameCompletions(currentWord)
+		}
+		// If after ".at ", offer some time presets
+		if strings.HasPrefix(trimmed, ".at ") {
+			presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
+			var out []string
+			for _, p := range presets {
+				if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+					out = append(out, p)
+				}
+			}
+			return out
+		}
+	}
+
 	// Analyze the context to determine what type of completion to provide
 	context := pac.analyzeContext(line, pos)
 
@@ -890,8 +932,6 @@ func (pac *PrometheusAutoCompleter) getFunctionCompletions(prefix string) []stri
 		"label_join", "label_replace",
 		// Time functions
 		"deriv", "holt_winters", "delta", "changes", "resets",
-		// Ad-hoc functions (not part of PromQL)
-		".labels",
 	}
 
 	var completions []string
@@ -944,6 +984,102 @@ func runeLen(s string) int {
 	return len([]rune(s))
 }
 
+// parseEvalTime parses time tokens like RFC3339, unix seconds/millis, or now+/-duration.
+func parseEvalTime(tok string) (time.Time, error) {
+	// now+/-duration
+	if strings.HasPrefix(tok, "now") {
+		if tok == "now" {
+			return time.Now(), nil
+		}
+		op := tok[3]
+		durStr := strings.TrimSpace(tok[4:])
+		d, err := time.ParseDuration(durStr)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if op == '+' {
+			return time.Now().Add(d), nil
+		}
+		return time.Now().Add(-d), nil
+	}
+	// RFC3339
+	if t, err := time.Parse(time.RFC3339, tok); err == nil {
+		return t, nil
+	}
+	// unix seconds or millis
+	if n, err := strconv.ParseInt(tok, 10, 64); err == nil {
+		if n > 1_000_000_000_000 { // ms
+			return time.UnixMilli(n), nil
+		}
+		return time.Unix(n, 0), nil
+	}
+	return time.Time{}, fmt.Errorf("unsupported time format: %s", tok)
+}
+
+// seedHistory synthesizes historical samples for a metric to enable rate() queries.
+func seedHistory(storage *SimpleStorage, metric string, steps int, step time.Duration) {
+	samples, ok := storage.metrics[metric]
+	if !ok || len(samples) == 0 {
+		fmt.Printf("Metric '%s' not found or has no samples\n", metric)
+		return
+	}
+	isCounter := strings.HasSuffix(metric, "_total") || strings.Contains(metric, "_total_")
+	for idx := range samples {
+		base := samples[idx]
+		for i := 1; i <= steps; i++ {
+			copyLabels := make(map[string]string, len(base.Labels))
+			for k, v := range base.Labels {
+				copyLabels[k] = v
+			}
+			newTs := base.Timestamp - int64((steps-i+1))*step.Milliseconds()
+			newVal := base.Value
+			if isCounter {
+				dec := base.Value * 0.001
+				if dec < 1 {
+					dec = 1
+				}
+				newVal = base.Value - float64(i)*dec
+				if newVal < 0 {
+					newVal = 0
+				}
+			} else {
+				// Gauges: small drift
+				newVal = base.Value * (1 - 0.001*float64(i))
+			}
+			// Avoid appending duplicate timestamp points for the same labelset
+			existing := storage.metrics[metric]
+			dup := false
+			for _, s := range existing {
+				if s.Timestamp == newTs && qEqualLabels(s.Labels, copyLabels) {
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
+			storage.metrics[metric] = append(storage.metrics[metric], MetricSample{
+				Labels:    copyLabels,
+				Value:     newVal,
+				Timestamp: newTs,
+			})
+		}
+	}
+}
+
+// qEqualLabels compares two label maps for equality
+func qEqualLabels(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, va := range a {
+		if b[k] != va {
+			return false
+		}
+	}
+	return true
+}
+
 // getEnvBool reads an environment variable and parses it as boolean.
 // Accepts 1/0, true/false (case-insensitive). Falls back to defVal when unset/invalid.
 func getEnvBool(name string, defVal bool) bool {
@@ -964,9 +1100,9 @@ func getEnvBool(name string, defVal bool) bool {
 // loadAutoCompleteOptions reads options from environment variables with sane defaults.
 func loadAutoCompleteOptions() AutoCompleteOptions {
 	return AutoCompleteOptions{
-		AutoBrace:       getEnvBool("INMEM_PROMQL_COMPLETION_AUTO_BRACE", true),
-		LabelNameEquals: getEnvBool("INMEM_PROMQL_COMPLETION_LABEL_EQUALS", true),
-		AutoCloseQuote:  getEnvBool("INMEM_PROMQL_COMPLETION_AUTO_CLOSE_QUOTE", true),
+		AutoBrace:       getEnvBool("PROMQL_CLI_COMPLETION_AUTO_BRACE", true),
+		LabelNameEquals: getEnvBool("PROMQL_CLI_COMPLETION_LABEL_EQUALS", true),
+		AutoCloseQuote:  getEnvBool("PROMQL_CLI_COMPLETION_AUTO_CLOSE_QUOTE", true),
 	}
 }
 
@@ -1087,15 +1223,39 @@ func printUpstreamQueryResult(result *promql.Result) {
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 // Returns true if the query was handled as an ad-hoc function, false otherwise
 func handleAdHocFunction(query string, storage *SimpleStorage) bool {
-	// Handle .labels(metric) function
-	if strings.HasPrefix(query, ".labels(") && strings.HasSuffix(query, ")") {
-		// Extract metric name from .labels(metric_name)
-		metricName := strings.TrimSuffix(strings.TrimPrefix(query, ".labels("), ")")
+	// .help: show ad-hoc commands usage
+	if strings.HasPrefix(query, ".help") {
+		fmt.Println("\nAd-hoc commands:")
+		fmt.Println("  .help")
+		fmt.Println("    Show this help")
+		fmt.Println("  .labels <metric>")
+		fmt.Println("    Show the set of labels and example values for a metric present in the loaded dataset")
+		fmt.Println("    Example: .labels http_requests_total")
+		fmt.Println("  .seed <metric> [steps=N] [step=1m]")
+		fmt.Println("    Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())")
+		fmt.Println("    Also supports positional form: .seed <metric> <steps> [<step>]")
+		fmt.Println("    Examples: .seed http_requests_total steps=10 step=30s | .seed http_requests_total 10 30s")
+		fmt.Println("  .at <time> <query>")
+		fmt.Println("    Evaluate a query at a specific time. Time formats: now, now-5m, now+1h, RFC3339, unix secs/millis")
+		fmt.Println("    Example: .at now-10m sum by (path) (rate(http_requests_total[5m]))")
+		fmt.Println()
+		return true
+	}
+
+	// Handle .labels <metric> (preferred) and legacy .labels(metric)
+	if strings.HasPrefix(query, ".labels ") || (strings.HasPrefix(query, ".labels(") && strings.HasSuffix(query, ")")) {
+		var metricName string
+		if strings.HasPrefix(query, ".labels ") {
+			metricName = strings.TrimSpace(strings.TrimPrefix(query, ".labels "))
+		} else {
+			// legacy form
+			metricName = strings.TrimSuffix(strings.TrimPrefix(query, ".labels("), ")")
+		}
 		metricName = strings.Trim(metricName, " \"'")
 
 		if metricName == "" {
-			fmt.Println("Usage: .labels(metric_name)")
-			fmt.Println("Example: .labels(cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour)")
+			fmt.Println("Usage: .labels <metric_name>")
+			fmt.Println("Example: .labels cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour")
 			return true
 		}
 
@@ -1184,6 +1344,50 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			fmt.Println()
 		}
 
+		return true
+	}
+
+	// Handle .seed <metric> [steps=N] [step=1m]
+	if strings.HasPrefix(query, ".seed ") {
+		args := strings.Fields(query)
+		if len(args) < 2 {
+			fmt.Println("Usage: .seed <metric> [steps=N] [step=1m]")
+			return true
+		}
+		metric := args[1]
+		steps := 5
+		step := time.Minute
+		posIdx := 0
+		for _, a := range args[2:] {
+			if strings.HasPrefix(a, "steps=") {
+				fmt.Sscanf(a, "steps=%d", &steps)
+				continue
+			}
+			if strings.HasPrefix(a, "step=") {
+				v := strings.TrimPrefix(a, "step=")
+				if d, err := time.ParseDuration(v); err == nil {
+					step = d
+				}
+				continue
+			}
+			// Positional parsing: first bare token -> steps (int), second -> step (duration)
+			if posIdx == 0 {
+				if n, err := strconv.Atoi(a); err == nil {
+					steps = n
+					posIdx++
+					continue
+				}
+			}
+			if posIdx <= 1 { // allow step to be set even if steps was invalid
+				if d, err := time.ParseDuration(a); err == nil {
+					step = d
+					posIdx = 2
+					continue
+				}
+			}
+		}
+		seedHistory(storage, metric, steps, step)
+		fmt.Printf("Seeded %d historical points (step %s) for metric '%s'\n", steps, step, metric)
 		return true
 	}
 

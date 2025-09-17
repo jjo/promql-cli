@@ -1,8 +1,9 @@
-module github.com/jjo/inmem-promql
+module github.com/jjo/promql-cli
 
 go 1.24.4
 
 require (
+	github.com/chzyer/readline v1.5.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.66.1
 	github.com/prometheus/prometheus v0.305.0
@@ -11,7 +12,6 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/dennwc/varint v1.0.0 // indirect
 	github.com/edsrzf/mmap-go v1.2.0 // indirect
 	github.com/facette/natsort v0.0.0-20181210072756-2cd4dd1e2dcb // indirect

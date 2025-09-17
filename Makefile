@@ -1,8 +1,8 @@
 SHELL := /bin/bash
 ROOT := $(shell pwd)
 BIN := $(ROOT)/bin
-APP := inmem-promql
-PKG := github.com/jjo/inmem-promql
+APP := promql-cli
+PKG := github.com/jjo/promql-cli
 
 TAG ?= latest
 IMAGE := xjjo/$(APP):$(TAG)

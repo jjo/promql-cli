@@ -16,14 +16,14 @@ COPY . .
 ENV CGO_ENABLED=0
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags "-s -w" -o /out/inmem-promql ./
+    go build -trimpath -ldflags "-s -w" -o /out/promql-cli ./
 
 # --- runtime stage ---
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
-COPY --from=build /out/inmem-promql /usr/local/bin/inmem-promql
+COPY --from=build /out/promql-cli /usr/local/bin/promql-cli
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/local/bin/inmem-promql"]
+ENTRYPOINT ["/usr/local/bin/promql-cli"]
 # Default command shows program usage; override with e.g. `query /data/metrics.prom`
 CMD [""]
 
