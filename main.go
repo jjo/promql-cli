@@ -14,16 +14,10 @@ import (
 	"time"
 
 	"github.com/chzyer/readline"
-	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
 	promparser "github.com/prometheus/prometheus/promql/parser"
-	"github.com/prometheus/prometheus/storage"
-	"github.com/prometheus/prometheus/tsdb/chunkenc"
-	"github.com/prometheus/prometheus/util/annotations"
 )
 
 func init() {
@@ -31,393 +25,6 @@ func init() {
 	model.NameValidationScheme = model.UTF8Validation
 	// Enable experimental PromQL functions (equivalent to --enable-feature=promql-experimental-functions)
 	promparser.EnableExperimentalFunctions = true
-}
-
-// SimpleStorage holds metrics in a simple format for querying
-type SimpleStorage struct {
-	metrics map[string][]MetricSample
-}
-
-// MetricSample represents a single metric sample
-type MetricSample struct {
-	Labels    map[string]string
-	Value     float64
-	Timestamp int64
-}
-
-// NewSimpleStorage creates a new simple storage
-func NewSimpleStorage() *SimpleStorage {
-	return &SimpleStorage{
-		metrics: make(map[string][]MetricSample),
-	}
-}
-
-// LoadFromReader loads Prometheus exposition format data using the official Prometheus parser
-func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
-	// Use the standard Prometheus exposition format parser
-	parser := expfmt.NewTextParser(model.UTF8Validation)
-	metricFamilies, err := parser.TextToMetricFamilies(reader)
-	if err != nil {
-		return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
-	}
-
-	// Process the parsed metric families
-	return s.processMetricFamilies(metricFamilies)
-}
-
-// processMetricFamilies processes the parsed metric families (extracted from original LoadFromReader)
-func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.MetricFamily) error {
-	// Use a consistent base timestamp for all samples loaded in this call
-	baseTimestamp := time.Now().UnixMilli()
-
-	// Convert each metric family to individual samples
-	for _, mf := range metricFamilies {
-		metricName := mf.GetName()
-
-		// Process each metric within the family
-		for _, metric := range mf.GetMetric() {
-			// Create labels map starting with the metric name
-			lbls := make(map[string]string)
-			lbls["__name__"] = metricName
-
-			// Add all labels from the metric to our labels map
-			for _, labelPair := range metric.GetLabel() {
-				lbls[labelPair.GetName()] = labelPair.GetValue()
-			}
-
-			// Get value based on metric type
-			var value float64
-			// Always use the consistent base timestamp to keep samples within lookback
-			timestamp := baseTimestamp
-
-			switch mf.GetType() {
-			case dto.MetricType_COUNTER:
-				if metric.Counter != nil {
-					value = metric.Counter.GetValue()
-				}
-			case dto.MetricType_GAUGE:
-				if metric.Gauge != nil {
-					value = metric.Gauge.GetValue()
-				}
-			case dto.MetricType_UNTYPED:
-				// Handle untyped metrics - treat as gauge-like
-				if metric.Untyped != nil {
-					value = metric.Untyped.GetValue()
-				}
-			case dto.MetricType_HISTOGRAM:
-				if metric.Histogram != nil {
-					// Store histogram buckets as separate metrics
-					for _, bucket := range metric.Histogram.GetBucket() {
-						bucketLabels := make(map[string]string)
-						for k, v := range lbls {
-							bucketLabels[k] = v
-						}
-						bucketLabels["le"] = fmt.Sprintf("%g", bucket.GetUpperBound())
-						bucketLabels["__name__"] = metricName + "_bucket"
-
-						bucketSample := MetricSample{
-							Labels:    bucketLabels,
-							Value:     float64(bucket.GetCumulativeCount()),
-							Timestamp: timestamp,
-						}
-						s.metrics[metricName+"_bucket"] = append(s.metrics[metricName+"_bucket"], bucketSample)
-					}
-
-					// Store histogram sum
-					sumLabels := make(map[string]string)
-					for k, v := range lbls {
-						sumLabels[k] = v
-					}
-					sumLabels["__name__"] = metricName + "_sum"
-					sumSample := MetricSample{
-						Labels:    sumLabels,
-						Value:     metric.Histogram.GetSampleSum(),
-						Timestamp: timestamp,
-					}
-					s.metrics[metricName+"_sum"] = append(s.metrics[metricName+"_sum"], sumSample)
-
-					// Store histogram count
-					countLabels := make(map[string]string)
-					for k, v := range lbls {
-						countLabels[k] = v
-					}
-					countLabels["__name__"] = metricName + "_count"
-					countSample := MetricSample{
-						Labels:    countLabels,
-						Value:     float64(metric.Histogram.GetSampleCount()),
-						Timestamp: timestamp,
-					}
-					s.metrics[metricName+"_count"] = append(s.metrics[metricName+"_count"], countSample)
-					continue
-				}
-			case dto.MetricType_SUMMARY:
-				if metric.Summary != nil {
-					// Store summary quantiles
-					for _, quantile := range metric.Summary.GetQuantile() {
-						quantileLabels := make(map[string]string)
-						for k, v := range lbls {
-							quantileLabels[k] = v
-						}
-						quantileLabels["quantile"] = fmt.Sprintf("%g", quantile.GetQuantile())
-
-						quantileSample := MetricSample{
-							Labels:    quantileLabels,
-							Value:     quantile.GetValue(),
-							Timestamp: timestamp,
-						}
-						s.metrics[metricName] = append(s.metrics[metricName], quantileSample)
-					}
-
-					// Store summary sum
-					sumLabels := make(map[string]string)
-					for k, v := range lbls {
-						sumLabels[k] = v
-					}
-					sumLabels["__name__"] = metricName + "_sum"
-					sumSample := MetricSample{
-						Labels:    sumLabels,
-						Value:     metric.Summary.GetSampleSum(),
-						Timestamp: timestamp,
-					}
-					s.metrics[metricName+"_sum"] = append(s.metrics[metricName+"_sum"], sumSample)
-
-					// Store summary count
-					countLabels := make(map[string]string)
-					for k, v := range lbls {
-						countLabels[k] = v
-					}
-					countLabels["__name__"] = metricName + "_count"
-					countSample := MetricSample{
-						Labels:    countLabels,
-						Value:     float64(metric.Summary.GetSampleCount()),
-						Timestamp: timestamp,
-					}
-					s.metrics[metricName+"_count"] = append(s.metrics[metricName+"_count"], countSample)
-					continue
-				}
-			default:
-				continue
-			}
-
-			// Create and store the primary sample
-			sample := MetricSample{
-				Labels:    lbls,
-				Value:     value,
-				Timestamp: timestamp,
-			}
-
-			s.metrics[metricName] = append(s.metrics[metricName], sample)
-		}
-	}
-
-	return nil
-}
-
-// Queryable implementation for SimpleStorage
-func (s *SimpleStorage) Querier(mint, maxt int64) (storage.Querier, error) {
-	return &SimpleQuerier{storage: s, mint: mint, maxt: maxt}, nil
-}
-
-// SimpleQuerier implements storage.Querier
-type SimpleQuerier struct {
-	storage    *SimpleStorage
-	mint, maxt int64
-}
-
-func (q *SimpleQuerier) Select(ctx context.Context, sortSeries bool, hints *storage.SelectHints, matchers ...*labels.Matcher) storage.SeriesSet {
-	var series []storage.Series
-
-	// Find matching metrics
-	for _, samples := range q.storage.metrics {
-		// Check if any samples match the matchers and time range
-		var matchingSamples []MetricSample
-		for _, sample := range samples {
-			// Check time range
-			if sample.Timestamp < q.mint || sample.Timestamp > q.maxt {
-				continue
-			}
-
-			// Check label matchers
-			if q.matchesLabelMatchers(sample.Labels, matchers) {
-				matchingSamples = append(matchingSamples, sample)
-			}
-		}
-
-		// Group samples by unique label sets
-		labelGroups := make(map[string][]MetricSample)
-		for _, sample := range matchingSamples {
-			key := q.getLabelKey(sample.Labels)
-			labelGroups[key] = append(labelGroups[key], sample)
-		}
-
-		// Create a series for each unique label set
-		for _, groupSamples := range labelGroups {
-			if len(groupSamples) > 0 {
-				lbls := labels.FromMap(groupSamples[0].Labels)
-				series = append(series, &SimpleSeries{
-					labels:  lbls,
-					samples: groupSamples,
-				})
-			}
-		}
-	}
-
-	return &SimpleSeriesSet{series: series, index: -1}
-}
-
-func (q *SimpleQuerier) LabelValues(ctx context.Context, name string, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
-	values := make(map[string]struct{})
-	for _, samples := range q.storage.metrics {
-		for _, sample := range samples {
-			if q.matchesLabelMatchers(sample.Labels, matchers) {
-				if value, ok := sample.Labels[name]; ok {
-					values[value] = struct{}{}
-				}
-			}
-		}
-	}
-
-	result := make([]string, 0, len(values))
-	for value := range values {
-		result = append(result, value)
-	}
-	return result, nil, nil
-}
-
-func (q *SimpleQuerier) LabelNames(ctx context.Context, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
-	names := make(map[string]struct{})
-	for _, samples := range q.storage.metrics {
-		for _, sample := range samples {
-			if q.matchesLabelMatchers(sample.Labels, matchers) {
-				for name := range sample.Labels {
-					names[name] = struct{}{}
-				}
-			}
-		}
-	}
-
-	result := make([]string, 0, len(names))
-	for name := range names {
-		result = append(result, name)
-	}
-	return result, nil, nil
-}
-
-func (q *SimpleQuerier) Close() error {
-	return nil
-}
-
-// matchesLabelMatchers checks if labels match the given matchers
-func (q *SimpleQuerier) matchesLabelMatchers(sampleLabels map[string]string, matchers []*labels.Matcher) bool {
-	for _, matcher := range matchers {
-		value, exists := sampleLabels[matcher.Name]
-		if !exists {
-			value = ""
-		}
-		if !matcher.Matches(value) {
-			return false
-		}
-	}
-	return true
-}
-
-// getLabelKey creates a stable unique key for a label set by sorting labels
-func (q *SimpleQuerier) getLabelKey(lbls map[string]string) string {
-	l := labels.FromMap(lbls)
-	return l.String()
-}
-
-// SimpleSeries implements storage.Series
-type SimpleSeries struct {
-	labels  labels.Labels
-	samples []MetricSample
-}
-
-func (s *SimpleSeries) Labels() labels.Labels {
-	return s.labels
-}
-
-func (s *SimpleSeries) Iterator(iterator chunkenc.Iterator) chunkenc.Iterator {
-	return &SimpleIterator{samples: s.samples, index: -1}
-}
-
-// SimpleIterator implements chunkenc.Iterator
-type SimpleIterator struct {
-	samples []MetricSample
-	index   int
-}
-
-func (it *SimpleIterator) Next() chunkenc.ValueType {
-	it.index++
-	if it.index >= len(it.samples) {
-		return chunkenc.ValNone
-	}
-	return chunkenc.ValFloat
-}
-
-func (it *SimpleIterator) Seek(t int64) chunkenc.ValueType {
-	for i, sample := range it.samples {
-		if sample.Timestamp >= t {
-			it.index = i
-			return chunkenc.ValFloat
-		}
-	}
-	it.index = len(it.samples)
-	return chunkenc.ValNone
-}
-
-func (it *SimpleIterator) At() (int64, float64) {
-	if it.index < 0 || it.index >= len(it.samples) {
-		return 0, 0
-	}
-	sample := it.samples[it.index]
-	return sample.Timestamp, sample.Value
-}
-
-func (it *SimpleIterator) AtHistogram(*histogram.Histogram) (int64, *histogram.Histogram) {
-	return 0, nil
-}
-
-func (it *SimpleIterator) AtFloatHistogram(*histogram.FloatHistogram) (int64, *histogram.FloatHistogram) {
-	return 0, nil
-}
-
-func (it *SimpleIterator) AtT() int64 {
-	if it.index < 0 || it.index >= len(it.samples) {
-		return 0
-	}
-	return it.samples[it.index].Timestamp
-}
-
-func (it *SimpleIterator) Err() error {
-	return nil
-}
-
-// SimpleSeriesSet implements storage.SeriesSet
-type SimpleSeriesSet struct {
-	series []storage.Series
-	index  int
-	err    error
-}
-
-func (s *SimpleSeriesSet) Next() bool {
-	s.index++
-	return s.index < len(s.series)
-}
-
-func (s *SimpleSeriesSet) At() storage.Series {
-	if s.index < 0 || s.index >= len(s.series) {
-		return nil
-	}
-	return s.series[s.index]
-}
-
-func (s *SimpleSeriesSet) Err() error {
-	return s.err
-}
-
-func (s *SimpleSeriesSet) Warnings() annotations.Annotations {
-	return nil
 }
 
 // main is the entry point of the application.
@@ -754,6 +361,11 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 	// Dedupe and filter to those that extend currentWord
 	uniq := make(map[string]struct{}, len(completions))
 	suffixes := make([][]rune, 0, len(completions))
+	// Detect if we are completing an ad-hoc dot-command (like .labels, .metrics)
+	dotCmdMode := func() bool {
+		trim := strings.TrimLeft(lineStr[:cursorPos], " \t")
+		return strings.HasPrefix(trim, ".")
+	}()
 	for _, cand := range completions {
 		if _, ok := uniq[cand]; ok {
 			continue
@@ -768,19 +380,33 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 				suf := make([]rune, len(cr[len(cw):]))
 				copy(suf, cr[len(cw):])
 
-				// Optional tweaks based on context
-				switch ctx.Type {
-				case "metric_name":
-					if pac.opts.AutoBrace && len(completions) == 1 {
-						suf = append(suf, '{')
-					}
-case "label_name":
-					if pac.opts.LabelNameEquals {
-						suf = append(suf, '=', '"')
-					}
-				case "label_value":
-					if pac.opts.AutoCloseQuote {
-						suf = append(suf, '"')
+				if !dotCmdMode {
+					// Optional tweaks based on context (disabled for dot-commands)
+					switch ctx.Type {
+					case "metric_name":
+						if pac.opts.AutoBrace && len(completions) == 1 {
+							suf = append(suf, '{')
+						}
+						// Also suggest a range-vector scaffold directly if candidate is a metric and unique
+						if len(completions) == 1 {
+							suffixes = append(suffixes, []rune("[5m]"))
+						}
+					case "label_name":
+						if pac.opts.LabelNameEquals {
+							// Provide multiple operator choices for label matching
+							ops := [][]rune{{'=', '"'}, {'!', '=', '"'}, {'=', '~', '"'}, {'!', '~', '"'}}
+							for _, op := range ops {
+								// clone base remainder
+								base := make([]rune, len(cr[len(cw):]))
+								copy(base, cr[len(cw):])
+								cand := append(base, op...)
+								suffixes = append(suffixes, cand)
+							}
+						}
+					case "label_value":
+						if pac.opts.AutoCloseQuote {
+							suf = append(suf, '"')
+						}
 					}
 				}
 
@@ -834,7 +460,17 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	// Special handling for ad-hoc commands starting with '.'
 	beforeCursor := line[:pos]
 	trimmed := strings.TrimLeft(beforeCursor, " \t")
-	if strings.HasPrefix(trimmed, ".") {
+
+	// Range-vector scaffold suggestions when inside '[' ...
+	if strings.HasSuffix(strings.TrimRight(beforeCursor, " \t"), "[") || strings.HasPrefix(currentWord, "[") {
+		return getRangeDurationCompletions(currentWord)
+	}
+	// Do NOT offer ad-hoc dot-commands while inside label selectors {...}
+	lastOpenBrace := strings.LastIndex(beforeCursor, "{")
+	lastCloseBrace := strings.LastIndex(beforeCursor, "}")
+	inLabels := lastOpenBrace > lastCloseBrace && lastOpenBrace != -1
+
+	if !inLabels && strings.HasPrefix(trimmed, ".") {
 		// If typing the command token, suggest available ad-hoc commands
 		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
 			cmds := []string{".help", ".labels", ".metrics", ".seed", ".at"}
@@ -850,16 +486,38 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 		if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
 			return pac.getMetricNameCompletions(currentWord)
 		}
-		// If after ".at ", offer some time presets
+		// If after ".at ", either offer time presets or transition into query completions
 		if strings.HasPrefix(trimmed, ".at ") {
-			presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
-			var out []string
-			for _, p := range presets {
-				if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
-					out = append(out, p)
+			cmdIdx := strings.LastIndex(line[:pos], ".at ")
+			if cmdIdx >= 0 {
+				after := line[cmdIdx+4 : pos]
+				// If still typing time token (no space yet), suggest presets or a space once token is valid
+				if sp := strings.IndexAny(after, " \t"); sp == -1 {
+					tok := strings.TrimSpace(after)
+					if tok != "" {
+						if _, err := parseEvalTime(tok); err == nil || strings.EqualFold(tok, "now") {
+							// insert a space to move into query context
+							return []string{" "}
+						}
+					}
+					presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
+					var out []string
+					for _, p := range presets {
+						if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+							out = append(out, p)
+						}
+					}
+					return out
+				}
+				// We have a space after time; delegate to query completions for the remainder
+				queryStart := cmdIdx + 4 + strings.IndexAny(line[cmdIdx+4:], " \t") + 1
+				if queryStart <= len(line) {
+					subline := line[queryStart:]
+					subpos := pos - queryStart
+					subWord, _ := pac.getCurrentWord(subline, subpos)
+					return pac.getCompletions(subline, subpos, subWord)
 				}
 			}
-			return out
 		}
 	}
 
@@ -868,9 +526,14 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 
 	switch context.Type {
 	case "metric_name":
-		// Suggest both metric names and functions when starting an expression
+		// Suggest metrics, range templates, aggregators, and functions when starting an expression
 		var out []string
 		out = append(out, pac.getMetricNameCompletions(currentWord)...)
+		// Include range-vector scaffolds as standalone tokens
+		out = append(out, getBracketedRangeTemplates()...)
+		// Aggregators like sum, avg, min, max, topk, bottomk, quantile, etc.
+		out = append(out, getAggregatorCompletions(currentWord)...)
+		// Functions from upstream parser (e.g., sum_over_time)
 		out = append(out, pac.getFunctionCompletions(currentWord)...)
 		return out
 	case "label_name":
@@ -1017,7 +680,7 @@ func (pac *PrometheusAutoCompleter) getLabelValueCompletions(metricName, labelNa
 		metricsToCheck = pac.storage.metrics
 	}
 
-for _, samples := range metricsToCheck {
+	for _, samples := range metricsToCheck {
 		for _, sample := range samples {
 			if value, exists := sample.Labels[labelName]; exists {
 				if strings.HasPrefix(strings.ToLower(value), strings.ToLower(prefix)) {
@@ -1050,7 +713,12 @@ func (pac *PrometheusAutoCompleter) getFunctionCompletions(prefix string) []stri
 	var completions []string
 	for _, name := range names {
 		if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+			// Base suggestion: name(
 			completions = append(completions, name+"(")
+			// Signature scaffold suggestion: name(args)
+			if sig := buildFunctionSignature(name); sig != "" {
+				completions = append(completions, name+"("+sig+")")
+			}
 		}
 	}
 	return completions
@@ -1058,19 +726,115 @@ func (pac *PrometheusAutoCompleter) getFunctionCompletions(prefix string) []stri
 
 // getOperatorCompletions returns PromQL operators.
 func (pac *PrometheusAutoCompleter) getOperatorCompletions(prefix string) []string {
-	operators := []string{
-		"and", "or", "unless", "by", "without", "on", "ignoring", "group_left", "group_right",
-		"bool", "offset",
-	}
+	lowPref := strings.ToLower(prefix)
+	seen := make(map[string]struct{})
+	var out []string
 
-	var completions []string
-	for _, op := range operators {
-		if strings.HasPrefix(strings.ToLower(op), strings.ToLower(prefix)) {
-			completions = append(completions, op)
+	// 1) Arithmetic, comparison, and regex operators from parser's exported map.
+	for typ, str := range promparser.ItemTypeStr {
+		if typ.IsOperator() || typ.IsComparisonOperator() {
+			candidate := str
+			if strings.HasPrefix(strings.ToLower(candidate), lowPref) {
+				if _, ok := seen[candidate]; !ok {
+					seen[candidate] = struct{}{}
+					out = append(out, candidate)
+				}
+			}
 		}
 	}
 
-	return completions
+	// 2) Set operators and clause keywords (not present in ItemTypeStr with strings).
+	keywords := []string{
+		// set operators
+		"and", "or", "unless",
+		// join/label matching and grouping modifiers
+		"by", "without", "on", "ignoring", "group_left", "group_right",
+		// others
+		"bool", "offset",
+	}
+	for _, kw := range keywords {
+		if strings.HasPrefix(strings.ToLower(kw), lowPref) {
+			if _, ok := seen[kw]; !ok {
+				seen[kw] = struct{}{}
+				out = append(out, kw)
+			}
+		}
+	}
+
+	sort.Strings(out)
+	return out
+}
+
+// buildFunctionSignature builds a call signature hint from upstream function metadata.
+func buildFunctionSignature(name string) string {
+	fn, ok := promparser.Functions[name]
+	if !ok {
+		return ""
+	}
+	var parts []string
+	for i, t := range fn.ArgTypes {
+		parts = append(parts, placeholderForValueType(t, i))
+	}
+	if fn.Variadic >= 0 {
+		parts = append(parts, "...")
+	}
+	return strings.Join(parts, ", ")
+}
+
+func placeholderForValueType(vt promparser.ValueType, _ int) string {
+	switch vt {
+	case promparser.ValueTypeVector:
+		return "expr"
+	case promparser.ValueTypeMatrix:
+		return "expr[5m]"
+	case promparser.ValueTypeScalar:
+		return "scalar"
+	case promparser.ValueTypeString:
+		return "str"
+	default:
+		return "arg"
+	}
+}
+
+// getAggregatorCompletions suggests aggregator keywords (not functions)
+func getAggregatorCompletions(prefix string) []string {
+	base := []string{
+		"sum", "avg", "min", "max", "count", "group", "stddev", "stdvar",
+		"topk", "bottomk", "quantile", "count_values",
+	}
+	// Experimental aggregators
+	if promparser.EnableExperimentalFunctions {
+		base = append(base, "limitk", "limit_ratio")
+	}
+	var out []string
+	low := strings.ToLower(prefix)
+	for _, name := range base {
+		if strings.HasPrefix(strings.ToLower(name), low) {
+			// Add with opening paren to hint call/aggregate form
+			out = append(out, name+"(")
+		}
+	}
+	return out
+}
+
+func getBracketedRangeTemplates() []string {
+	return []string{"[30s]", "[1m]", "[5m]", "[10m]", "[1h]", "[6h]", "[24h]"}
+}
+
+func getRangeDurationCompletions(currentWord string) []string {
+	templates := getBracketedRangeTemplates()
+	var out []string
+	low := strings.ToLower(currentWord)
+	for _, t := range templates {
+		if strings.HasPrefix(strings.ToLower(t), low) {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		// If nothing matches, still offer common ones
+		out = append(out, "[5m]", "[1h]")
+	}
+	return out
 }
 
 // longestCommonPrefix finds the common prefix among a slice of strings (case-sensitive)
@@ -1222,15 +986,17 @@ func loadAutoCompleteOptions() AutoCompleteOptions {
 func (pac *PrometheusAutoCompleter) getMixedCompletions(prefix string) []string {
 	var completions []string
 
-	// Add metric names and functions
+	// Add metric names, range templates, aggregators, and functions
 	completions = append(completions, pac.getMetricNameCompletions(prefix)...)
+	completions = append(completions, getBracketedRangeTemplates()...)
+	completions = append(completions, getAggregatorCompletions(prefix)...)
 	completions = append(completions, pac.getFunctionCompletions(prefix)...)
 
 	// Add operators
 	completions = append(completions, pac.getOperatorCompletions(prefix)...)
 
 	// Add common keywords
-	keywords := []string{"quit", "exit"}
+	keywords := []string{"quit", "exit", "offset 5m"}
 	for _, keyword := range keywords {
 		if strings.HasPrefix(strings.ToLower(keyword), strings.ToLower(prefix)) {
 			completions = append(completions, keyword)
@@ -1339,12 +1105,12 @@ func printResultJSON(result *promql.Result) error {
 		Value  [2]interface{}    `json:"value"` // [timestamp(sec), value]
 	}
 	type seriesJSON struct {
-		Metric map[string]string  `json:"metric"`
-		Values [][2]interface{}   `json:"values"`
+		Metric map[string]string `json:"metric"`
+		Values [][2]interface{}  `json:"values"`
 	}
 	type dataJSON struct {
-		ResultType string        `json:"resultType"`
-		Result     interface{}   `json:"result"`
+		ResultType string      `json:"resultType"`
+		Result     interface{} `json:"result"`
 	}
 	type respJSON struct {
 		Status string   `json:"status"`
