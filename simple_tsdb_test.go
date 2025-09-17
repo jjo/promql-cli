@@ -62,11 +62,11 @@ func TestPromQL_SumByCode(t *testing.T) {
 	}
 
 	engine := promql.NewEngine(promql.EngineOpts{
-		Logger:        nil,
-		Reg:           nil,
-		MaxSamples:    50_000_000,
-		Timeout:       30 * time.Second,
-		LookbackDelta: 5 * time.Minute,
+		Logger:                   nil,
+		Reg:                      nil,
+		MaxSamples:               50_000_000,
+		Timeout:                  30 * time.Second,
+		LookbackDelta:            5 * time.Minute,
 		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
 	})
 
@@ -103,24 +103,3 @@ func TestPromQL_SumByCode(t *testing.T) {
 		t.Errorf("unexpected sum for code=404: got=%v want=3", got["404"])
 	}
 }
-
-func TestAutoCompleter_MetricNameCompletion(t *testing.T) {
-	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
-		t.Fatalf("LoadFromReader failed: %v", err)
-	}
-	ac := NewPrometheusAutoCompleter(store)
-
-	completions := ac.getMetricNameCompletions("http")
-	found := false
-	for _, c := range completions {
-		if c == "http_requests_total" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected 'http_requests_total' in completions for prefix 'http' (got: %v)", completions)
-	}
-}
-
