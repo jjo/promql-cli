@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
+	promparser "github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
 	"github.com/prometheus/prometheus/util/annotations"
@@ -28,6 +29,8 @@ import (
 func init() {
 	// Initialize validation scheme to avoid panics
 	model.NameValidationScheme = model.UTF8Validation
+	// Enable experimental PromQL functions (equivalent to --enable-feature=promql-experimental-functions)
+	promparser.EnableExperimentalFunctions = true
 }
 
 // SimpleStorage holds metrics in a simple format for querying
@@ -831,18 +834,18 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	// Special handling for ad-hoc commands starting with '.'
 	beforeCursor := line[:pos]
 	trimmed := strings.TrimLeft(beforeCursor, " \t")
-		if strings.HasPrefix(trimmed, ".") {
-			// If typing the command token, suggest available ad-hoc commands
-			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-				cmds := []string{".help", ".labels", ".metrics", ".seed", ".at"}
-				var out []string
-				for _, c := range cmds {
-					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
-						out = append(out, c)
-					}
+	if strings.HasPrefix(trimmed, ".") {
+		// If typing the command token, suggest available ad-hoc commands
+		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
+			cmds := []string{".help", ".labels", ".metrics", ".seed", ".at"}
+			var out []string
+			for _, c := range cmds {
+				if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
+					out = append(out, c)
 				}
-				return out
 			}
+			return out
+		}
 		// If after ".labels " or ".seed ", complete metric names
 		if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
 			return pac.getMetricNameCompletions(currentWord)
@@ -865,7 +868,11 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 
 	switch context.Type {
 	case "metric_name":
-		return pac.getMetricNameCompletions(currentWord)
+		// Suggest both metric names and functions when starting an expression
+		var out []string
+		out = append(out, pac.getMetricNameCompletions(currentWord)...)
+		out = append(out, pac.getFunctionCompletions(currentWord)...)
+		return out
 	case "label_name":
 		return pac.getLabelNameCompletions(context.MetricName, currentWord)
 	case "label_value":
@@ -1031,29 +1038,21 @@ for _, samples := range metricsToCheck {
 
 // getFunctionCompletions returns PromQL function names.
 func (pac *PrometheusAutoCompleter) getFunctionCompletions(prefix string) []string {
-	functions := []string{
-		// Aggregation functions
-		"sum", "min", "max", "avg", "group", "stddev", "stdvar", "count", "count_values",
-		"bottomk", "topk", "quantile",
-		// Math functions
-		"abs", "absent", "absent_over_time", "ceil", "clamp", "clamp_max", "clamp_min",
-		"day_of_month", "day_of_week", "days_in_month", "exp", "floor", "hour",
-		"idelta", "increase", "irate", "ln", "log10", "log2", "minute", "month",
-		"predict_linear", "rate", "round", "scalar", "sgn", "sort", "sort_desc",
-		"sqrt", "time", "timestamp", "vector", "year",
-		// String functions
-		"label_join", "label_replace",
-		// Time functions
-		"deriv", "holt_winters", "delta", "changes", "resets",
+	var names []string
+	for name, fn := range promparser.Functions {
+		// Skip experimental functions if not enabled.
+		if fn.Experimental && !promparser.EnableExperimentalFunctions {
+			continue
+		}
+		names = append(names, name)
 	}
-
+	sort.Strings(names)
 	var completions []string
-	for _, fn := range functions {
-		if strings.HasPrefix(strings.ToLower(fn), strings.ToLower(prefix)) {
-			completions = append(completions, fn+"(")
+	for _, name := range names {
+		if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+			completions = append(completions, name+"(")
 		}
 	}
-
 	return completions
 }
 
@@ -1223,10 +1222,8 @@ func loadAutoCompleteOptions() AutoCompleteOptions {
 func (pac *PrometheusAutoCompleter) getMixedCompletions(prefix string) []string {
 	var completions []string
 
-	// Add metric names
+	// Add metric names and functions
 	completions = append(completions, pac.getMetricNameCompletions(prefix)...)
-
-	// Add functions
 	completions = append(completions, pac.getFunctionCompletions(prefix)...)
 
 	// Add operators
