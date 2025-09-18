@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +127,78 @@ func TestTimestamps_WithExplicitTimestamps(t *testing.T) {
 	}
 	if !strings.Contains(out, "Span:     10s") {
 		t.Fatalf("expected span 10s, got: %s", out)
+	}
+}
+
+func TestAdhoc_Drop_RemovesMetricAndReports(t *testing.T) {
+	store := NewSimpleStorage()
+	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+		t.Fatalf("LoadFromReader failed: %v", err)
+	}
+	if _, ok := store.metrics["http_requests_total"]; !ok {
+		t.Fatalf("expected metric present before drop")
+	}
+
+	out := captureStdout(t, func() {
+		_ = handleAdHocFunction(".drop http_requests_total", store)
+	})
+	if _, ok := store.metrics["http_requests_total"]; ok {
+		t.Fatalf("expected metric removed")
+	}
+	if !strings.Contains(out, "Dropped 'http_requests_total'") {
+		t.Fatalf("unexpected .drop output: %s", out)
+	}
+
+	// Dropping non-existent metric
+	out = captureStdout(t, func() {
+		_ = handleAdHocFunction(".drop not_a_metric", store)
+	})
+	if !strings.Contains(out, "Metric 'not_a_metric' not found") {
+		t.Fatalf("expected not found message, got: %s", out)
+	}
+
+	// Usage without metric name
+	out = captureStdout(t, func() {
+		_ = handleAdHocFunction(".drop", store)
+	})
+	if !strings.Contains(out, "Usage: .drop <metric>") {
+		t.Fatalf("expected usage message, got: %s", out)
+	}
+}
+
+func TestAdhoc_Scrape_FetchesAndLoads(t *testing.T) {
+	// Prepare a small exposition endpoint
+	payload := `# HELP up 1 if up
+# TYPE up gauge
+up 1
+# HELP foo_total a counter
+# TYPE foo_total counter
+foo_total{code="200"} 5
+foo_total{code="500"} 1
+`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		io.Copy(w, strings.NewReader(payload))
+	}))
+	defer ts.Close()
+
+	store := NewSimpleStorage()
+	// Ensure store empty before
+	if len(store.metrics) != 0 {
+		t.Fatalf("expected empty store initially")
+	}
+
+	out := captureStdout(t, func() {
+		_ = handleAdHocFunction(".scrape "+ts.URL, store)
+	})
+	if !strings.Contains(out, "Scraped ") {
+		t.Fatalf("expected scrape output, got: %s", out)
+	}
+	if _, ok := store.metrics["up"]; !ok {
+		t.Fatalf("expected 'up' metric to be loaded")
+	}
+	if samples := store.metrics["foo_total"]; len(samples) < 2 {
+		t.Fatalf("expected counter samples loaded, got %d", len(samples))
 	}
 }
 
