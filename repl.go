@@ -33,12 +33,102 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 	}
 
 	// Configure readline
+	// History prefix-search on Up/Down is implemented via a custom Listener that
+	// replaces the default Prev/Next history behavior when a non-empty prefix is present.
+	const historyPath = "/tmp/.promql-cli_history"
+	userHistory := loadHistoryFromFile(historyPath)
+
+	// State for prefix-based history navigation
+	type histState struct {
+		lastPrefix string   // prefix captured before Up/Down
+		seedLine   []rune   // editing line before entering navigation for lastPrefix
+		matches    []int    // indices into userHistory (most recent first)
+		idx        int      // current selection index in matches; len(matches) means seedLine
+	}
+	state := &histState{idx: 0}
+
+	// Build matches for a given prefix, ordered from most recent to oldest
+	buildMatches := func(prefix string) {
+		state.matches = state.matches[:0]
+		if prefix == "" {
+			state.idx = 0
+			return
+		}
+		low := prefix
+		for i := len(userHistory) - 1; i >= 0; i-- {
+			cand := userHistory[i]
+			if strings.HasPrefix(cand, low) {
+				state.matches = append(state.matches, i)
+			}
+		}
+		state.idx = len(state.matches) // start from seed position (no selection yet)
+	}
+
+	listener := func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
+		const (
+			keyDown = rune(14) // readline CharNext
+			keyUp   = rune(16) // readline CharPrev
+		)
+
+		// Helper to ensure matches for current prefix are ready
+		recompute := func(prefix string, currentLine []rune) {
+			if state.lastPrefix != prefix {
+				state.lastPrefix = prefix
+				state.seedLine = append(state.seedLine[:0], currentLine...)
+				buildMatches(prefix)
+			}
+		}
+
+		// Up: previous matching history (older)
+		if key == keyUp {
+			if state.lastPrefix == "" {
+				// No active prefix-search context; do not override default behavior
+				return nil, 0, false
+			}
+			// Keep using last known seed/prefix; matches already computed when prefix changed
+			if len(state.matches) == 0 {
+				return nil, 0, false
+			}
+			if state.idx > 0 && state.idx <= len(state.matches) {
+				state.idx--
+			} else if state.idx == len(state.matches) {
+				// first time pressing Up with this prefix
+				state.idx = 0
+			}
+			idx := state.matches[state.idx]
+			candidate := []rune(userHistory[idx])
+			return candidate, len(candidate), true
+		}
+		// Down: next matching history (newer), eventually back to seedLine
+		if key == keyDown {
+			if state.lastPrefix == "" || len(state.matches) == 0 {
+				return nil, 0, false
+			}
+			if state.idx < len(state.matches)-1 {
+				state.idx++
+				idx := state.matches[state.idx]
+				candidate := []rune(userHistory[idx])
+				return candidate, len(candidate), true
+			}
+			// Move beyond the newest match back to the original editing seed line
+			state.idx = len(state.matches)
+			seed := append([]rune(nil), state.seedLine...)
+			return seed, len(seed), true
+		}
+
+		// For any other key, update the active prefix context to current content left of cursor
+		prefix := string(line[:pos])
+		recompute(prefix, line)
+		return nil, 0, false
+	}
+
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          "> ",
-		HistoryFile:     "/tmp/.promql-cli_history",
+		HistoryFile:     historyPath,
 		AutoComplete:    createAutoCompleter(storage), // Dynamic tab completion
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
+		Listener:        readline.FuncListener(listener),
 	})
 	if err != nil {
 		fmt.Printf("Warning: Could not initialize readline, falling back to basic input: %v\n", err)
@@ -57,6 +147,11 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 			}
 			fmt.Printf("Error reading input: %v\n", err)
 			break
+		}
+
+		// Keep our in-memory history in sync (readline persists to file separately)
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			userHistory = append(userHistory, trimmed)
 		}
 
 		query := strings.TrimSpace(line)
@@ -106,6 +201,23 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 		// Print results
 		printUpstreamQueryResult(result)
 	}
+}
+
+// loadHistoryFromFile reads non-empty lines from the given history file path.
+func loadHistoryFromFile(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, ln := range strings.Split(string(data), "\n") {
+		ln = strings.TrimRight(ln, "\r")
+		ln = strings.TrimSpace(ln)
+		if ln != "" {
+			out = append(out, ln)
+		}
+	}
+	return out
 }
 
 // PrometheusAutoCompleter provides dynamic auto-completion for PromQL queries
