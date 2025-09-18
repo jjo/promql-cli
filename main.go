@@ -66,11 +66,13 @@ func main() {
 
 	// Create upstream Prometheus PromQL engine
 	engine := promql.NewEngine(promql.EngineOpts{
-		Logger:        nil,
-		Reg:           nil,
-		MaxSamples:    50000000,
-		Timeout:       30 * time.Second,
-		LookbackDelta: 5 * time.Minute,
+		Logger:               nil,
+		Reg:                  nil,
+		MaxSamples:           50000000,
+		Timeout:              30 * time.Second,
+		LookbackDelta:        5 * time.Minute,
+		EnableAtModifier:     true,
+		EnableNegativeOffset: true,
 		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 {
 			return 60 * 1000 // 60 seconds
 		},

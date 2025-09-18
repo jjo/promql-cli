@@ -182,6 +182,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 				}
 			}
 		}
+		// Normalize @<unix_ms> to seconds with decimals for PromQL @ modifier
+		query = normalizeAtModifierTimestamps(query)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
@@ -756,6 +758,26 @@ func runeLen(s string) int {
 	return len([]rune(s))
 }
 
+// normalizeAtModifierTimestamps converts PromQL @ timestamps provided in ms/us/ns to seconds with decimals.
+// E.g., metric @1758201240105 -> metric @ 1758201240.105
+func normalizeAtModifierTimestamps(q string) string {
+	re := regexp.MustCompile(`@\s*(\d{13,19})`)
+	return re.ReplaceAllStringFunc(q, func(m string) string {
+		// Extract digits
+		digits := regexp.MustCompile(`\d+`).FindString(m)
+		l := len(digits)
+		var sec string
+		switch l {
+		case 13, 16, 19:
+			sec = digits[:10] + "." + digits[10:]
+		default:
+			// Not a ms/us/ns value; keep as is
+			return m
+		}
+		return "@ " + sec
+	})
+}
+
 // parseEvalTime parses time tokens like RFC3339, unix seconds/millis, or now+/-duration.
 func parseEvalTime(tok string) (time.Time, error) {
 	// now+/-duration
@@ -962,6 +984,8 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 			}
 		}
 	}
+	// Normalize @<unix_ms> to seconds with decimals for PromQL @ modifier
+	query = normalizeAtModifierTimestamps(query)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
