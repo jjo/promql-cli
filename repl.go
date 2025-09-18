@@ -80,6 +80,10 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 			}
 		}
 
+		// Always recompute based on current content left of cursor
+		prefix := string(line[:pos])
+		recompute(prefix, line)
+
 		// Up: previous matching history (older)
 		if key == keyUp {
 			if state.lastPrefix == "" {
@@ -117,9 +121,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 			return seed, len(seed), true
 		}
 
-		// For any other key, update the active prefix context to current content left of cursor
-		prefix := string(line[:pos])
-		recompute(prefix, line)
+		// Any other key: no special handling; let readline proceed
 		return nil, 0, false
 	}
 
@@ -369,7 +371,7 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 		if !inLabels && strings.HasPrefix(trimmed, ".") {
 			// If typing the command token, suggest available ad-hoc commands
 			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-				cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save", ".seed", ".scrape", ".drop", ".at", ".pinat"}
+cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save", ".seed", ".scrape", ".drop", ".at", ".pinat"}
 				var out []string
 				for _, c := range cmds {
 					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
@@ -1054,8 +1056,12 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 		return
 	}
 
-	// Support ".at <time> <query>"
+	// Support pinned evaluation time set via .pinat, unless overridden by .at
 	evalTime := time.Now()
+	if pinnedEvalTime != nil {
+		evalTime = *pinnedEvalTime
+	}
+	// Support ".at <time> <query>" (overrides pinned time)
 	if strings.HasPrefix(query, ".at ") {
 		parts := strings.Fields(query)
 		if len(parts) >= 3 {
