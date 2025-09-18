@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,9 +27,16 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		fmt.Println("    Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())")
 		fmt.Println("    Also supports positional form: .seed <metric> <steps> [<step>]")
 		fmt.Println("    Examples: .seed http_requests_total steps=10 step=30s | .seed http_requests_total 10 30s")
-		fmt.Println("  .scrape <URI>")
-		fmt.Println("    Fetch metrics from an HTTP(S) endpoint in Prometheus text exposition format and load them into the store")
-		fmt.Println("    Example: .scrape http://localhost:9100/metrics")
+		fmt.Println("  .scrape <URI> [metrics_regex] [count] [delay]")
+		fmt.Println("    Fetch metrics from an HTTP(S) endpoint and load them. Optional:")
+		fmt.Println("      - metrics_regex: only metric names matching this regexp are loaded")
+		fmt.Println("      - count: number of scrapes (default 1)")
+		fmt.Println("      - delay: delay between scrapes as Go duration (default 10s)")
+		fmt.Println("    Examples:")
+		fmt.Println("      .scrape http://localhost:9100/metrics")
+		fmt.Println("      .scrape http://localhost:9100/metrics '^(up|process_.*)$'")
+		fmt.Println("      .scrape http://localhost:9100/metrics 3 5s")
+		fmt.Println("      .scrape http://localhost:9100/metrics 'http_.*' 5 2s")
 		fmt.Println("  .drop <metric>")
 		fmt.Println("    Remove a metric (all its series) from the in-memory store")
 		fmt.Println("    Example: .drop http_requests_total")
@@ -189,41 +197,100 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		return true
 	}
 
-	// Handle .scrape <URI>
+	// Handle .scrape <URI> [metrics_regex] [count] [delay]
 	if strings.HasPrefix(strings.TrimSpace(query), ".scrape ") {
-		uri := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".scrape "))
-		if uri == "" {
-			fmt.Println("Usage: .scrape <URI>")
-			fmt.Println("Example: .scrape http://localhost:9100/metrics")
+		args := strings.Fields(strings.TrimSpace(query))
+		if len(args) < 2 {
+			fmt.Println("Usage: .scrape <URI> [metrics_regex] [count] [delay]")
+			fmt.Println("Examples: .scrape http://localhost:9100/metrics | .scrape http://localhost:9100/metrics '^(up|process_.*)$' 3 5s")
 			return true
 		}
-		beforeMetrics := len(storage.metrics)
-		beforeSamples := 0
-		for _, ss := range storage.metrics {
-			beforeSamples += len(ss)
+		uri := args[1]
+		var regexStr string
+		count := 1
+		delay := 10 * time.Second
+		countSet := false
+		delaySet := false
+		for _, tok := range args[2:] {
+			if !countSet {
+				if n, err := strconv.Atoi(tok); err == nil {
+					count = n
+					if count < 1 {
+						count = 1
+					}
+					countSet = true
+					continue
+				}
+			}
+			if !delaySet {
+				if d, err := time.ParseDuration(tok); err == nil {
+					delay = d
+					if delay < 0 {
+						delay = 0
+					}
+					delaySet = true
+					continue
+				}
+			}
+			if regexStr == "" {
+				regexStr = strings.Trim(tok, "\"'")
+				continue
+			}
 		}
+		var re *regexp.Regexp
+		var reErr error
+		if strings.TrimSpace(regexStr) != "" {
+			re, reErr = regexp.Compile(regexStr)
+			if reErr != nil {
+				fmt.Printf("Invalid metrics_regex %q: %v\n", regexStr, reErr)
+				return true
+			}
+		}
+
 		client := &http.Client{Timeout: 20 * time.Second}
-		resp, err := client.Get(uri)
-		if err != nil {
-			fmt.Printf("Failed to scrape %s: %v\n", uri, err)
-			return true
+		for i := 0; i < count; i++ {
+			beforeMetrics := len(storage.metrics)
+			beforeSamples := 0
+			for _, ss := range storage.metrics {
+				beforeSamples += len(ss)
+			}
+
+			resp, err := client.Get(uri)
+			if err != nil {
+				fmt.Printf("Failed to scrape %s: %v\n", uri, err)
+				return true
+			}
+			func() {
+				defer resp.Body.Close()
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					fmt.Printf("Failed to scrape %s: HTTP %d\n", uri, resp.StatusCode)
+					return
+				}
+				if re != nil {
+					if err := storage.LoadFromReaderWithFilter(resp.Body, func(name string) bool { return re.MatchString(name) }); err != nil {
+						fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
+						return
+					}
+				} else {
+					if err := storage.LoadFromReader(resp.Body); err != nil {
+						fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
+						return
+					}
+				}
+			}()
+
+			afterMetrics := len(storage.metrics)
+			afterSamples := 0
+			for _, ss := range storage.metrics {
+				afterSamples += len(ss)
+			}
+			fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
+				uri, i+1, count, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+
+			if i < count-1 && delay > 0 {
+				time.Sleep(delay)
+			}
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			fmt.Printf("Failed to scrape %s: HTTP %d\n", uri, resp.StatusCode)
-			return true
-		}
-		if err := storage.LoadFromReader(resp.Body); err != nil {
-			fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
-			return true
-		}
-		afterMetrics := len(storage.metrics)
-		afterSamples := 0
-		for _, ss := range storage.metrics {
-			afterSamples += len(ss)
-		}
-		fmt.Printf("Scraped %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
-			uri, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
 		return true
 	}
 

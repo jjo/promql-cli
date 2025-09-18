@@ -48,6 +48,26 @@ func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
 	return s.processMetricFamilies(metricFamilies)
 }
 
+// LoadFromReaderWithFilter loads metrics and applies a metric-name filter function.
+// Only metric families for which filter(name) returns true are loaded.
+func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(name string) bool) error {
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+	metricFamilies, err := parser.TextToMetricFamilies(reader)
+	if err != nil {
+		return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
+	}
+	if filter == nil {
+		return s.processMetricFamilies(metricFamilies)
+	}
+	filtered := make(map[string]*dto.MetricFamily, len(metricFamilies))
+	for name, mf := range metricFamilies {
+		if filter(name) {
+			filtered[name] = mf
+		}
+	}
+	return s.processMetricFamilies(filtered)
+}
+
 // processMetricFamilies processes the parsed metric families (extracted from original LoadFromReader)
 func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.MetricFamily) error {
 	// Use a consistent base timestamp for all samples loaded in this call

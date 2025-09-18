@@ -44,9 +44,13 @@ Ad-hoc commands (REPL only):
   - Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())
   - Also supports positional form: `.seed <metric> <steps> [<step>]`
   - Examples: `.seed http_requests_total steps=10 step=30s` or `.seed http_requests_total 10 30s`
-- `.scrape <URI>`
-  - Fetch metrics from an HTTP(S) endpoint in Prometheus text exposition format and load them into the store
-  - Example: `.scrape http://localhost:9100/metrics`
+- `.scrape <URI> [metrics_regex] [count] [delay]`
+  - Fetch metrics from an HTTP(S) endpoint and load them into the store, optionally filtering by metric name regex, repeating count times with delay between scrapes
+  - Examples:
+    - `.scrape http://localhost:9100/metrics`
+    - `.scrape http://localhost:9100/metrics '^(up|process_.*)$'`
+    - `.scrape http://localhost:9100/metrics 3 5s`
+    - `.scrape http://localhost:9100/metrics 'http_.*' 5 2s`
 - `.drop <metric>`
   - Remove a metric (all its series) from the in-memory store
   - Example: `.drop http_requests_total`
