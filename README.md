@@ -84,6 +84,33 @@ docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query [...]
 
 ## Use cases
 
+### Nerd-speak show-your-friends network interfaces rates
+
+```
+# run node-exporter, listens on :9100 (host net)
+$ docker run -d --name=node-exporter --net="host" --pid="host"  -v "/:/host:ro,rslave" prom/node-exporter:latest  --path.rootfs=/host
+
+# scrape and show the top 2 interfaces with outbound rate
+$ promql-cli query -c ".scrape http://localhost:9100/metrics ^node 10 1s; .pinat now" -q 'topk(2, rate(node_network_transmit_bytes_total[10s]))'
+Scraped http://localhost:9100/metrics (1/10): +292 metrics, +1341 samples (total: 292 metrics, 1341 samples)
+Scraped http://localhost:9100/metrics (2/10): +0 metrics, +1341 samples (total: 292 metrics, 2682 samples)
+Scraped http://localhost:9100/metrics (3/10): +0 metrics, +1341 samples (total: 292 metrics, 4023 samples)
+Scraped http://localhost:9100/metrics (4/10): +0 metrics, +1341 samples (total: 292 metrics, 5364 samples)
+Scraped http://localhost:9100/metrics (5/10): +0 metrics, +1341 samples (total: 292 metrics, 6705 samples)
+Scraped http://localhost:9100/metrics (6/10): +0 metrics, +1341 samples (total: 292 metrics, 8046 samples)
+Scraped http://localhost:9100/metrics (7/10): +0 metrics, +1341 samples (total: 292 metrics, 9387 samples)
+Scraped http://localhost:9100/metrics (8/10): +0 metrics, +1341 samples (total: 292 metrics, 10728 samples)
+Scraped http://localhost:9100/metrics (9/10): +0 metrics, +1341 samples (total: 292 metrics, 12069 samples)
+Scraped http://localhost:9100/metrics (10/10): +0 metrics, +1341 samples (total: 292 metrics, 13410 samples)
+Pinned evaluation time: 2025-09-18T19:52:53Z
+Vector (2 samples):
+  [1] {device="wlan0"} => 25754.316776806645 @ 2025-09-18T16:52:53-03:00
+  [2] {device="lo"} => 22939.1387763803 @ 2025-09-18T16:52:53-03:00
+
+# remove node-exporter container
+$ docker rm -f node-exporter
+```
+
 ### Developing an exporter
 Use promql-cli to iterate quickly on metrics emitted by your exporter during development.
 - Repeatedly scrape your local exporter while you code.
