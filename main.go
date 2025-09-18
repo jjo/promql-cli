@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -282,36 +283,40 @@ func printStorageInfo(storage *SimpleStorage) {
 // printUpstreamQueryResult formats and displays query results from the upstream PromQL engine.
 // It handles different result types (Vector, Scalar, Matrix) with appropriate formatting.
 func printUpstreamQueryResult(result *promql.Result) {
+	printUpstreamQueryResultToWriter(result, os.Stdout)
+}
+
+func printUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 	switch v := result.Value.(type) {
 	case promql.Vector:
 		if len(v) == 0 {
-			fmt.Println("No results found")
+		fmt.Fprintln(w, "No results found")
 			return
 		}
-		fmt.Printf("Vector (%d samples):\n", len(v))
+		fmt.Fprintf(w, "Vector (%d samples):\n", len(v))
 		for i, sample := range v {
-			fmt.Printf("  [%d] %s => %g @ %s\n",
+			fmt.Fprintf(w, "  [%d] %s => %g @ %s\n",
 				i+1,
 				sample.Metric,
 				sample.F,
 				model.Time(sample.T).Time().Format(time.RFC3339))
 		}
 	case promql.Scalar:
-		fmt.Printf("Scalar: %g @ %s\n", v.V, model.Time(v.T).Time().Format(time.RFC3339))
+		fmt.Fprintf(w, "Scalar: %g @ %s\n", v.V, model.Time(v.T).Time().Format(time.RFC3339))
 	case promql.Matrix:
 		if len(v) == 0 {
 			fmt.Println("No results found")
 			return
 		}
-		fmt.Printf("Matrix (%d series):\n", len(v))
+		fmt.Fprintf(w, "Matrix (%d series):\n", len(v))
 		for i, series := range v {
-			fmt.Printf("  [%d] %s:\n", i+1, series.Metric)
+			fmt.Fprintf(w, "  [%d] %s:\n", i+1, series.Metric)
 			for _, point := range series.Floats {
-				fmt.Printf("    %g @ %s\n", point.F, model.Time(point.T).Time().Format(time.RFC3339))
+				fmt.Fprintf(w, "    %g @ %s\n", point.F, model.Time(point.T).Time().Format(time.RFC3339))
 			}
 		}
 	default:
-		fmt.Printf("Unsupported result type: %T\n", result.Value)
+		fmt.Fprintf(w, "Unsupported result type: %T\n", result.Value)
 	}
 }
 

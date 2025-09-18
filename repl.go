@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -163,48 +164,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 			break
 		}
 
-		// Handle ad-hoc functions before normal PromQL execution
-		if handleAdHocFunction(query, storage) {
-			continue
-		}
-
-		// Evaluate at pinned time if set; allow one-off override via .at <time> <query>
-		evalTime := time.Now()
-		if pinnedEvalTime != nil {
-			evalTime = *pinnedEvalTime
-		}
-		if strings.HasPrefix(query, ".at ") {
-			parts := strings.Fields(query)
-			if len(parts) >= 3 {
-				if ts, err := parseEvalTime(parts[1]); err == nil {
-					evalTime = ts
-					query = strings.TrimPrefix(query, ".at "+parts[1]+" ")
-				}
-			}
-		}
-		// Normalize @<unix_ms> to seconds with decimals for PromQL @ modifier
-		query = normalizeAtModifierTimestamps(query)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
-		// Execute query using upstream Prometheus engine
-		q, err := engine.NewInstantQuery(ctx, storage, nil, query, evalTime)
-		if err != nil {
-			fmt.Printf("Error creating query: %v\n", err)
-			cancel()
-			continue
-		}
-
-		result := q.Exec(ctx)
-		cancel()
-
-		if result.Err != nil {
-			fmt.Printf("Error: %v\n", result.Err)
-			continue
-		}
-
-		// Print results
-		printUpstreamQueryResult(result)
+		// Delegate full-line execution (ad-hoc, !cmd, query, pipes) to executeOne
+		executeOne(engine, storage, query)
 	}
 }
 
@@ -781,6 +742,39 @@ func getAggregatorCompletions(prefix string) []string {
 	return out
 }
 
+// splitQueryAndPipe splits a line into query and pipe command on a '|' that is outside double-quoted strings.
+// Returns (query, cmd, true) when a top-level pipe is found; otherwise (line, "", false).
+func splitQueryAndPipe(line string) (string, string, bool) {
+	inStr := false
+	esc := false
+	for i, r := range line {
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if r == '\\' {
+				esc = true
+				continue
+			}
+			if r == '"' {
+				inStr = false
+			}
+			continue
+		}
+		if r == '"' {
+			inStr = true
+			continue
+		}
+		if r == '|' {
+			left := strings.TrimSpace(line[:i])
+			right := strings.TrimSpace(line[i+1:])
+			return left, right, true
+		}
+	}
+	return line, "", false
+}
+
 func getBracketedRangeTemplates() []string {
 	return []string{"[30s]", "[1m]", "[5m]", "[10m]", "[1h]", "[6h]", "[24h]"}
 }
@@ -1029,10 +1023,31 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, s
 
 // executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
 func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
-	query := strings.TrimSpace(line)
-	if query == "" {
+	orig := strings.TrimSpace(line)
+	if orig == "" {
 		return
 	}
+
+	// Shell bang: execute external command and show stdout/stderr
+	if strings.HasPrefix(orig, "!") {
+		cmdStr := strings.TrimSpace(orig[1:])
+		if cmdStr == "" {
+			fmt.Println("Usage: !<command>")
+			return
+		}
+		cmd := exec.Command("/bin/sh", "-c", cmdStr)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Command failed: %v\n", err)
+		}
+		return
+	}
+
+	// Split potential pipeline: <query> | <command> where '|' is outside double-quoted strings
+	queryPart, pipeCmd, hasPipe := splitQueryAndPipe(orig)
+	query := strings.TrimSpace(queryPart)
 
 	// Ad-hoc commands
 	if handleAdHocFunction(query, storage) {
@@ -1067,6 +1082,32 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 		fmt.Printf("Error: %v\n", result.Err)
 		return
 	}
+
+	if hasPipe {
+		// Run external command and pipe our rendered output to its stdin by temporarily redirecting Stdout
+		cmd := exec.Command("/bin/sh", "-c", pipeCmd)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			fmt.Printf("Pipe setup failed: %v\n", err)
+			return
+		}
+		if err := cmd.Start(); err != nil {
+			fmt.Printf("Command start failed: %v\n", err)
+			_ = stdin.Close()
+			return
+		}
+		// Write the result into the command's stdin
+		printUpstreamQueryResultToWriter(result, stdin)
+		_ = stdin.Close()
+		// Wait for command to finish
+		if err := cmd.Wait(); err != nil {
+			fmt.Printf("Command failed: %v\n", err)
+		}
+		return
+	}
+
 	printUpstreamQueryResult(result)
 }
 
