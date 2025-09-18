@@ -40,6 +40,9 @@ Ad-hoc commands (REPL only):
   - Example: `.labels http_requests_total`
 - `.metrics`
   - List metric names present in the loaded dataset
+- `.timestamps <metric>`
+  - Summarize timestamps found across the metric's time series (unique count, earliest, latest, span)
+  - Example: `.timestamps http_requests_total`
 - `.seed <metric> [steps=N] [step=1m]`
   - Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())
   - Also supports positional form: `.seed <metric> <steps> [<step>]`

@@ -23,6 +23,9 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		fmt.Println("    Example: .labels http_requests_total")
 		fmt.Println("  .metrics")
 		fmt.Println("    List metric names available in the loaded dataset")
+		fmt.Println("  .timestamps <metric>")
+		fmt.Println("    Summarize timestamps found across the metric's time series (unique count, earliest, latest, span)")
+		fmt.Println("    Example: .timestamps http_requests_total")
 		fmt.Println("  .seed <metric> [steps=N] [step=1m]")
 		fmt.Println("    Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())")
 		fmt.Println("    Also supports positional form: .seed <metric> <steps> [<step>]")
@@ -167,6 +170,95 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			fmt.Println()
 		}
 
+		return true
+	}
+
+	// Handle .timestamps <metric>
+	if strings.HasPrefix(strings.TrimSpace(query), ".timestamps ") || strings.TrimSpace(query) == ".timestamps" {
+		metric := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".timestamps"))
+		metric = strings.Trim(metric, " \"'")
+		if metric == "" {
+			fmt.Println("Usage: .timestamps <metric>")
+			fmt.Println("Example: .timestamps http_requests_total")
+			return true
+		}
+		samples, exists := storage.metrics[metric]
+		if !exists || len(samples) == 0 {
+			fmt.Printf("Metric '%s' not found or has no samples\n", metric)
+			return true
+		}
+		// Series count (group by labelset excluding __name__)
+		seriesSet := make(map[string]struct{})
+		for _, s := range samples {
+			// build key excluding __name__
+			keys := make([]string, 0, len(s.Labels))
+			for k := range s.Labels {
+				if k == "__name__" {
+					continue
+				}
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			b := strings.Builder{}
+			for i, k := range keys {
+				if i > 0 {
+					b.WriteByte('\xff') // unlikely separator
+				}
+				b.WriteString(k)
+				b.WriteByte('=')
+				b.WriteString(s.Labels[k])
+			}
+			seriesSet[b.String()] = struct{}{}
+		}
+		seriesCount := len(seriesSet)
+
+		// Unique timestamps and min/max
+		uniq := make(map[int64]int)
+		var minTs, maxTs int64
+		first := true
+		for _, s := range samples {
+			uniq[s.Timestamp]++
+			if first {
+				minTs, maxTs = s.Timestamp, s.Timestamp
+				first = false
+			} else {
+				if s.Timestamp < minTs {
+					minTs = s.Timestamp
+				}
+				if s.Timestamp > maxTs {
+					maxTs = s.Timestamp
+				}
+			}
+		}
+		uniqueCount := len(uniq)
+		span := time.Duration(maxTs-minTs) * time.Millisecond
+		// Prepare example timestamps
+		ts := make([]int64, 0, uniqueCount)
+		for t := range uniq {
+			ts = append(ts, t)
+		}
+		sort.Slice(ts, func(i, j int) bool { return ts[i] < ts[j] })
+		exN := 5
+		if len(ts) < exN {
+			exN = len(ts)
+		}
+		fmt.Printf("Timestamp summary for metric '%s'\n", metric)
+		fmt.Printf("  Series: %d\n", seriesCount)
+		fmt.Printf("  Samples: %d\n", len(samples))
+		fmt.Printf("  Unique timestamps: %d\n", uniqueCount)
+		fmt.Printf("  Earliest: %s (unix_ms=%d)\n", time.UnixMilli(minTs).UTC().Format(time.RFC3339), minTs)
+		fmt.Printf("  Latest:   %s (unix_ms=%d)\n", time.UnixMilli(maxTs).UTC().Format(time.RFC3339), maxTs)
+		fmt.Printf("  Span:     %s\n", span)
+		if exN > 0 {
+			fmt.Printf("  Examples: ")
+			for i := 0; i < exN; i++ {
+				if i > 0 {
+					fmt.Printf(", ")
+				}
+				fmt.Printf("%s", time.UnixMilli(ts[i]).UTC().Format(time.RFC3339))
+			}
+			fmt.Println()
+		}
 		return true
 	}
 

@@ -363,18 +363,18 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	lastCloseBrace := strings.LastIndex(beforeCursor, "}")
 	inLabels := lastOpenBrace > lastCloseBrace && lastOpenBrace != -1
 
-	if !inLabels && strings.HasPrefix(trimmed, ".") {
-		// If typing the command token, suggest available ad-hoc commands
-		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-			cmds := []string{".help", ".labels", ".metrics", ".seed", ".scrape", ".drop", ".at"}
-			var out []string
-			for _, c := range cmds {
-				if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
-					out = append(out, c)
+		if !inLabels && strings.HasPrefix(trimmed, ".") {
+			// If typing the command token, suggest available ad-hoc commands
+			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
+				cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".seed", ".scrape", ".drop", ".at"}
+				var out []string
+				for _, c := range cmds {
+					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
+						out = append(out, c)
+					}
 				}
+				return out
 			}
-			return out
-		}
 		// If after ".labels " or ".seed ", complete metric names
 		if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
 			return pac.getMetricNameCompletions(currentWord)
