@@ -1,37 +1,38 @@
 # promql-cli
 
-An in-memory PromQL playground/REPL. It loads Prometheus text exposition format metrics into a simple in-memory store and executes PromQL using the upstream Prometheus engine. Includes interactive querying with readline-based history and dynamic auto-completion for metric names, labels, values, functions, and operators derived from the loaded dataset.
+A lightweight PromQL playground and REPL. Load Prometheus text-format metrics, query them with the upstream Prometheus engine, and iterate quickly with interactive auto-completion.
 
-## Build
+## Install
 
-- Local build:
-  - `make build`
-  - Binary: `./bin/promql-cli`
+- Go:
+  - `go install github.com/jjo/promql-cli@latest`
+- Docker:
+  - Docker Hub: `docker pull xjjo/promql-cli:latest`
+  - GHCR: `docker pull ghcr.io/jjo/promql-cli:latest`
 
-- Run without building:
-  - `go run . <command> <file.prom>`
+## Quick start
 
-## CLI usage
+- Load a metrics file and open the REPL:
+  - `promql-cli query ./example.prom`
+- Scrape metrics before starting and list metric names:
+  - `promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"`
+- Run a single query and print JSON:
+  - `promql-cli query -q 'up' -o json ./example.prom`
 
-Commands (from the program):
+## Commands
 
-- Load metrics (parse + summarize):
-  - `go run . load <file.prom>`
-- Query (REPL with autocomplete):
-  - `go run . query [flags] <file.prom>`
+- `promql-cli load <file.prom>` — parse and load a text-format metrics file (prints a short summary)
+- `promql-cli query [flags] [<file.prom>]` — start the REPL or run a one-off query
+- `promql-cli version` — print version, commit, and build date
 
-Flags (query mode):
+### Query flags
+- `-q, --query "<expr>"` — run a single expression and exit
+- `-o, --output json` — with `-q`, print JSON result
+- `-c, --command "cmds"` — run semicolon-separated commands before the session or one-off query
+  - Example: `-c ".scrape http://localhost:9100/metrics; .metrics"`
+- `-s, --silent` — suppress startup output and `-c` command output
 
-- `-q, --query "<expr>"`  Execute a single PromQL expression and exit (no REPL)
-- `-o, --output json`      With -q, output results as JSON (vector/scalar/matrix)
-- `-c, --command "cmds"`  Run semicolon-separated commands before the session or one-off query
-  - Example: `promql-cli query -c ".scrape http://localhost:9100/metrics" -s -q 'count by (__name__)({__name__!=""}) > 1'`
-
-Common flags:
-
-- `-s, --silent`           Suppress startup output (banners, summaries)
-
-Ad-hoc commands (REPL only):
+## Ad-hoc commands (in the REPL)
 
 - `.help`
   - Show usage for ad-hoc commands
@@ -70,34 +71,147 @@ Ad-hoc commands (REPL only):
   - With an argument, pin all future queries to a specific evaluation time until removed
   - Examples: `.pinat` (show), `.pinat now`, `.pinat 2025-09-16T20:40:00Z`, `.pinat remove`
 
-With the built binary:
-
-- `./bin/promql-cli load <file.prom>`
-- `./bin/promql-cli query [flags] <file.prom>`
-- `./bin/promql-cli test-completion <file.prom>`
-
-Examples (non-interactive and JSON):
-
-Initialization examples (`-c`):
-
-- Initialize by scraping and list metrics, then start REPL:
-  - `./bin/promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"`
-- Initialize, then run a one-off query and exit:
-  - `./bin/promql-cli query -c ".scrape http://localhost:9100/metrics" -q 'sum(up)'`
-
-- One-off query and exit:
-  - `./bin/promql-cli query -q 'sum(rate(http_requests_total[5m]))' metrics.prom`
-- JSON output (Prometheus-like shape):
-  - `./bin/promql-cli query -q 'up' -o json metrics.prom`
-- Suppress startup output:
-  - `./bin/promql-cli query -s metrics.prom`
-
-Notes:
-
-- `<file.prom>` must be in Prometheus text exposition format.
+## Notes
+- Input files must be in Prometheus text exposition format.
 - The REPL supports tab-completion and keeps history in `/tmp/.promql-cli_history`.
 
-## Examples
+## Use cases
+
+### Developing an exporter
+Use promql-cli to iterate quickly on metrics emitted by your exporter during development.
+- Repeatedly scrape your local exporter while you code.
+- Pin evaluation time to "now" for stable rate/increase windows during quick loops.
+- Explore labels with `.labels` and use Tab completion to discover series.
+
+Example:
+
+```
+./bin/promql-cli query -c ".scrape http://localhost:9123/metrics ^awesome_metric 3 10s; .pinat now"
+> .labels awesome_metric<TAB>
+> rate(awesome_metric_foo_total[30s])
+```
+
+<details>
+<summary>Flow</summary>
+
+```
+Dev edits code
+     │
+     ▼
+Exporter (localhost:9123/metrics) ──▶ promql-cli .scrape (repeat count/delay)
+                                      │
+                                      ▼
+                               In-memory store
+                                      │
+                                      ▼
+                         REPL (completion, .labels, .pinat)
+                                      │
+                                      ▼
+                             Queries (rate/increase)
+                                      │
+                                      ▼
+                                 Insights/iterate ↺
+```
+
+</details>
+
+### Grabbing exported metrics from a Kubernetes pod
+Port-forward the pod or service locally, scrape a few times, explore, and save for offline analysis later.
+
+```
+# Port-forward a service or pod (adjust namespace/name)
+kubectl -n <namespace> port-forward svc/<service> 9123:9123 &
+
+./bin/promql-cli query -c ".scrape http://localhost:9123/metrics ^awesome_metric 3 10s; .pinat now"
+> .labels awesome_metric<TAB>
+> rate(awesome_metric_foo_total[30s])
+> .save exported.prom
+```
+
+Later reload and continue exploring:
+
+```
+./bin/promql-cli query -c ".load exported.prom"
+> .timestamps awesome_metric_foo_total
+> .pinat <last_timestamp_from_above>
+> rate(awesome_metric_foo_total[30s])
+```
+
+<details>
+<summary>Flow</summary>
+
+```
+K8s Pod/Service ──(port-forward 9123)──▶ localhost:9123/metrics
+                                         │
+                                         ▼
+                                   promql-cli .scrape (×N)
+                                         │
+                                         ▼
+                                   In-memory store
+                                         │            ┌───────────────┐
+                                         ├──────────▶ │ .save snapshot │───▶ exported.prom
+                                         │            └───────────────┘
+                                         ▼
+                                      Explore
+                                         │
+                                         ▼
+                                   Later: .load file
+                                         │
+                                         ▼
+                                      Explore again
+```
+
+</details>
+
+### Other ideas
+- Validate alerts and recording rules locally: run PromQL expressions against a saved snapshot to check thresholds.
+
+<details>
+<summary>Flow</summary>
+
+```
+exported.prom ──▶ promql-cli query -c ".load exported.prom" ──▶ run expressions ──▶ validate thresholds
+```
+
+</details>
+
+- Teach/learn PromQL: use completion, `.seed` to create history for `rate()`/`increase()`, and `.labels` to discover dimensions.
+
+<details>
+<summary>Flow</summary>
+
+```
+minimal dataset ──▶ promql-cli (.seed to synthesize history) ──▶ try functions (rate/increase) ──▶ iterate
+```
+
+</details>
+
+- CI smoke tests for exporters: in CI, run the Docker image, scrape a test exporter, and run a set of queries (via `-q`) to assert presence/shape of metrics.
+
+<details>
+<summary>Flow</summary>
+
+```
+CI runner ──▶ docker run promql-cli query -c ".scrape http://exporter:metrics" -q "required_query"
+         └─▶ exit code + logs enforce expectations
+```
+
+</details>
+
+- Compare snapshots over time: save multiple `.prom` files and load the one you need to analyze regressions or label churn.
+
+<details>
+<summary>Flow</summary>
+
+```
+exported_1.prom   exported_2.prom
+       │                 │
+       └──▶ promql-cli (load one at a time) ──▶ run diff-like queries (by labels/values)
+```
+
+</details>
+
+## Example PromQL queries
 
 - Try the bundled example dataset:
   - `./bin/promql-cli load ./example.prom`
@@ -122,34 +236,7 @@ Notes:
   - `active_sessions`
 
 ## Docker
-
-Image name (default): `xjjo/promql-cli`
-
-- Build:
-  - `make docker-build TAG=latest`
-- Run (mount metrics):
-  - `docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query /data/example.prom`
-- Push (to Docker Hub):
-  - `make docker-push TAG=latest`
-
-### GitHub Actions (CI) Docker build & push
-
-This repository includes a GitHub Actions workflow that builds and pushes the Docker image to Docker Hub:
-
-- Triggers: on push to main, and on tags (v*).
-- Tags pushed:
-  - On main: latest and sha-<shortsha>
-  - On tags: the tag name (e.g., v1.2.3) and latest
-
-## Make targets
-
-- `make build`: Build ./bin/promql-cli
-- `make run ARGS="query ./metrics.prom"`: Build then run with ARGS passed to the binary
-- `make test`: Run go test ./...
-- `make fmt`: go fmt ./...
-- `make vet`: go vet ./...
-- `make tidy`: go mod tidy
-- `make clean`: Remove ./bin
-- `make docker-build [TAG=latest]`: Build Docker image xjjo/promql-cli:TAG
-- `make docker-run ARGS="query /data/metrics.prom" [TAG=latest]`: Run the image with ARGS
-- `make docker-push [TAG=latest]`: Push xjjo/promql-cli:TAG
+- Run with a local file mounted:
+  - `docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query /data/metrics.prom`
+- Initialize via scrape and enter REPL:
+  - `docker run --rm -it xjjo/promql-cli:latest query -c ".scrape http://localhost:9100/metrics; .metrics"`
