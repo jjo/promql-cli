@@ -12,12 +12,20 @@ A lightweight PromQL playground and REPL. Load Prometheus text-format metrics, q
 
 ## Quick start
 
-- Load a metrics file and open the REPL:
-  - `promql-cli query ./example.prom`
-- Scrape metrics before starting and list metric names:
-  - `promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"`
-- Run a single query and print JSON:
-  - `promql-cli query -q 'up' -o json ./example.prom`
+```shell
+# Load a metrics file and open the REPL:
+promql-cli query ./example.prom
+
+# Scrape metrics before starting and list metric names:
+
+promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"
+
+# Run a single query and print JSON:
+promql-cli query -q 'up' -o json ./example.prom
+
+# All the above but via docker:
+docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query [...]
+```
 
 ## Commands
 
@@ -213,27 +221,24 @@ exported_1.prom   exported_2.prom
 
 ## Example PromQL queries
 
-- Try the bundled example dataset:
-  - `./bin/promql-cli load ./example.prom`
-  - `./bin/promql-cli query ./example.prom`
-
-- Summarize your own metrics:
-  - `./bin/promql-cli load ./metrics.prom`
-- Open interactive REPL and run PromQL like sum(rate(http_requests_total[5m])) by (method):
-  - `./bin/promql-cli query ./metrics.prom`
-
 ### Example queries (with example.prom)
 
-- Sum requests by service:
-  - `sum by (service) (http_requests_total)`
-- Error rate by path (last 5m):
-  - `sum by (path) (rate(http_requests_total{code=~"5.."}[5m])) / sum by (path) (rate(http_requests_total[5m]))`
-- 95th percentile latency on homepage:
-  - `histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{path="/"}[5m])))`
-- Memory per service:
-  - `process_resident_memory_bytes`
-- Active sessions by region:
-  - `active_sessions`
+```promql
+# sum requests by service:
+sum by (service) (http_requests_total)
+
+# error rate by path (last 5m):
+sum by (path) (rate(http_requests_total{code=~"5.."}[5m])) / sum by (path) (rate(http_requests_total[5m]))
+
+# 95th percentile latency on homepage:
+histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{path="/"}[5m])))
+
+# memory per service:
+process_resident_memory_bytes
+
+# active sessions by region:
+sum by (region) (active_sessions)
+```
 
 ## Docker
 - Run with a local file mounted:
