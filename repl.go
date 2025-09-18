@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 	"github.com/prometheus/prometheus/promql"
 	promparser "github.com/prometheus/prometheus/promql/parser"
 )
-
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
 func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent bool) {
@@ -239,6 +239,43 @@ type PrometheusAutoCompleter struct {
 	opts    AutoCompleteOptions
 }
 
+// getFilePathCompletions returns filesystem path candidates for a given path string and current last-segment word.
+func (pac *PrometheusAutoCompleter) getFilePathCompletions(pathSoFar, currentWord string) []string {
+	// Expand ~ to home
+	expandTilde := func(p string) string {
+		if strings.HasPrefix(p, "~") {
+			if home, err := os.UserHomeDir(); err == nil {
+				return filepath.Join(home, strings.TrimPrefix(p, "~"))
+			}
+		}
+		return p
+	}
+	p := expandTilde(pathSoFar)
+	dir, base := filepath.Split(p)
+	if dir == "" {
+		dir = "."
+	}
+	// List directory entries
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	low := strings.ToLower(base)
+	for _, e := range ents {
+		name := e.Name()
+		if !strings.HasPrefix(strings.ToLower(name), low) {
+			continue
+		}
+		if e.IsDir() {
+			name = name + "/"
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // NewPrometheusAutoCompleter creates a new auto-completer with access to metric data.
 func NewPrometheusAutoCompleter(storage *SimpleStorage) *PrometheusAutoCompleter {
 	return &PrometheusAutoCompleter{storage: storage, opts: loadAutoCompleteOptions()}
@@ -371,7 +408,7 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 		if !inLabels && strings.HasPrefix(trimmed, ".") {
 			// If typing the command token, suggest available ad-hoc commands
 			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-			cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save", ".seed", ".scrape", ".drop", ".at", ".pinat"}
+				cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save", ".seed", ".scrape", ".drop", ".at", ".pinat"}
 				var out []string
 				for _, c := range cmds {
 					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
@@ -380,44 +417,73 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 				}
 				return out
 			}
-		// If after ".labels " or ".seed ", complete metric names
-		if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
-			return pac.getMetricNameCompletions(currentWord)
-		}
-		// If after ".at ", either offer time presets or transition into query completions
-		if strings.HasPrefix(trimmed, ".at ") {
-			cmdIdx := strings.LastIndex(line[:pos], ".at ")
-			if cmdIdx >= 0 {
-				after := line[cmdIdx+4 : pos]
-				// If still typing time token (no space yet), suggest presets or a space once token is valid
-				if sp := strings.IndexAny(after, " \t"); sp == -1 {
-					tok := strings.TrimSpace(after)
-					if tok != "" {
-						if _, err := parseEvalTime(tok); err == nil || strings.EqualFold(tok, "now") {
-							// insert a space to move into query context
-							return []string{" "}
-						}
-					}
-					presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
-					var out []string
-					for _, p := range presets {
-						if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
-							out = append(out, p)
-						}
-					}
-					return out
+			// If after ".labels " or ".seed ", complete metric names
+			if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
+				return pac.getMetricNameCompletions(currentWord)
+			}
+			// If after ".load " or ".save ", complete filesystem paths (current word = base name)
+			if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") {
+				// Extract the path substring after the command token
+				var pathSoFar string
+				if strings.HasPrefix(trimmed, ".load ") {
+					pathSoFar = trimmed[len(".load "):]
+				} else {
+					pathSoFar = trimmed[len(".save "):]
 				}
-				// We have a space after time; delegate to query completions for the remainder
-				queryStart := cmdIdx + 4 + strings.IndexAny(line[cmdIdx+4:], " \t") + 1
-				if queryStart <= len(line) {
-					subline := line[queryStart:]
-					subpos := pos - queryStart
-					subWord, _ := pac.getCurrentWord(subline, subpos)
-					return pac.getCompletions(subline, subpos, subWord)
+				return pac.getFilePathCompletions(pathSoFar, currentWord)
+			}
+			// If after ".pinat ", offer time presets similar to .at
+			if strings.HasPrefix(trimmed, ".pinat ") {
+				cmdIdx := strings.LastIndex(line[:pos], ".pinat ")
+				if cmdIdx >= 0 {
+					after := line[cmdIdx+7 : pos]
+					// If still typing time token (no space yet), suggest presets
+					if sp := strings.IndexAny(after, " \t"); sp == -1 {
+						presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
+						var out []string
+						for _, p := range presets {
+							if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+								out = append(out, p)
+							}
+						}
+						return out
+					}
+				}
+			}
+			// If after ".at ", either offer time presets or transition into query completions
+			if strings.HasPrefix(trimmed, ".at ") {
+				cmdIdx := strings.LastIndex(line[:pos], ".at ")
+				if cmdIdx >= 0 {
+					after := line[cmdIdx+4 : pos]
+					// If still typing time token (no space yet), suggest presets or a space once token is valid
+					if sp := strings.IndexAny(after, " \t"); sp == -1 {
+						tok := strings.TrimSpace(after)
+						if tok != "" {
+							if _, err := parseEvalTime(tok); err == nil || strings.EqualFold(tok, "now") {
+								// insert a space to move into query context
+								return []string{" "}
+							}
+						}
+						presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
+						var out []string
+						for _, p := range presets {
+							if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+								out = append(out, p)
+							}
+						}
+						return out
+					}
+					// We have a space after time; delegate to query completions for the remainder
+					queryStart := cmdIdx + 4 + strings.IndexAny(line[cmdIdx+4:], " \t") + 1
+					if queryStart <= len(line) {
+						subline := line[queryStart:]
+						subpos := pos - queryStart
+						subWord, _ := pac.getCurrentWord(subline, subpos)
+						return pac.getCompletions(subline, subpos, subWord)
+					}
 				}
 			}
 		}
-	}
 
 	// Analyze the context to determine what type of completion to provide
 	context := pac.analyzeContext(line, pos)
