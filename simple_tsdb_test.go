@@ -13,7 +13,7 @@ import (
 const sampleMetrics = `
 # HELP http_requests_total Total number of HTTP requests
 # TYPE http_requests_total counter
-http_requests_total{method="get",code="200"} 1027 1710000000000
+http_requests_total{method="get",code="200"} 1027
 http_requests_total{method="get",code="404"} 3
 # HELP temperature Temperature in Celsius
 # TYPE temperature gauge

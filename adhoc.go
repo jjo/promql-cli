@@ -3,11 +3,17 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// pinnedEvalTime, when set, forces future query evaluation to use this timestamp.
+// It is used by the REPL and can be controlled via the .pinat ad-hoc command.
+var pinnedEvalTime *time.Time
 
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 // Returns true if the query was handled as an ad-hoc function, false otherwise
@@ -22,19 +28,36 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		fmt.Println("    Example: .labels http_requests_total")
 		fmt.Println("  .metrics")
 		fmt.Println("    List metric names available in the loaded dataset")
+		fmt.Println("  .timestamps <metric>")
+		fmt.Println("    Summarize timestamps found across the metric's time series (unique count, earliest, latest, span)")
+		fmt.Println("    Example: .timestamps http_requests_total")
+		fmt.Println("  .load <file.prom>")
+		fmt.Println("    Load metrics from a Prometheus text-format file into the store")
+		fmt.Println("  .save <file.prom>")
+		fmt.Println("    Save current store to a Prometheus text-format file")
 		fmt.Println("  .seed <metric> [steps=N] [step=1m]")
 		fmt.Println("    Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())")
 		fmt.Println("    Also supports positional form: .seed <metric> <steps> [<step>]")
 		fmt.Println("    Examples: .seed http_requests_total steps=10 step=30s | .seed http_requests_total 10 30s")
-		fmt.Println("  .scrape <URI>")
-		fmt.Println("    Fetch metrics from an HTTP(S) endpoint in Prometheus text exposition format and load them into the store")
-		fmt.Println("    Example: .scrape http://localhost:9100/metrics")
+		fmt.Println("  .scrape <URI> [metrics_regex] [count] [delay]")
+		fmt.Println("    Fetch metrics from an HTTP(S) endpoint and load them. Optional:")
+		fmt.Println("      - metrics_regex: only metric names matching this regexp are loaded")
+		fmt.Println("      - count: number of scrapes (default 1)")
+		fmt.Println("      - delay: delay between scrapes as Go duration (default 10s)")
+		fmt.Println("    Examples:")
+		fmt.Println("      .scrape http://localhost:9100/metrics")
+		fmt.Println("      .scrape http://localhost:9100/metrics '^(up|process_.*)$'")
+		fmt.Println("      .scrape http://localhost:9100/metrics 3 5s")
+		fmt.Println("      .scrape http://localhost:9100/metrics 'http_.*' 5 2s")
 		fmt.Println("  .drop <metric>")
 		fmt.Println("    Remove a metric (all its series) from the in-memory store")
 		fmt.Println("    Example: .drop http_requests_total")
 		fmt.Println("  .at <time> <query>")
 		fmt.Println("    Evaluate a query at a specific time. Time formats: now, now-5m, now+1h, RFC3339, unix secs/millis")
 		fmt.Println("    Example: .at now-10m sum by (path) (rate(http_requests_total[5m]))")
+		fmt.Println("  .pinat <time|now|remove>")
+		fmt.Println("    Pin all future queries to a specific evaluation time until removed")
+		fmt.Println("    Examples: .pinat now | .pinat 2025-09-16T20:40:00Z | .pinat remove")
 		fmt.Println()
 		return true
 	}
@@ -162,6 +185,95 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		return true
 	}
 
+	// Handle .timestamps <metric>
+	if strings.HasPrefix(strings.TrimSpace(query), ".timestamps ") || strings.TrimSpace(query) == ".timestamps" {
+		metric := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".timestamps"))
+		metric = strings.Trim(metric, " \"'")
+		if metric == "" {
+			fmt.Println("Usage: .timestamps <metric>")
+			fmt.Println("Example: .timestamps http_requests_total")
+			return true
+		}
+		samples, exists := storage.metrics[metric]
+		if !exists || len(samples) == 0 {
+			fmt.Printf("Metric '%s' not found or has no samples\n", metric)
+			return true
+		}
+		// Series count (group by labelset excluding __name__)
+		seriesSet := make(map[string]struct{})
+		for _, s := range samples {
+			// build key excluding __name__
+			keys := make([]string, 0, len(s.Labels))
+			for k := range s.Labels {
+				if k == "__name__" {
+					continue
+				}
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			b := strings.Builder{}
+			for i, k := range keys {
+				if i > 0 {
+					b.WriteByte('\xff') // unlikely separator
+				}
+				b.WriteString(k)
+				b.WriteByte('=')
+				b.WriteString(s.Labels[k])
+			}
+			seriesSet[b.String()] = struct{}{}
+		}
+		seriesCount := len(seriesSet)
+
+		// Unique timestamps and min/max
+		uniq := make(map[int64]int)
+		var minTs, maxTs int64
+		first := true
+		for _, s := range samples {
+			uniq[s.Timestamp]++
+			if first {
+				minTs, maxTs = s.Timestamp, s.Timestamp
+				first = false
+			} else {
+				if s.Timestamp < minTs {
+					minTs = s.Timestamp
+				}
+				if s.Timestamp > maxTs {
+					maxTs = s.Timestamp
+				}
+			}
+		}
+		uniqueCount := len(uniq)
+		span := time.Duration(maxTs-minTs) * time.Millisecond
+		// Prepare example timestamps
+		ts := make([]int64, 0, uniqueCount)
+		for t := range uniq {
+			ts = append(ts, t)
+		}
+		sort.Slice(ts, func(i, j int) bool { return ts[i] < ts[j] })
+		exN := 5
+		if len(ts) < exN {
+			exN = len(ts)
+		}
+		fmt.Printf("Timestamp summary for metric '%s'\n", metric)
+		fmt.Printf("  Series: %d\n", seriesCount)
+		fmt.Printf("  Samples: %d\n", len(samples))
+		fmt.Printf("  Unique timestamps: %d\n", uniqueCount)
+		fmt.Printf("  Earliest: %s (unix_ms=%d)\n", time.UnixMilli(minTs).UTC().Format(time.RFC3339), minTs)
+		fmt.Printf("  Latest:   %s (unix_ms=%d)\n", time.UnixMilli(maxTs).UTC().Format(time.RFC3339), maxTs)
+		fmt.Printf("  Span:     %s\n", span)
+		if exN > 0 {
+			fmt.Printf("  Examples: ")
+			for i := 0; i < exN; i++ {
+				if i > 0 {
+					fmt.Printf(", ")
+				}
+				fmt.Printf("%s", time.UnixMilli(ts[i]).UTC().Format(time.RFC3339))
+			}
+			fmt.Println()
+		}
+		return true
+	}
+
 	// Handle .drop <metric>
 	if strings.HasPrefix(strings.TrimSpace(query), ".drop ") || strings.TrimSpace(query) == ".drop" {
 		metric := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".drop"))
@@ -189,32 +301,49 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		return true
 	}
 
-	// Handle .scrape <URI>
-	if strings.HasPrefix(strings.TrimSpace(query), ".scrape ") {
-		uri := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".scrape "))
-		if uri == "" {
-			fmt.Println("Usage: .scrape <URI>")
-			fmt.Println("Example: .scrape http://localhost:9100/metrics")
+	// Handle .save <file.prom>
+	if strings.HasPrefix(strings.TrimSpace(query), ".save ") || strings.TrimSpace(query) == ".save" {
+		path := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".save"))
+		path = strings.Trim(path, " \"'")
+		if path == "" {
+			fmt.Println("Usage: .save <file.prom>")
 			return true
 		}
+		f, err := os.Create(path)
+		if err != nil {
+			fmt.Printf("Failed to open %s for writing: %v\n", path, err)
+			return true
+		}
+		defer f.Close()
+		if err := storage.SaveToWriter(f); err != nil {
+			fmt.Printf("Failed to save metrics to %s: %v\n", path, err)
+			return true
+		}
+		fmt.Printf("Saved store to %s\n", path)
+		return true
+	}
+
+	// Handle .load <file.prom>
+	if strings.HasPrefix(strings.TrimSpace(query), ".load ") || strings.TrimSpace(query) == ".load" {
+		path := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".load"))
+		path = strings.Trim(path, " \"'")
+		if path == "" {
+			fmt.Println("Usage: .load <file.prom>")
+			return true
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			fmt.Printf("Failed to open %s: %v\n", path, err)
+			return true
+		}
+		defer f.Close()
 		beforeMetrics := len(storage.metrics)
 		beforeSamples := 0
 		for _, ss := range storage.metrics {
 			beforeSamples += len(ss)
 		}
-		client := &http.Client{Timeout: 20 * time.Second}
-		resp, err := client.Get(uri)
-		if err != nil {
-			fmt.Printf("Failed to scrape %s: %v\n", uri, err)
-			return true
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			fmt.Printf("Failed to scrape %s: HTTP %d\n", uri, resp.StatusCode)
-			return true
-		}
-		if err := storage.LoadFromReader(resp.Body); err != nil {
-			fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
+		if err := storage.LoadFromReader(f); err != nil {
+			fmt.Printf("Failed to load metrics from %s: %v\n", path, err)
 			return true
 		}
 		afterMetrics := len(storage.metrics)
@@ -222,8 +351,137 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		for _, ss := range storage.metrics {
 			afterSamples += len(ss)
 		}
-		fmt.Printf("Scraped %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
-			uri, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+		fmt.Printf("Loaded %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n", path, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+		return true
+	}
+
+	// Handle .pinat <time|now|remove>
+	if strings.HasPrefix(strings.TrimSpace(query), ".pinat") {
+		arg := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".pinat"))
+		arg = strings.Trim(arg, " \"'")
+		if arg == "" {
+			if pinnedEvalTime == nil {
+				fmt.Println("Pinned evaluation time: none")
+			} else {
+				fmt.Printf("Pinned evaluation time: %s\n", pinnedEvalTime.UTC().Format(time.RFC3339))
+			}
+			return true
+		}
+		if strings.EqualFold(arg, "remove") {
+			pinnedEvalTime = nil
+			fmt.Println("Pinned evaluation time: removed")
+			return true
+		}
+		var t time.Time
+		var err error
+		if strings.EqualFold(arg, "now") {
+			t = time.Now()
+		} else {
+			t, err = parseEvalTime(arg)
+			if err != nil {
+				fmt.Printf("Invalid time %q: %v\n", arg, err)
+				return true
+			}
+		}
+		pinnedEvalTime = &t
+		fmt.Printf("Pinned evaluation time: %s\n", t.UTC().Format(time.RFC3339))
+		return true
+	}
+
+	// Handle .scrape <URI> [metrics_regex] [count] [delay]
+	if strings.HasPrefix(strings.TrimSpace(query), ".scrape ") {
+		args := strings.Fields(strings.TrimSpace(query))
+		if len(args) < 2 {
+			fmt.Println("Usage: .scrape <URI> [metrics_regex] [count] [delay]")
+			fmt.Println("Examples: .scrape http://localhost:9100/metrics | .scrape http://localhost:9100/metrics '^(up|process_.*)$' 3 5s")
+			return true
+		}
+		uri := args[1]
+		var regexStr string
+		count := 1
+		delay := 10 * time.Second
+		countSet := false
+		delaySet := false
+		for _, tok := range args[2:] {
+			if !countSet {
+				if n, err := strconv.Atoi(tok); err == nil {
+					count = n
+					if count < 1 {
+						count = 1
+					}
+					countSet = true
+					continue
+				}
+			}
+			if !delaySet {
+				if d, err := time.ParseDuration(tok); err == nil {
+					delay = d
+					if delay < 0 {
+						delay = 0
+					}
+					delaySet = true
+					continue
+				}
+			}
+			if regexStr == "" {
+				regexStr = strings.Trim(tok, "\"'")
+				continue
+			}
+		}
+		var re *regexp.Regexp
+		var reErr error
+		if strings.TrimSpace(regexStr) != "" {
+			re, reErr = regexp.Compile(regexStr)
+			if reErr != nil {
+				fmt.Printf("Invalid metrics_regex %q: %v\n", regexStr, reErr)
+				return true
+			}
+		}
+
+		client := &http.Client{Timeout: 20 * time.Second}
+		for i := 0; i < count; i++ {
+			beforeMetrics := len(storage.metrics)
+			beforeSamples := 0
+			for _, ss := range storage.metrics {
+				beforeSamples += len(ss)
+			}
+
+			resp, err := client.Get(uri)
+			if err != nil {
+				fmt.Printf("Failed to scrape %s: %v\n", uri, err)
+				return true
+			}
+			func() {
+				defer resp.Body.Close()
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					fmt.Printf("Failed to scrape %s: HTTP %d\n", uri, resp.StatusCode)
+					return
+				}
+				if re != nil {
+					if err := storage.LoadFromReaderWithFilter(resp.Body, func(name string) bool { return re.MatchString(name) }); err != nil {
+						fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
+						return
+					}
+				} else {
+					if err := storage.LoadFromReader(resp.Body); err != nil {
+						fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
+						return
+					}
+				}
+			}()
+
+			afterMetrics := len(storage.metrics)
+			afterSamples := 0
+			for _, ss := range storage.metrics {
+				afterSamples += len(ss)
+			}
+			fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
+				uri, i+1, count, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+
+			if i < count-1 && delay > 0 {
+				time.Sleep(delay)
+			}
+		}
 		return true
 	}
 

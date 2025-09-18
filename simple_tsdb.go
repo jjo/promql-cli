@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
@@ -48,6 +50,26 @@ func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
 	return s.processMetricFamilies(metricFamilies)
 }
 
+// LoadFromReaderWithFilter loads metrics and applies a metric-name filter function.
+// Only metric families for which filter(name) returns true are loaded.
+func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(name string) bool) error {
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+	metricFamilies, err := parser.TextToMetricFamilies(reader)
+	if err != nil {
+		return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
+	}
+	if filter == nil {
+		return s.processMetricFamilies(metricFamilies)
+	}
+	filtered := make(map[string]*dto.MetricFamily, len(metricFamilies))
+	for name, mf := range metricFamilies {
+		if filter(name) {
+			filtered[name] = mf
+		}
+	}
+	return s.processMetricFamilies(filtered)
+}
+
 // processMetricFamilies processes the parsed metric families (extracted from original LoadFromReader)
 func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.MetricFamily) error {
 	// Use a consistent base timestamp for all samples loaded in this call
@@ -70,8 +92,11 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 
 			// Get value based on metric type
 			var value float64
-			// Always use the consistent base timestamp to keep samples within lookback
+			// Use metric-provided timestamp when present; otherwise fall back to baseTimestamp
 			timestamp := baseTimestamp
+			if metric.GetTimestampMs() != 0 {
+				timestamp = metric.GetTimestampMs()
+			}
 
 			switch mf.GetType() {
 			case dto.MetricType_COUNTER:
@@ -194,6 +219,99 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 	}
 
 	return nil
+}
+
+// SaveToWriter writes the store content in Prometheus text exposition (line) format.
+// For determinism, metrics and samples are sorted.
+func (s *SimpleStorage) SaveToWriter(w io.Writer) error {
+	// Collect metric names
+	names := make([]string, 0, len(s.metrics))
+	for name := range s.metrics {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		samples := s.metrics[name]
+		// Build sortable representations: by labelset (excluding __name__) then timestamp
+		type row struct {
+			labels map[string]string
+			value  float64
+			ts     int64
+			key    string
+		}
+		rows := make([]row, 0, len(samples))
+		for _, s := range samples {
+			// Build label string excluding __name__
+			keys := make([]string, 0, len(s.Labels))
+			for k := range s.Labels {
+				if k == "__name__" {
+					continue
+				}
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			b := strings.Builder{}
+			for i, k := range keys {
+				if i > 0 {
+					b.WriteByte(',')
+				}
+				b.WriteString(k)
+				b.WriteByte('=')
+				b.WriteString(s.Labels[k])
+			}
+			rows = append(rows, row{labels: s.Labels, value: s.Value, ts: s.Timestamp, key: b.String()})
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].key == rows[j].key {
+				return rows[i].ts < rows[j].ts
+			}
+			return rows[i].key < rows[j].key
+		})
+
+		for _, r := range rows {
+			// Write line: name{labels} value timestamp
+			labelStr := formatLabelsForLine(r.labels)
+			if labelStr != "" {
+				if _, err := io.WriteString(w, fmt.Sprintf("%s{%s} %v %d\n", name, labelStr, r.value, r.ts)); err != nil {
+					return err
+				}
+			} else {
+				if _, err := io.WriteString(w, fmt.Sprintf("%s %v %d\n", name, r.value, r.ts)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func formatLabelsForLine(lbls map[string]string) string {
+	if len(lbls) == 0 {
+		return ""
+	}
+	// Exclude __name__
+	keys := make([]string, 0, len(lbls))
+	for k := range lbls {
+		if k == "__name__" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=\"%s\"", k, escapeLabelValue(lbls[k])))
+	}
+	return strings.Join(parts, ",")
+}
+
+func escapeLabelValue(v string) string {
+	replacer := strings.NewReplacer("\\", "\\\\", "\n", "\\n", "\t", "\\t", "\"", "\\\"")
+	return replacer.Replace(v)
 }
 
 // Queryable implementation for SimpleStorage

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -15,7 +17,6 @@ import (
 	"github.com/prometheus/prometheus/promql"
 	promparser "github.com/prometheus/prometheus/promql/parser"
 )
-
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
 func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent bool) {
@@ -163,43 +164,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 			break
 		}
 
-		// Handle ad-hoc functions before normal PromQL execution
-		if handleAdHocFunction(query, storage) {
-			continue
-		}
-
-		// Support ".at <time> <query>" to set evaluation time
-		evalTime := time.Now()
-		if strings.HasPrefix(query, ".at ") {
-			parts := strings.Fields(query)
-			if len(parts) >= 3 {
-				if ts, err := parseEvalTime(parts[1]); err == nil {
-					evalTime = ts
-					query = strings.TrimPrefix(query, ".at "+parts[1]+" ")
-				}
-			}
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
-		// Execute query using upstream Prometheus engine
-		q, err := engine.NewInstantQuery(ctx, storage, nil, query, evalTime)
-		if err != nil {
-			fmt.Printf("Error creating query: %v\n", err)
-			cancel()
-			continue
-		}
-
-		result := q.Exec(ctx)
-		cancel()
-
-		if result.Err != nil {
-			fmt.Printf("Error: %v\n", result.Err)
-			continue
-		}
-
-		// Print results
-		printUpstreamQueryResult(result)
+		// Delegate full-line execution (ad-hoc, !cmd, query, pipes) to executeOne
+		executeOne(engine, storage, query)
 	}
 }
 
@@ -232,6 +198,43 @@ type AutoCompleteOptions struct {
 type PrometheusAutoCompleter struct {
 	storage *SimpleStorage
 	opts    AutoCompleteOptions
+}
+
+// getFilePathCompletions returns filesystem path candidates for a given path string and current last-segment word.
+func (pac *PrometheusAutoCompleter) getFilePathCompletions(pathSoFar, currentWord string) []string {
+	// Expand ~ to home
+	expandTilde := func(p string) string {
+		if strings.HasPrefix(p, "~") {
+			if home, err := os.UserHomeDir(); err == nil {
+				return filepath.Join(home, strings.TrimPrefix(p, "~"))
+			}
+		}
+		return p
+	}
+	p := expandTilde(pathSoFar)
+	dir, base := filepath.Split(p)
+	if dir == "" {
+		dir = "."
+	}
+	// List directory entries
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	low := strings.ToLower(base)
+	for _, e := range ents {
+		name := e.Name()
+		if !strings.HasPrefix(strings.ToLower(name), low) {
+			continue
+		}
+		if e.IsDir() {
+			name = name + "/"
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // NewPrometheusAutoCompleter creates a new auto-completer with access to metric data.
@@ -363,56 +366,85 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	lastCloseBrace := strings.LastIndex(beforeCursor, "}")
 	inLabels := lastOpenBrace > lastCloseBrace && lastOpenBrace != -1
 
-	if !inLabels && strings.HasPrefix(trimmed, ".") {
-		// If typing the command token, suggest available ad-hoc commands
-		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-			cmds := []string{".help", ".labels", ".metrics", ".seed", ".scrape", ".drop", ".at"}
-			var out []string
-			for _, c := range cmds {
-				if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
-					out = append(out, c)
+		if !inLabels && strings.HasPrefix(trimmed, ".") {
+			// If typing the command token, suggest available ad-hoc commands
+			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
+				cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save", ".seed", ".scrape", ".drop", ".at", ".pinat"}
+				var out []string
+				for _, c := range cmds {
+					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
+						out = append(out, c)
+					}
+				}
+				return out
+			}
+			// If after ".labels " or ".seed ", complete metric names
+			if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
+				return pac.getMetricNameCompletions(currentWord)
+			}
+			// If after ".load " or ".save ", complete filesystem paths (current word = base name)
+			if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") {
+				// Extract the path substring after the command token
+				var pathSoFar string
+				if strings.HasPrefix(trimmed, ".load ") {
+					pathSoFar = trimmed[len(".load "):]
+				} else {
+					pathSoFar = trimmed[len(".save "):]
+				}
+				return pac.getFilePathCompletions(pathSoFar, currentWord)
+			}
+			// If after ".pinat ", offer time presets similar to .at
+			if strings.HasPrefix(trimmed, ".pinat ") {
+				cmdIdx := strings.LastIndex(line[:pos], ".pinat ")
+				if cmdIdx >= 0 {
+					after := line[cmdIdx+7 : pos]
+					// If still typing time token (no space yet), suggest presets
+					if sp := strings.IndexAny(after, " \t"); sp == -1 {
+						presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
+						var out []string
+						for _, p := range presets {
+							if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+								out = append(out, p)
+							}
+						}
+						return out
+					}
 				}
 			}
-			return out
-		}
-		// If after ".labels " or ".seed ", complete metric names
-		if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
-			return pac.getMetricNameCompletions(currentWord)
-		}
-		// If after ".at ", either offer time presets or transition into query completions
-		if strings.HasPrefix(trimmed, ".at ") {
-			cmdIdx := strings.LastIndex(line[:pos], ".at ")
-			if cmdIdx >= 0 {
-				after := line[cmdIdx+4 : pos]
-				// If still typing time token (no space yet), suggest presets or a space once token is valid
-				if sp := strings.IndexAny(after, " \t"); sp == -1 {
-					tok := strings.TrimSpace(after)
-					if tok != "" {
-						if _, err := parseEvalTime(tok); err == nil || strings.EqualFold(tok, "now") {
-							// insert a space to move into query context
-							return []string{" "}
+			// If after ".at ", either offer time presets or transition into query completions
+			if strings.HasPrefix(trimmed, ".at ") {
+				cmdIdx := strings.LastIndex(line[:pos], ".at ")
+				if cmdIdx >= 0 {
+					after := line[cmdIdx+4 : pos]
+					// If still typing time token (no space yet), suggest presets or a space once token is valid
+					if sp := strings.IndexAny(after, " \t"); sp == -1 {
+						tok := strings.TrimSpace(after)
+						if tok != "" {
+							if _, err := parseEvalTime(tok); err == nil || strings.EqualFold(tok, "now") {
+								// insert a space to move into query context
+								return []string{" "}
+							}
 						}
-					}
-					presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
-					var out []string
-					for _, p := range presets {
-						if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
-							out = append(out, p)
+						presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
+						var out []string
+						for _, p := range presets {
+							if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+								out = append(out, p)
+							}
 						}
+						return out
 					}
-					return out
-				}
-				// We have a space after time; delegate to query completions for the remainder
-				queryStart := cmdIdx + 4 + strings.IndexAny(line[cmdIdx+4:], " \t") + 1
-				if queryStart <= len(line) {
-					subline := line[queryStart:]
-					subpos := pos - queryStart
-					subWord, _ := pac.getCurrentWord(subline, subpos)
-					return pac.getCompletions(subline, subpos, subWord)
+					// We have a space after time; delegate to query completions for the remainder
+					queryStart := cmdIdx + 4 + strings.IndexAny(line[cmdIdx+4:], " \t") + 1
+					if queryStart <= len(line) {
+						subline := line[queryStart:]
+						subpos := pos - queryStart
+						subWord, _ := pac.getCurrentWord(subline, subpos)
+						return pac.getCompletions(subline, subpos, subWord)
+					}
 				}
 			}
 		}
-	}
 
 	// Analyze the context to determine what type of completion to provide
 	context := pac.analyzeContext(line, pos)
@@ -710,6 +742,39 @@ func getAggregatorCompletions(prefix string) []string {
 	return out
 }
 
+// splitQueryAndPipe splits a line into query and pipe command on a '|' that is outside double-quoted strings.
+// Returns (query, cmd, true) when a top-level pipe is found; otherwise (line, "", false).
+func splitQueryAndPipe(line string) (string, string, bool) {
+	inStr := false
+	esc := false
+	for i, r := range line {
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if r == '\\' {
+				esc = true
+				continue
+			}
+			if r == '"' {
+				inStr = false
+			}
+			continue
+		}
+		if r == '"' {
+			inStr = true
+			continue
+		}
+		if r == '|' {
+			left := strings.TrimSpace(line[:i])
+			right := strings.TrimSpace(line[i+1:])
+			return left, right, true
+		}
+	}
+	return line, "", false
+}
+
 func getBracketedRangeTemplates() []string {
 	return []string{"[30s]", "[1m]", "[5m]", "[10m]", "[1h]", "[6h]", "[24h]"}
 }
@@ -751,6 +816,26 @@ func longestCommonPrefix(strs []string) string {
 // runeLen returns the rune length of a string (readline uses rune positions)
 func runeLen(s string) int {
 	return len([]rune(s))
+}
+
+// normalizeAtModifierTimestamps converts PromQL @ timestamps provided in ms/us/ns to seconds with decimals.
+// E.g., metric @1758201240105 -> metric @ 1758201240.105
+func normalizeAtModifierTimestamps(q string) string {
+	re := regexp.MustCompile(`@\s*(\d{13,19})`)
+	return re.ReplaceAllStringFunc(q, func(m string) string {
+		// Extract digits
+		digits := regexp.MustCompile(`\d+`).FindString(m)
+		l := len(digits)
+		var sec string
+		switch l {
+		case 13, 16, 19:
+			sec = digits[:10] + "." + digits[10:]
+		default:
+			// Not a ms/us/ns value; keep as is
+			return m
+		}
+		return "@ " + sec
+	})
 }
 
 // parseEvalTime parses time tokens like RFC3339, unix seconds/millis, or now+/-duration.
@@ -938,10 +1023,31 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, s
 
 // executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
 func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
-	query := strings.TrimSpace(line)
-	if query == "" {
+	orig := strings.TrimSpace(line)
+	if orig == "" {
 		return
 	}
+
+	// Shell bang: execute external command and show stdout/stderr
+	if strings.HasPrefix(orig, "!") {
+		cmdStr := strings.TrimSpace(orig[1:])
+		if cmdStr == "" {
+			fmt.Println("Usage: !<command>")
+			return
+		}
+		cmd := exec.Command("/bin/sh", "-c", cmdStr)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Command failed: %v\n", err)
+		}
+		return
+	}
+
+	// Split potential pipeline: <query> | <command> where '|' is outside double-quoted strings
+	queryPart, pipeCmd, hasPipe := splitQueryAndPipe(orig)
+	query := strings.TrimSpace(queryPart)
 
 	// Ad-hoc commands
 	if handleAdHocFunction(query, storage) {
@@ -959,6 +1065,8 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 			}
 		}
 	}
+	// Normalize @<unix_ms> to seconds with decimals for PromQL @ modifier
+	query = normalizeAtModifierTimestamps(query)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -974,6 +1082,32 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 		fmt.Printf("Error: %v\n", result.Err)
 		return
 	}
+
+	if hasPipe {
+		// Run external command and pipe our rendered output to its stdin by temporarily redirecting Stdout
+		cmd := exec.Command("/bin/sh", "-c", pipeCmd)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			fmt.Printf("Pipe setup failed: %v\n", err)
+			return
+		}
+		if err := cmd.Start(); err != nil {
+			fmt.Printf("Command start failed: %v\n", err)
+			_ = stdin.Close()
+			return
+		}
+		// Write the result into the command's stdin
+		printUpstreamQueryResultToWriter(result, stdin)
+		_ = stdin.Close()
+		// Wait for command to finish
+		if err := cmd.Wait(); err != nil {
+			fmt.Printf("Command failed: %v\n", err)
+		}
+		return
+	}
+
 	printUpstreamQueryResult(result)
 }
 

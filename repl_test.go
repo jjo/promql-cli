@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/prometheus/prometheus/promql"
 )
 
 func newTestStore(t *testing.T) *SimpleStorage {
@@ -12,6 +15,89 @@ func newTestStore(t *testing.T) *SimpleStorage {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 	return store
+}
+
+func newTestEngine() *promql.Engine {
+	return promql.NewEngine(promql.EngineOpts{
+		Logger:                   nil,
+		Reg:                      nil,
+		MaxSamples:               50_000_000,
+		Timeout:                  30 * time.Second,
+		LookbackDelta:            5 * time.Minute,
+		EnableAtModifier:         true,
+		EnableNegativeOffset:     true,
+		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
+	})
+}
+
+// Ensure that queries with PromQL @ modifier using milliseconds are normalized and do not error.
+func TestExecuteOne_AtModifierWithMillis_Works(t *testing.T) {
+	store := NewSimpleStorage()
+	content := "cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 1 1700000000000\n" +
+		"cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 2 1700000010000\n"
+	if err := store.LoadFromReader(strings.NewReader(content)); err != nil {
+		t.Fatalf("LoadFromReader failed: %v", err)
+	}
+
+	engine := promql.NewEngine(promql.EngineOpts{
+		Logger:                   nil,
+		Reg:                      nil,
+		MaxSamples:               50_000_000,
+		Timeout:                  30 * time.Second,
+		LookbackDelta:            5 * time.Minute,
+		EnableAtModifier:         true,
+		EnableNegativeOffset:     true,
+		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
+	})
+
+	q := "cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour @1700000000000"
+	out := captureStdout(t, func() {
+		executeOne(engine, store, q)
+	})
+	if strings.Contains(out, "Error creating query:") || strings.Contains(out, "Error:") {
+		t.Fatalf("unexpected error output executing query with @ millis: %s", out)
+	}
+}
+
+func TestBangExec_Echo(t *testing.T) {
+	store := NewSimpleStorage()
+	engine := newTestEngine()
+	out := captureStdout(t, func() {
+		executeOne(engine, store, "!echo HELLO")
+	})
+	if !strings.Contains(out, "HELLO") {
+		t.Fatalf("expected HELLO from !echo, got: %s", out)
+	}
+}
+
+func TestPipeExec_CatReceivesOutput(t *testing.T) {
+	store := newTestStore(t)
+	engine := newTestEngine()
+	out := captureStdout(t, func() {
+		executeOne(engine, store, "sum(http_requests_total) | cat")
+	})
+	if !strings.Contains(out, "Vector (") {
+		t.Fatalf("expected Vector output piped through cat, got: %s", out)
+	}
+}
+
+func TestPipeSplit_IgnoresPipeInsideQuotes(t *testing.T) {
+	store := newTestStore(t)
+	engine := newTestEngine()
+	// The '|' appears inside the quoted regex and must not be treated as a pipeline
+	out := captureStdout(t, func() {
+		executeOne(engine, store, "http_requests_total{code=~\"200|404\"}")
+	})
+	if strings.Contains(out, "parse error") || strings.Contains(out, "Error:") {
+		t.Fatalf("unexpected error executing query with '|' inside quotes: %s", out)
+	}
+	// Now verify that an external pipeline still works when a '|' exists inside quotes
+	out = captureStdout(t, func() {
+		executeOne(engine, store, "http_requests_total{code=~\"200|404\"} | grep 404")
+	})
+	if !strings.Contains(out, "404") {
+		t.Fatalf("expected piped output to contain 404 label line, got: %s", out)
+	}
 }
 
 func TestAutoCompleter_MetricNameCompletion(t *testing.T) {
