@@ -17,7 +17,6 @@ A lightweight PromQL playground and REPL. Load Prometheus text-format metrics, q
 promql-cli query ./example.prom
 
 # Scrape metrics before starting and list metric names:
-
 promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"
 
 # Run a single query and print JSON:
@@ -94,7 +93,7 @@ Use promql-cli to iterate quickly on metrics emitted by your exporter during dev
 Example:
 
 ```
-./bin/promql-cli query -c ".scrape http://localhost:9123/metrics ^awesome_metric 3 10s; .pinat now"
+promql-cli query -c ".scrape http://localhost:9123/metrics ^awesome_metric 3 10s; .pinat now"
 > .labels awesome_metric<TAB>
 > rate(awesome_metric_foo_total[30s])
 ```
@@ -130,7 +129,7 @@ Port-forward the pod or service locally, scrape a few times, explore, and save f
 # Port-forward a service or pod (adjust namespace/name)
 kubectl -n <namespace> port-forward svc/<service> 9123:9123 &
 
-./bin/promql-cli query -c ".scrape http://localhost:9123/metrics ^awesome_metric 3 10s; .pinat now"
+promql-cli query -c ".scrape http://localhost:9123/metrics ^awesome_metric 3 10s; .pinat now"
 > .labels awesome_metric<TAB>
 > rate(awesome_metric_foo_total[30s])
 > .save exported.prom
@@ -139,7 +138,7 @@ kubectl -n <namespace> port-forward svc/<service> 9123:9123 &
 Later reload and continue exploring:
 
 ```
-./bin/promql-cli query -c ".load exported.prom"
+promql-cli query -c ".load exported.prom"
 > .timestamps awesome_metric_foo_total
 > .pinat <last_timestamp_from_above>
 > rate(awesome_metric_foo_total[30s])
