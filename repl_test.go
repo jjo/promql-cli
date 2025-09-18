@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/prometheus/prometheus/promql"
 )
 
 func newTestStore(t *testing.T) *SimpleStorage {
@@ -12,6 +15,35 @@ func newTestStore(t *testing.T) *SimpleStorage {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 	return store
+}
+
+// Ensure that queries with PromQL @ modifier using milliseconds are normalized and do not error.
+func TestExecuteOne_AtModifierWithMillis_Works(t *testing.T) {
+	store := NewSimpleStorage()
+	content := "cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 1 1700000000000\n" +
+		"cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 2 1700000010000\n"
+	if err := store.LoadFromReader(strings.NewReader(content)); err != nil {
+		t.Fatalf("LoadFromReader failed: %v", err)
+	}
+
+	engine := promql.NewEngine(promql.EngineOpts{
+		Logger:                   nil,
+		Reg:                      nil,
+		MaxSamples:               50_000_000,
+		Timeout:                  30 * time.Second,
+		LookbackDelta:            5 * time.Minute,
+		EnableAtModifier:         true,
+		EnableNegativeOffset:     true,
+		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
+	})
+
+	q := "cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour @1700000000000"
+	out := captureStdout(t, func() {
+		executeOne(engine, store, q)
+	})
+	if strings.Contains(out, "Error creating query:") || strings.Contains(out, "Error:") {
+		t.Fatalf("unexpected error output executing query with @ millis: %s", out)
+	}
 }
 
 func TestAutoCompleter_MetricNameCompletion(t *testing.T) {

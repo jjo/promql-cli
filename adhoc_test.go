@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,104 @@ func captureStdout(t *testing.T, fn func()) string {
 	_, _ = io.Copy(&buf, r)
 	_ = r.Close()
 	return buf.String()
+}
+
+func TestAdhoc_Timestamps_Summary(t *testing.T) {
+	store := NewSimpleStorage()
+	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+		t.Fatalf("LoadFromReader failed: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		_ = handleAdHocFunction(".timestamps http_requests_total", store)
+	})
+	if !strings.Contains(out, "Timestamp summary for metric 'http_requests_total'") {
+		t.Fatalf("missing header in .timestamps output: %s", out)
+	}
+	if !strings.Contains(out, "Series: 2") {
+		t.Fatalf("expected Series: 2, got: %s", out)
+	}
+	if !strings.Contains(out, "Samples: 2") {
+		t.Fatalf("expected Samples: 2, got: %s", out)
+	}
+	// With per-sample timestamp support, this metric may have >1 unique timestamps; just assert presence of the line
+	if !strings.Contains(out, "Unique timestamps:") {
+		t.Fatalf("expected Unique timestamps line, got: %s", out)
+	}
+	if !strings.Contains(out, "Earliest:") || !strings.Contains(out, "Latest:") || !strings.Contains(out, "Span:") {
+		t.Fatalf("expected Earliest/Latest/Span lines, got: %s", out)
+	}
+}
+
+func TestAdhoc_Pinat_ShowSetRemove(t *testing.T) {
+	// ensure clean state
+	pinnedEvalTime = nil
+	defer func() { pinnedEvalTime = nil }()
+
+	store := NewSimpleStorage()
+
+	// Show when none
+	out := captureStdout(t, func() { _ = handleAdHocFunction(".pinat", store) })
+	if !strings.Contains(out, "Pinned evaluation time: none") {
+		t.Fatalf("expected none status, got: %s", out)
+	}
+
+	// Set to now
+	out = captureStdout(t, func() { _ = handleAdHocFunction(".pinat now", store) })
+	if pinnedEvalTime == nil {
+		t.Fatalf("expected pinnedEvalTime to be set after .pinat now")
+	}
+	if !strings.Contains(out, "Pinned evaluation time:") {
+		t.Fatalf("expected confirmation output, got: %s", out)
+	}
+
+	// Show current
+	out = captureStdout(t, func() { _ = handleAdHocFunction(".pinat", store) })
+	if !strings.Contains(out, "Pinned evaluation time:") || strings.Contains(out, "none") {
+		t.Fatalf("expected current pin shown, got: %s", out)
+	}
+
+	// Remove
+	out = captureStdout(t, func() { _ = handleAdHocFunction(".pinat remove", store) })
+	if pinnedEvalTime != nil {
+		t.Fatalf("expected pinnedEvalTime to be nil after remove")
+	}
+	if !strings.Contains(out, "Pinned evaluation time: removed") {
+		t.Fatalf("expected removed message, got: %s", out)
+	}
+}
+
+func TestTimestamps_WithExplicitTimestamps(t *testing.T) {
+	// Create a temporary prom file with two samples ~10s apart
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.prom")
+	// Two samples with explicit unix_ms
+	content := "cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 1 1700000000000\n" +
+		"cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 2 1700000010000\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store := NewSimpleStorage()
+	// Use the .load handler to exercise the same code path
+	out := captureStdout(t, func() { _ = handleAdHocFunction(".load "+path, store) })
+	if !strings.Contains(out, "Loaded ") {
+		t.Fatalf("expected load output, got: %s", out)
+	}
+
+	// Now request timestamps summary
+	out = captureStdout(t, func() {
+		_ = handleAdHocFunction(".timestamps cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour", store)
+	})
+	if !strings.Contains(out, "Earliest: 2023-11-14T22:13:20Z") {
+		t.Fatalf("expected earliest 2023-11-14T22:13:20Z, got: %s", out)
+	}
+	if !strings.Contains(out, "Latest:   2023-11-14T22:13:30Z") {
+		t.Fatalf("expected latest 2023-11-14T22:13:30Z, got: %s", out)
+	}
+	if !strings.Contains(out, "Span:     10s") {
+		t.Fatalf("expected span 10s, got: %s", out)
+	}
 }
 
 func TestAdhoc_Help_PrintsAndReturnsTrue(t *testing.T) {
