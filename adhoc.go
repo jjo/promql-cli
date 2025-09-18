@@ -3,12 +3,17 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// pinnedEvalTime, when set, forces future query evaluation to use this timestamp.
+// It is used by the REPL and can be controlled via the .pinat ad-hoc command.
+var pinnedEvalTime *time.Time
 
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 // Returns true if the query was handled as an ad-hoc function, false otherwise
@@ -26,6 +31,10 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		fmt.Println("  .timestamps <metric>")
 		fmt.Println("    Summarize timestamps found across the metric's time series (unique count, earliest, latest, span)")
 		fmt.Println("    Example: .timestamps http_requests_total")
+		fmt.Println("  .load <file.prom>")
+		fmt.Println("    Load metrics from a Prometheus text-format file into the store")
+		fmt.Println("  .save <file.prom>")
+		fmt.Println("    Save current store to a Prometheus text-format file")
 		fmt.Println("  .seed <metric> [steps=N] [step=1m]")
 		fmt.Println("    Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())")
 		fmt.Println("    Also supports positional form: .seed <metric> <steps> [<step>]")
@@ -46,6 +55,9 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		fmt.Println("  .at <time> <query>")
 		fmt.Println("    Evaluate a query at a specific time. Time formats: now, now-5m, now+1h, RFC3339, unix secs/millis")
 		fmt.Println("    Example: .at now-10m sum by (path) (rate(http_requests_total[5m]))")
+		fmt.Println("  .pinat <time|now|remove>")
+		fmt.Println("    Pin all future queries to a specific evaluation time until removed")
+		fmt.Println("    Examples: .pinat now | .pinat 2025-09-16T20:40:00Z | .pinat remove")
 		fmt.Println()
 		return true
 	}
@@ -286,6 +298,93 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			totalSamples += len(ss)
 		}
 		fmt.Printf("Dropped '%s': -%d samples (now: %d metrics, %d samples)\n", metric, removed, totalMetrics, totalSamples)
+		return true
+	}
+
+	// Handle .save <file.prom>
+	if strings.HasPrefix(strings.TrimSpace(query), ".save ") || strings.TrimSpace(query) == ".save" {
+		path := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".save"))
+		path = strings.Trim(path, " \"'")
+		if path == "" {
+			fmt.Println("Usage: .save <file.prom>")
+			return true
+		}
+		f, err := os.Create(path)
+		if err != nil {
+			fmt.Printf("Failed to open %s for writing: %v\n", path, err)
+			return true
+		}
+		defer f.Close()
+		if err := storage.SaveToWriter(f); err != nil {
+			fmt.Printf("Failed to save metrics to %s: %v\n", path, err)
+			return true
+		}
+		fmt.Printf("Saved store to %s\n", path)
+		return true
+	}
+
+	// Handle .load <file.prom>
+	if strings.HasPrefix(strings.TrimSpace(query), ".load ") || strings.TrimSpace(query) == ".load" {
+		path := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".load"))
+		path = strings.Trim(path, " \"'")
+		if path == "" {
+			fmt.Println("Usage: .load <file.prom>")
+			return true
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			fmt.Printf("Failed to open %s: %v\n", path, err)
+			return true
+		}
+		defer f.Close()
+		beforeMetrics := len(storage.metrics)
+		beforeSamples := 0
+		for _, ss := range storage.metrics {
+			beforeSamples += len(ss)
+		}
+		if err := storage.LoadFromReader(f); err != nil {
+			fmt.Printf("Failed to load metrics from %s: %v\n", path, err)
+			return true
+		}
+		afterMetrics := len(storage.metrics)
+		afterSamples := 0
+		for _, ss := range storage.metrics {
+			afterSamples += len(ss)
+		}
+		fmt.Printf("Loaded %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n", path, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+		return true
+	}
+
+	// Handle .pinat <time|now|remove>
+	if strings.HasPrefix(strings.TrimSpace(query), ".pinat") {
+		arg := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".pinat"))
+		arg = strings.Trim(arg, " \"'")
+		if arg == "" {
+			if pinnedEvalTime == nil {
+				fmt.Println("Pinned evaluation time: none")
+			} else {
+				fmt.Printf("Pinned evaluation time: %s\n", pinnedEvalTime.UTC().Format(time.RFC3339))
+			}
+			return true
+		}
+		if strings.EqualFold(arg, "remove") {
+			pinnedEvalTime = nil
+			fmt.Println("Pinned evaluation time: removed")
+			return true
+		}
+		var t time.Time
+		var err error
+		if strings.EqualFold(arg, "now") {
+			t = time.Now()
+		} else {
+			t, err = parseEvalTime(arg)
+			if err != nil {
+				fmt.Printf("Invalid time %q: %v\n", arg, err)
+				return true
+			}
+		}
+		pinnedEvalTime = &t
+		fmt.Printf("Pinned evaluation time: %s\n", t.UTC().Format(time.RFC3339))
 		return true
 	}
 

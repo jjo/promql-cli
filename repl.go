@@ -168,8 +168,11 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 			continue
 		}
 
-		// Support ".at <time> <query>" to set evaluation time
+		// Evaluate at pinned time if set; allow one-off override via .at <time> <query>
 		evalTime := time.Now()
+		if pinnedEvalTime != nil {
+			evalTime = *pinnedEvalTime
+		}
 		if strings.HasPrefix(query, ".at ") {
 			parts := strings.Fields(query)
 			if len(parts) >= 3 {
@@ -366,7 +369,7 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 		if !inLabels && strings.HasPrefix(trimmed, ".") {
 			// If typing the command token, suggest available ad-hoc commands
 			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-				cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".seed", ".scrape", ".drop", ".at"}
+			cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save", ".seed", ".scrape", ".drop", ".at", ".pinat"}
 				var out []string
 				for _, c := range cmds {
 					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {

@@ -43,6 +43,10 @@ Ad-hoc commands (REPL only):
 - `.timestamps <metric>`
   - Summarize timestamps found across the metric's time series (unique count, earliest, latest, span)
   - Example: `.timestamps http_requests_total`
+- `.load <file.prom>`
+  - Load metrics from a Prometheus text-format file into the store
+- `.save <file.prom>`
+  - Save current store to a Prometheus text-format file
 - `.seed <metric> [steps=N] [step=1m]`
   - Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())
   - Also supports positional form: `.seed <metric> <steps> [<step>]`
@@ -61,6 +65,10 @@ Ad-hoc commands (REPL only):
   - Evaluate a query at a specific time
   - Time formats: now, now-5m, now+1h, RFC3339 (2025-09-16T20:40:00Z), unix seconds/millis
   - Example: `.at now-10m sum by (path) (rate(http_requests_total[5m]))`
+- `.pinat [time|now|remove]`
+  - Without args, show current pinned evaluation time
+  - With an argument, pin all future queries to a specific evaluation time until removed
+  - Examples: `.pinat` (show), `.pinat now`, `.pinat 2025-09-16T20:40:00Z`, `.pinat remove`
 
 With the built binary:
 
