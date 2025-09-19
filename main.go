@@ -231,7 +231,7 @@ func main() {
 		}
 
 		// Interactive REPL
-		runInteractiveQueries(engine, storage, silent)
+		runInteractiveQueriesDispatch(engine, storage, silent)
 
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])

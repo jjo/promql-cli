@@ -15,49 +15,30 @@ import (
 // It is used by the REPL and can be controlled via the .pinat ad-hoc command.
 var pinnedEvalTime *time.Time
 
+// refreshMetricsCache is a function pointer to refresh the metrics cache for autocompletion
+// It's set by the prompt backend when active
+var refreshMetricsCache func(*SimpleStorage)
+
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 // Returns true if the query was handled as an ad-hoc function, false otherwise
 func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 	// .help: show ad-hoc commands usage
 	if strings.HasPrefix(query, ".help") {
 		fmt.Println("\nAd-hoc commands:")
-		fmt.Println("  .help")
-		fmt.Println("    Show this help")
-		fmt.Println("  .labels <metric>")
-		fmt.Println("    Show the set of labels and example values for a metric present in the loaded dataset")
-		fmt.Println("    Example: .labels http_requests_total")
-		fmt.Println("  .metrics")
-		fmt.Println("    List metric names available in the loaded dataset")
-		fmt.Println("  .timestamps <metric>")
-		fmt.Println("    Summarize timestamps found across the metric's time series (unique count, earliest, latest, span)")
-		fmt.Println("    Example: .timestamps http_requests_total")
-		fmt.Println("  .load <file.prom>")
-		fmt.Println("    Load metrics from a Prometheus text-format file into the store")
-		fmt.Println("  .save <file.prom>")
-		fmt.Println("    Save current store to a Prometheus text-format file")
-		fmt.Println("  .seed <metric> [steps=N] [step=1m]")
-		fmt.Println("    Backfill N historical points per series for a metric, spaced by step (enables rate()/increase())")
-		fmt.Println("    Also supports positional form: .seed <metric> <steps> [<step>]")
-		fmt.Println("    Examples: .seed http_requests_total steps=10 step=30s | .seed http_requests_total 10 30s")
-		fmt.Println("  .scrape <URI> [metrics_regex] [count] [delay]")
-		fmt.Println("    Fetch metrics from an HTTP(S) endpoint and load them. Optional:")
-		fmt.Println("      - metrics_regex: only metric names matching this regexp are loaded")
-		fmt.Println("      - count: number of scrapes (default 1)")
-		fmt.Println("      - delay: delay between scrapes as Go duration (default 10s)")
-		fmt.Println("    Examples:")
-		fmt.Println("      .scrape http://localhost:9100/metrics")
-		fmt.Println("      .scrape http://localhost:9100/metrics '^(up|process_.*)$'")
-		fmt.Println("      .scrape http://localhost:9100/metrics 3 5s")
-		fmt.Println("      .scrape http://localhost:9100/metrics 'http_.*' 5 2s")
-		fmt.Println("  .drop <metric>")
-		fmt.Println("    Remove a metric (all its series) from the in-memory store")
-		fmt.Println("    Example: .drop http_requests_total")
-		fmt.Println("  .at <time> <query>")
-		fmt.Println("    Evaluate a query at a specific time. Time formats: now, now-5m, now+1h, RFC3339, unix secs/millis")
-		fmt.Println("    Example: .at now-10m sum by (path) (rate(http_requests_total[5m]))")
-		fmt.Println("  .pinat <time|now|remove>")
-		fmt.Println("    Pin all future queries to a specific evaluation time until removed")
-		fmt.Println("    Examples: .pinat now | .pinat 2025-09-16T20:40:00Z | .pinat remove")
+		for _, cmd := range AdHocCommands {
+			fmt.Printf("  %s\n", cmd.Usage)
+			fmt.Printf("    %s\n", cmd.Description)
+			if len(cmd.Examples) > 0 {
+				if len(cmd.Examples) == 1 {
+					fmt.Printf("    Example: %s\n", cmd.Examples[0])
+				} else {
+					fmt.Println("    Examples:")
+					for _, ex := range cmd.Examples {
+						fmt.Printf("      %s\n", ex)
+					}
+				}
+			}
+		}
 		fmt.Println()
 		return true
 	}
@@ -298,6 +279,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			totalSamples += len(ss)
 		}
 		fmt.Printf("Dropped '%s': -%d samples (now: %d metrics, %d samples)\n", metric, removed, totalMetrics, totalSamples)
+		
+		// Refresh metrics cache for autocompletion if using prompt backend
+		if refreshMetricsCache != nil {
+			refreshMetricsCache(storage)
+		}
+		
 		return true
 	}
 
@@ -352,6 +339,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			afterSamples += len(ss)
 		}
 		fmt.Printf("Loaded %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n", path, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+		
+		// Refresh metrics cache for autocompletion if using prompt backend
+		if refreshMetricsCache != nil {
+			refreshMetricsCache(storage)
+		}
+		
 		return true
 	}
 
@@ -482,6 +475,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 				time.Sleep(delay)
 			}
 		}
+		
+		// Refresh metrics cache for autocompletion if using prompt backend
+		if refreshMetricsCache != nil {
+			refreshMetricsCache(storage)
+		}
+		
 		return true
 	}
 
@@ -526,6 +525,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		}
 		seedHistory(storage, metric, steps, step)
 		fmt.Printf("Seeded %d historical points (step %s) for metric '%s'\n", steps, step, metric)
+		
+		// Refresh metrics cache for autocompletion if using prompt backend
+		if refreshMetricsCache != nil {
+			refreshMetricsCache(storage)
+		}
+		
 		return true
 	}
 
