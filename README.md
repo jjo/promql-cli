@@ -59,6 +59,7 @@ docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query [...]
 - `-c, --command "cmds"` — run semicolon-separated commands before the session or one-off query
   - Example: `-c ".scrape http://localhost:9100/metrics; .metrics"`
 - `-s, --silent` — suppress startup output and `-c` command output
+- `--repl {prompt|readline}` — select REPL backend (default: `prompt`)
 
 ## Ad-hoc commands (in the REPL)
 
@@ -101,7 +102,8 @@ docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query [...]
 
 ## Notes
 - Input files must be in Prometheus text exposition format.
-- The REPL supports tab-completion and keeps history in `/tmp/.promql-cli_history`.
+- The REPL supports tab-completion and keeps history in `~/.promql-cli_history`. Set `PROMQL_CLI_HISTORY` to override.
+- History navigation is prefix-aware: typing `rate` and pressing `↑` only shows history entries starting with `rate`.
 
 ### Autocompletion features
 
@@ -126,7 +128,25 @@ http_requests_total{<Tab>  # → shows available labels
 http_requests_total{code="<Tab>  # → shows actual code values
 sum by (<Tab>              # → suggests relevant labels
 .<Tab>                     # → shows all ad-hoc commands
+
+# Multi-line queries (Alt+Enter or backslash):
+sum by (job) (           # Type Alt+Enter here
+  rate(                  # Type Alt+Enter here
+    http_requests[5m]   # Press Enter to execute
+  )
+)
+
+# Or with backslash continuation:
+sum by (job) ( \
+  rate(http_requests[5m]) \
+)
 ```
+
+#### Configuration
+
+The completion behavior can be configured via environment variables:
+
+- `PROMQL_CLI_EAGER_COMPLETION=true`: Show completions immediately (invasive mode). Default is `false` - completions only appear when you press Tab or start typing.
 
 #### Key bindings
 
@@ -135,7 +155,7 @@ sum by (<Tab>              # → suggests relevant labels
 - `Ctrl-E`: Move to end of line
 - `Alt-B` / `ESC+b`: Move backward one word
 - `Alt-F` / `ESC+f`: Move forward one word
-- `↑` / `↓`: Navigate command history
+- `↑` / `↓`: Navigate command history (prefix-filtered: only shows entries starting with current text)
 - `Tab`: Trigger completion
 
 ##### Editing
@@ -146,6 +166,9 @@ sum by (<Tab>              # → suggests relevant labels
 - `Ctrl-T`: Transpose characters (swap current with previous)
 - `Alt-D` / `ESC+d`: Delete word forward
 - `Alt-Backspace` / `ESC+Backspace`: Delete word backward
+- `Alt-.` / `ESC+.`: Insert last argument from previous command (useful for repeating metrics)
+- `Alt-Enter` / `ESC+Enter` or `Alt-J` / `ESC+j`: Insert newline for multi-line queries
+- `\` at end of line: Continue command on next line (backslash continuation)
 
 ##### Text transformation
 - `Alt-U` / `ESC+u`: Convert word to uppercase

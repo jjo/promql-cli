@@ -93,11 +93,6 @@ var AdHocCommands = []AdHocCommand{
 		Description: "Exit the REPL",
 		Usage:       ".quit",
 	},
-	{
-		Command:     ".exit",
-		Description: "Exit the REPL",
-		Usage:       ".exit",
-	},
 }
 
 // GetAdHocCommandNames returns just the command names for autocompletion

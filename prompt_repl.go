@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -40,12 +41,60 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 	text := d.TextBeforeCursor()
 	trimmedText := strings.TrimSpace(text)
 	
+	
+	// Reset history navigation if the text has changed from what's in filtered history
+	if historyIndex > 0 && len(filteredHistory) > 0 {
+		currentFullText := d.Text
+		// Check if current text matches any history entry we've navigated to
+		isHistoryEntry := false
+		for i := 0; i < historyIndex && i < len(filteredHistory); i++ {
+			if currentFullText == filteredHistory[i] {
+				isHistoryEntry = true
+				break
+			}
+		}
+		// If user has typed something different, reset history navigation
+		if !isHistoryEntry && currentFullText != historyPrefix {
+			historyIndex = 0
+			historyPrefix = ""
+			filteredHistory = nil
+		}
+	}
+	
 	// Early return for empty suggestions to avoid panic
 	emptySuggestions := []prompt.Suggest{}
 	
-	if text == "" {
-		// At start of line, show both metrics and functions
-		return getMixedSuggests("")
+	// Check if we should be aggressive with completions (old behavior)
+	// Users can set PROMQL_CLI_EAGER_COMPLETION=true to get the old behavior
+	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
+	
+	if !eagerCompletion {
+		// Don't show suggestions at the start of a new line - wait for Tab or typing
+		if text == "" {
+			return emptySuggestions
+		}
+		
+		// Don't show completions immediately after space unless it's an ad-hoc command
+		// or we're continuing to type something
+		if strings.HasSuffix(text, " ") {
+			// Check if we're in an ad-hoc command that expects completions after space
+			isAdHocWithCompletion := false
+			for _, cmd := range []string{".labels ", ".timestamps ", ".drop ", ".seed ", ".at ", ".pinat ", ".scrape ", ".load ", ".save "} {
+				if strings.Contains(text, cmd) {
+					isAdHocWithCompletion = true
+					break
+				}
+			}
+			
+			if !isAdHocWithCompletion {
+				return emptySuggestions
+			}
+		}
+	} else {
+		// Old behavior - show suggestions at start
+		if text == "" {
+			return getMixedSuggests("")
+		}
 	}
 
 	// Use go-prompt's word detection with our custom separators
@@ -128,11 +177,10 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			return emptySuggestions
 		}
 		
-		// No further completions for .help, .metrics, .quit, .exit
-		if trimmedText == ".help" || trimmedText == ".metrics" || 
-		   trimmedText == ".quit" || trimmedText == ".exit" ||
+		// No further completions for .help, .metrics, .quit
+		if trimmedText == ".help" || trimmedText == ".metrics" || trimmedText == ".quit" ||
 		   strings.HasPrefix(trimmedText, ".help ") || strings.HasPrefix(trimmedText, ".metrics ") ||
-		   strings.HasPrefix(trimmedText, ".quit ") || strings.HasPrefix(trimmedText, ".exit ") {
+		   strings.HasPrefix(trimmedText, ".quit ") {
 			return emptySuggestions
 		}
 		
@@ -512,26 +560,94 @@ func getRangeDurationSuggests(prefix string, metricName string) []prompt.Suggest
 	return filtered
 }
 
+// Global variable to store the original terminal state for restoration
+var globalOriginalState string
+
+// Global variable to track the last executed command for Alt+. functionality
+var lastExecutedCommand string
+
+// Global variables for prefix-based history navigation
+var (
+	historyIndex    int    // Current position in filtered history
+	historyPrefix   string // Prefix to filter history by
+	filteredHistory []string // History entries matching the prefix
+)
+
+// Global variables for multi-line editing
+var (
+	multiLineBuffer []string // Accumulates lines for multi-line input
+	inMultiLine     bool     // Whether we're in multi-line mode
+)
+
+
 // promptExecutor handles command execution  
 func promptExecutor(s string) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return
+	// Reset history navigation state when a command is executed
+	historyIndex = 0
+	historyPrefix = ""
+	filteredHistory = nil
+
+	
+	// Handle multi-line input (commands with embedded newlines)
+	if strings.Contains(s, "\n") {
+		// Process multi-line PromQL query
+		// Replace newlines with spaces for PromQL parsing
+		s = strings.ReplaceAll(s, "\n", " ")
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+	} else {
+		s = strings.TrimSpace(s)
+		if s == "" && !inMultiLine {
+			return
+		}
+		
+		// Check for line continuation (backslash at end)
+		if strings.HasSuffix(s, "\\") && !strings.HasSuffix(s, "\\\\") {
+			// Remove the backslash and store the line
+			s = strings.TrimSuffix(s, "\\")
+			multiLineBuffer = append(multiLineBuffer, s)
+			inMultiLine = true
+			// The prompt will show again for the next line
+			return
+		}
+		
+		// If we're in multi-line mode from backslash continuation, combine all lines
+		if inMultiLine {
+			multiLineBuffer = append(multiLineBuffer, s)
+			s = strings.Join(multiLineBuffer, " ")
+			multiLineBuffer = nil
+			inMultiLine = false
+			s = strings.TrimSpace(s)
+			if s == "" {
+				return
+			}
+		}
 	}
 	
-	// Handle quit/exit
-	if s == "quit" || s == "exit" || s == ".quit" {
+	// Handle quit (but not .exit which isn't implemented)
+	if s == "quit" || s == ".quit" {
 		// Save history before exiting
 		saveHistory()
 		fmt.Println("\nExiting...")
+		// Restore terminal state before exiting
+		if globalOriginalState != "" {
+			restoreTerminalState(globalOriginalState)
+		}
 		os.Exit(0)
 	}
 
 	// Add to history
 	if s != "" && !strings.HasPrefix(s, " ") { // Don't save empty or space-prefixed commands
-		replHistory = append(replHistory, s)
-		// Save to file immediately for persistence
-		appendToHistoryFile(s)
+		// Avoid adding consecutive duplicates
+		if len(replHistory) == 0 || replHistory[len(replHistory)-1] != s {
+			replHistory = append(replHistory, s)
+			// Save to file immediately for persistence
+			appendToHistoryFile(s)
+		}
+		// Track for Alt+. functionality
+		lastExecutedCommand = s
 	}
 
 	// Execute the command - executeOne is defined elsewhere and will be called via function pointer
@@ -555,6 +671,7 @@ func (r *promptREPL) Run() error {
 	
 	// Save terminal state before starting
 	originalState := saveTerminalState()
+	globalOriginalState = originalState // Store globally for .quit handler
 	
 	// Set up signal handling to restore terminal on interrupt
 	sigChan := make(chan os.Signal, 1)
@@ -573,20 +690,29 @@ func (r *promptREPL) Run() error {
 		}
 	}()
 
+	// Check if eager completion is enabled
+	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
+	
 	// Create the prompt with proper options
 	opts := []prompt.Option{
 		prompt.OptionPrefix("PromQL> "),
 		prompt.OptionTitle("PromQL CLI"),
-		prompt.OptionHistory(replHistory), // Pass loaded history for up/down navigation
+		// NOTE: We don't pass OptionHistory() as we implement our own prefix-based history navigation
 		prompt.OptionPrefixTextColor(prompt.Blue),
+		// Use a live prefix that updates based on state for multi-line mode
+		prompt.OptionLivePrefix(func() (string, bool) {
+			if inMultiLine {
+				return "      > ", true // Continuation prompt
+			}
+			return "PromQL> ", true
+		}),
 		prompt.OptionPreviewSuggestionTextColor(prompt.DarkGray),
 		prompt.OptionSelectedSuggestionBGColor(prompt.LightGray),
 		prompt.OptionSuggestionBGColor(prompt.DarkGray),
 		prompt.OptionDescriptionBGColor(prompt.DarkGray),
 		prompt.OptionDescriptionTextColor(prompt.White), // Make descriptions more visible
 		prompt.OptionMaxSuggestion(20),
-		prompt.OptionCompletionOnDown(), // Show completion on arrow down
-		prompt.OptionShowCompletionAtStart(),
+		// NOTE: OptionCompletionOnDown() removed to prevent panic when arrow-down is pressed with empty suggestions
 		prompt.OptionCompletionWordSeparator("(){}[]\" \t\n,="), // PromQL-specific word separators
 		// Emacs-style key bindings
 		prompt.OptionAddKeyBind(prompt.KeyBind{
@@ -736,15 +862,11 @@ func (r *promptREPL) Run() error {
 					pos := len(doc.TextBeforeCursor())
 					end := pos
 					
-					// Skip current word
+					// Advance to end of current word but do NOT consume following separators
 					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
 						end++
 					}
-					// Skip separators
-					for end < len(text) && strings.ContainsRune(separators, rune(text[end])) {
-						end++
-					}
-					// Delete
+					// Delete only the word; keep the next separator (e.g., '(', '{', space) intact
 					deleteCount := end - pos
 					if deleteCount > 0 {
 						buf.Delete(deleteCount)
@@ -891,6 +1013,102 @@ func (r *promptREPL) Run() error {
 				},
 			},
 		),
+		// Alt+. (ESC+.): Insert last argument from previous command
+		prompt.OptionAddASCIICodeBind(
+			prompt.ASCIICodeBind{
+				ASCIICode: []byte{0x1b, 0x2e}, // ESC + .
+				Fn: func(buf *prompt.Buffer) {
+					// Extract last argument from previous command
+					if lastExecutedCommand == "" {
+						return
+					}
+					
+					lastArg := extractLastArgument(lastExecutedCommand)
+					if lastArg != "" {
+						buf.InsertText(lastArg, false, true)
+					}
+				},
+			},
+		),
+		// Alt+Enter (ESC+Enter): Insert a literal newline for multi-line editing
+		prompt.OptionAddASCIICodeBind(
+			prompt.ASCIICodeBind{
+				ASCIICode: []byte{0x1b, 0x0d}, // ESC + Enter (CR)
+				Fn: func(buf *prompt.Buffer) {
+					// Insert a newline character
+					buf.InsertText("\n", false, true)
+				},
+			},
+		),
+		// Also try Alt+J (ESC+j) as an alternative for newline
+		prompt.OptionAddASCIICodeBind(
+			prompt.ASCIICodeBind{
+				ASCIICode: []byte{0x1b, 0x6a}, // ESC + j
+				Fn: func(buf *prompt.Buffer) {
+					// Insert a newline character
+					buf.InsertText("\n", false, true)
+				},
+			},
+		),
+		// Custom Up arrow: Navigate backward through prefix-filtered history
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.Up,
+			Fn: func(buf *prompt.Buffer) {
+				currentText := buf.Text()
+				
+				// If we're starting fresh history navigation, set up the prefix filter
+				if historyIndex == 0 {
+					historyPrefix = currentText // Keep the exact text, not trimmed
+					// Build filtered history based on prefix
+					filteredHistory = []string{}
+					seen := make(map[string]bool) // Track seen entries to avoid duplicates
+					for i := len(replHistory) - 1; i >= 0; i-- {
+						entry := replHistory[i]
+						// Skip if we've seen this exact entry already
+						if seen[entry] {
+							continue
+						}
+						// Check prefix match
+						if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
+							filteredHistory = append(filteredHistory, entry)
+							seen[entry] = true
+						}
+					}
+				}
+				
+				if len(filteredHistory) > 0 && historyIndex < len(filteredHistory) {
+					// Clear current line and insert history entry
+					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+					buf.InsertText(filteredHistory[historyIndex], false, true)
+					historyIndex++
+				}
+			},
+		}),
+		// Custom Down arrow: Navigate forward through prefix-filtered history
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.Down,
+			Fn: func(buf *prompt.Buffer) {
+				if historyIndex > 1 {
+					historyIndex--
+					// Clear current line and insert history entry
+					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+					buf.InsertText(filteredHistory[historyIndex-1], false, true)
+				} else if historyIndex == 1 {
+					// Return to the original prefix that was typed
+					historyIndex = 0
+					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+					buf.InsertText(historyPrefix, false, true)
+				}
+			},
+		}),
+	}
+	
+	// Add option to show completions at start only if eager completion is enabled
+	if eagerCompletion {
+		opts = append(opts, prompt.OptionShowCompletionAtStart())
 	}
 
 	// Initialize metrics for completion
@@ -1164,11 +1382,25 @@ func getLabelValueSuggests(prefix string, metricName string, labelName string) [
 		}
 	}
 	
+	// Check if prefix already has quotes
+	prefixHasOpenQuote := strings.HasPrefix(prefix, "\"")
+	prefixToMatch := prefix
+	if prefixHasOpenQuote {
+		// Remove the opening quote for matching
+		prefixToMatch = strings.TrimPrefix(prefix, "\"")
+	}
+	
 	var suggestions []prompt.Suggest
 	for labelValue := range labelValues {
-		if prefix == "" || strings.HasPrefix(labelValue, prefix) {
+		if prefixToMatch == "" || strings.HasPrefix(labelValue, prefixToMatch) {
+			// Add quotes around the value
+			quotedValue := "\"" + labelValue + "\""
+			if prefixHasOpenQuote {
+				// If we already have an opening quote, don't add another
+				quotedValue = labelValue + "\""
+			}
 			suggestions = append(suggestions, prompt.Suggest{
-				Text:        labelValue,
+				Text:        quotedValue,
 				Description: "value",
 			})
 		}
@@ -1215,14 +1447,17 @@ func getHistoryPath() string {
 		return histPath
 	}
 	
-	// Try to use home directory
-	home, err := os.UserHomeDir()
-	if err == nil {
+	// Prefer the user's home directory
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, ".promql-cli_history")
 	}
-	
-	// Fallback to /tmp
-	return "/tmp/.promql-cli_history"
+	// As a safer fallback than /tmp, use current working directory
+	cwd, err := os.Getwd()
+	if err == nil && cwd != "" {
+		return filepath.Join(cwd, ".promql-cli_history")
+	}
+	// Last resort: relative path in current process dir
+	return ".promql-cli_history"
 }
 
 // loadHistory loads command history from file
@@ -1309,4 +1544,70 @@ func isPromQLFunction(s string) bool {
 	// Use the parser's function list
 	_, exists := parser.Functions[s]
 	return exists
+}
+
+// extractLastArgument extracts the last meaningful argument from a command
+// For PromQL queries, this typically means the last metric name or significant value
+func extractLastArgument(cmd string) string {
+	if cmd == "" {
+		return ""
+	}
+	
+	// Handle ad-hoc commands first
+	if strings.HasPrefix(cmd, ".") {
+		parts := strings.Fields(cmd)
+		if len(parts) > 1 {
+			// Return the last argument of an ad-hoc command
+			return parts[len(parts)-1]
+		}
+		return ""
+	}
+	
+	// For PromQL expressions, we need to find the last meaningful token
+	// This is typically a metric name, label value, or duration
+	separators := "(){}[]\" \t\n,="
+	tokens := []string{}
+	currentToken := ""
+	
+	for _, ch := range cmd {
+		if strings.ContainsRune(separators, ch) {
+			if currentToken != "" {
+				tokens = append(tokens, currentToken)
+				currentToken = ""
+			}
+		} else {
+			currentToken += string(ch)
+		}
+	}
+	if currentToken != "" {
+		tokens = append(tokens, currentToken)
+	}
+	
+	// Find the last meaningful token (skip operators and keywords)
+	operators := map[string]bool{
+		"and": true, "or": true, "unless": true,
+		"by": true, "without": true, "on": true, "ignoring": true,
+		"group_left": true, "group_right": true,
+		"offset": true, "bool": true,
+	}
+	
+	for i := len(tokens) - 1; i >= 0; i-- {
+		token := tokens[i]
+		// Skip operators and common keywords
+		if operators[strings.ToLower(token)] {
+			continue
+		}
+		// Skip pure numbers (likely to be constants, not metrics)
+		if _, err := strconv.ParseFloat(token, 64); err == nil {
+			continue
+		}
+		// Skip time durations ending with time units
+		if regexp.MustCompile(`^\d+[smhdwy]$`).MatchString(token) {
+			continue
+		}
+		// This looks like a metric name or label value - return it
+		return token
+	}
+	
+	return ""
 }

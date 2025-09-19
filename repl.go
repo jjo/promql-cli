@@ -162,7 +162,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 			continue
 		}
 
-		if query == "quit" || query == "exit" {
+		if query == "quit" || query == ".quit" {
 			break
 		}
 
@@ -302,6 +302,25 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 							}
 						}
 					case "label_value":
+						// Check if we already have an opening quote
+						hasOpenQuote := false
+						// Look back from cursor to find the operator
+						for i := cursorPos - 1; i >= 0; i-- {
+							if lineStr[i] == '"' {
+								hasOpenQuote = true
+								break
+							}
+							if lineStr[i] == '=' || lineStr[i] == '~' {
+								break
+							}
+						}
+						
+						// If no opening quote, add it at the beginning
+						if !hasOpenQuote {
+							suf = append([]rune{'"'}, suf...)
+						}
+						
+						// Add closing quote if option is enabled
 						if pac.opts.AutoCloseQuote {
 							suf = append(suf, '"')
 						}
@@ -1020,7 +1039,7 @@ func (pac *PrometheusAutoCompleter) getMixedCompletions(prefix string) []string 
 	completions = append(completions, pac.getOperatorCompletions(prefix)...)
 
 	// Add common keywords
-	keywords := []string{"quit", "exit", "offset 5m"}
+	keywords := []string{"quit", "offset 5m"}
 	for _, keyword := range keywords {
 		if strings.HasPrefix(strings.ToLower(keyword), strings.ToLower(prefix)) {
 			completions = append(completions, keyword)
@@ -1059,7 +1078,7 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, s
 			continue
 		}
 
-		if query == "quit" || query == "exit" {
+		if query == "quit" {
 			break
 		}
 
@@ -1168,14 +1187,17 @@ func getHistoryFilePath() string {
 		return histPath
 	}
 	
-	// Try to use home directory
-	home, err := os.UserHomeDir()
-	if err == nil {
+	// Prefer the user's home directory
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, ".promql-cli_history")
 	}
-	
-	// Fallback to /tmp
-	return "/tmp/.promql-cli_history"
+	// As a safer fallback than /tmp, use current working directory
+	cwd, err := os.Getwd()
+	if err == nil && cwd != "" {
+		return filepath.Join(cwd, ".promql-cli_history")
+	}
+	// Last resort: relative path in current process dir
+	return ".promql-cli_history"
 }
 
 // runInitCommands executes semicolon-separated commands before interactive session or one-off query.

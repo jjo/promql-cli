@@ -10,10 +10,10 @@ import (
 )
 
 // runInteractiveQueriesDispatch determines which REPL backend to use
-func runInteractiveQueriesDispatch(engine *promql.Engine, storage *SimpleStorage, silent bool) {
-	// Check if user wants to use go-prompt
-	if os.Getenv("REPL_BACKEND") == "prompt" {
-		fmt.Println("Error: go-prompt backend requested but not compiled in.")
+func runInteractiveQueriesDispatch(engine *promql.Engine, storage *SimpleStorage, silent bool, replBackend string) {
+	// This build does not include go-prompt. If prompt was requested, error out.
+	if replBackend == "prompt" || replBackend == "" {
+		fmt.Println("Error: --repl=prompt requested but not compiled in.")
 		fmt.Println("To use go-prompt, build with: go build -tags prompt")
 		os.Exit(1)
 	}

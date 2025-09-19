@@ -40,12 +40,13 @@ func main() {
 		fmt.Println("  Version:      go run main.go version")
 		fmt.Println("")
 		fmt.Println("Common flags:")
-		fmt.Println("  -s, --silent           Suppress startup output (banners, summaries)")
+		fmt.Println("  -s, --silent                 Suppress startup output (banners, summaries)")
+		fmt.Println("      --repl {prompt|readline} Select REPL backend (default: prompt)")
 		fmt.Println("")
 		fmt.Println("Flags (query mode):")
-		fmt.Println("  -q, --query \"<expr>\"   Execute a single PromQL expression and exit (no REPL)")
-		fmt.Println("  -o, --output json       When used with -q, output JSON (default is text)")
-		fmt.Println("  -c, --command \"cmds\"  Run semicolon-separated commands before the session (e.g., \".scrape URL; .metrics\")")
+		fmt.Println("  -q, --query \"<expr>\"       Execute a single PromQL expression and exit (no REPL)")
+		fmt.Println("  -o, --output json             When used with -q, output JSON (default is text)")
+		fmt.Println("  -c, --command \"cmds\"        Run semicolon-separated commands before the session (e.g., \".scrape URL; .metrics\")")
 		fmt.Println("")
 		fmt.Println("Features:")
 		fmt.Println("  - Dynamic auto-completion for metric names, labels, and values")
@@ -79,6 +80,24 @@ func main() {
 		},
 	})
 
+
+	// Global: parse --repl from anywhere in args (default: prompt)
+	replBackend := "prompt"
+	for i := 1; i < len(os.Args); i++ {
+		a := os.Args[i]
+		if a == "--repl" {
+			if i+1 >= len(os.Args) {
+				log.Fatal("--repl requires an argument: prompt or readline")
+			}
+			replBackend = strings.ToLower(os.Args[i+1])
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "--repl=") {
+			replBackend = strings.ToLower(strings.TrimPrefix(a, "--repl="))
+		}
+	}
+
 	switch os.Args[1] {
 	case "load":
 		// Flags: -s/--silent
@@ -91,6 +110,16 @@ func main() {
 			a := args[i]
 			if a == "-s" || a == "--silent" {
 				silent = true
+				continue
+			}
+			if a == "--repl" {
+				i++
+				if i >= len(args) { log.Fatal("--repl requires an argument") }
+				// already parsed globally; accept and continue
+				continue
+			}
+			if strings.HasPrefix(a, "--repl=") {
+				// already parsed globally; accept and continue
 				continue
 			}
 			if strings.HasPrefix(a, "-") {
@@ -181,6 +210,16 @@ func main() {
 				silent = true
 				continue
 			}
+			if a == "--repl" {
+				i++
+				if i >= len(args) { log.Fatal("--repl requires an argument") }
+				// already parsed globally; accept and continue
+				continue
+			}
+			if strings.HasPrefix(a, "--repl=") {
+				// already parsed globally; accept and continue
+				continue
+			}
 			if strings.HasPrefix(a, "-") {
 				log.Fatalf("Unknown flag: %s", a)
 			}
@@ -231,7 +270,7 @@ func main() {
 		}
 
 		// Interactive REPL
-		runInteractiveQueriesDispatch(engine, storage, silent)
+			runInteractiveQueriesDispatch(engine, storage, silent, replBackend)
 
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])

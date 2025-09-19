@@ -4,24 +4,24 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/prometheus/prometheus/promql"
 )
 
 // runInteractiveQueriesDispatch determines which REPL backend to use
-func runInteractiveQueriesDispatch(engine *promql.Engine, storage *SimpleStorage, silent bool) {
-	// Check if user wants to use go-prompt
-	if os.Getenv("REPL_BACKEND") == "prompt" {
+func runInteractiveQueriesDispatch(engine *promql.Engine, storage *SimpleStorage, silent bool, replBackend string) {
+	if replBackend == "readline" {
 		if !silent {
-			fmt.Println("Using go-prompt backend. Set REPL_BACKEND=readline to use default.")
+			fmt.Println("Using readline backend (--repl=readline)")
 		}
-		runPromptREPL(engine, storage, silent)
+		runInteractiveQueries(engine, storage, silent)
 		return
 	}
-
-	// Default to readline
-	runInteractiveQueries(engine, storage, silent)
+	// Default to go-prompt
+	if !silent {
+		fmt.Println("Using go-prompt backend (default)")
+	}
+	runPromptREPL(engine, storage, silent)
 }
 
 // runPromptREPL runs the go-prompt based REPL
