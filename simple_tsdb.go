@@ -20,7 +20,8 @@ import (
 
 // SimpleStorage holds metrics in a simple format for querying
 type SimpleStorage struct {
-	metrics map[string][]MetricSample
+	metrics     map[string][]MetricSample
+	metricsHelp map[string]string // metric name -> help text
 }
 
 // MetricSample represents a single metric sample
@@ -33,7 +34,8 @@ type MetricSample struct {
 // NewSimpleStorage creates a new simple storage
 func NewSimpleStorage() *SimpleStorage {
 	return &SimpleStorage{
-		metrics: make(map[string][]MetricSample),
+		metrics:     make(map[string][]MetricSample),
+		metricsHelp: make(map[string]string),
 	}
 }
 
@@ -78,6 +80,14 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 	// Convert each metric family to individual samples
 	for _, mf := range metricFamilies {
 		metricName := mf.GetName()
+		
+		// Store help text if available
+		if mf.Help != nil && *mf.Help != "" {
+			// Clean up help text - replace newlines with spaces for better display
+			helpText := strings.ReplaceAll(*mf.Help, "\n", " ")
+			helpText = strings.TrimSpace(helpText)
+			s.metricsHelp[metricName] = helpText
+		}
 
 		// Process each metric within the family
 		for _, metric := range mf.GetMetric() {

@@ -36,7 +36,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 	// Configure readline
 	// History prefix-search on Up/Down is implemented via a custom Listener that
 	// replaces the default Prev/Next history behavior when a non-empty prefix is present.
-	const historyPath = "/tmp/.promql-cli_history"
+	historyPath := getHistoryFilePath()
 	userHistory := loadHistoryFromFile(historyPath)
 
 	// State for prefix-based history navigation
@@ -162,7 +162,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 			continue
 		}
 
-		if query == "quit" || query == "exit" {
+		if query == "quit" || query == ".quit" {
 			break
 		}
 
@@ -302,6 +302,25 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 							}
 						}
 					case "label_value":
+						// Check if we already have an opening quote
+						hasOpenQuote := false
+						// Look back from cursor to find the operator
+						for i := cursorPos - 1; i >= 0; i-- {
+							if lineStr[i] == '"' {
+								hasOpenQuote = true
+								break
+							}
+							if lineStr[i] == '=' || lineStr[i] == '~' {
+								break
+							}
+						}
+						
+						// If no opening quote, add it at the beginning
+						if !hasOpenQuote {
+							suf = append([]rune{'"'}, suf...)
+						}
+						
+						// Add closing quote if option is enabled
 						if pac.opts.AutoCloseQuote {
 							suf = append(suf, '"')
 						}
@@ -368,10 +387,10 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	lastCloseBrace := strings.LastIndex(beforeCursor, "}")
 	inLabels := lastOpenBrace > lastCloseBrace && lastOpenBrace != -1
 
-		if !inLabels && strings.HasPrefix(trimmed, ".") {
+	if !inLabels && strings.HasPrefix(trimmed, ".") {
 			// If typing the command token, suggest available ad-hoc commands
 			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save", ".seed", ".scrape", ".drop", ".at", ".pinat"}
+				cmds := GetAdHocCommandNames()
 				var out []string
 				for _, c := range cmds {
 					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
@@ -380,9 +399,14 @@ cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save"
 				}
 				return out
 			}
-			// If after ".labels " or ".seed ", complete metric names
-			if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") {
+			// If after ".labels ", ".seed ", ".drop ", or ".timestamps ", complete metric names
+			if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") ||
+			   strings.HasPrefix(trimmed, ".drop ") || strings.HasPrefix(trimmed, ".timestamps ") {
 				return pac.getMetricNameCompletions(currentWord)
+			}
+			// No further completions for .help and .metrics
+			if trimmed == ".help" || trimmed == ".metrics" || strings.HasPrefix(trimmed, ".help ") || strings.HasPrefix(trimmed, ".metrics ") {
+				return []string{}
 			}
 			// If after ".load " or ".save ", complete filesystem paths (current word = base name)
 			if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") {
@@ -395,6 +419,32 @@ cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save"
 				}
 				return pac.getFilePathCompletions(pathSoFar, currentWord)
 			}
+			// If after ".scrape ", offer URL examples
+			if strings.HasPrefix(trimmed, ".scrape ") {
+				after := trimmed[len(".scrape "):]
+				// Only offer suggestions if no space yet (still typing URL)
+				if !strings.Contains(after, " ") {
+					urlExamples := []string{
+						"http://localhost:9090/metrics",
+						"http://localhost:9100/metrics",
+						"http://localhost:8080/metrics",
+						"http://localhost:3000/metrics",
+						"http://localhost:9093/metrics",
+						"http://localhost:9091/metrics",
+						"http://localhost:2112/metrics",
+						"http://localhost:9115/metrics",
+					}
+					var out []string
+					for _, url := range urlExamples {
+						// Show all URLs when currentWord is empty or filter if typing
+						if currentWord == "" || strings.HasPrefix(url, currentWord) {
+							out = append(out, url)
+						}
+					}
+					return out
+				}
+				return []string{}
+			}
 			// If after ".pinat ", offer time presets similar to .at
 			if strings.HasPrefix(trimmed, ".pinat ") {
 				cmdIdx := strings.LastIndex(line[:pos], ".pinat ")
@@ -402,10 +452,17 @@ cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save"
 					after := line[cmdIdx+7 : pos]
 					// If still typing time token (no space yet), suggest presets
 					if sp := strings.IndexAny(after, " \t"); sp == -1 {
-						presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
+						presets := []string{
+							"now", "now-5m", "now-15m", "now-30m", "now-1h", "now-2h",
+							"now-6h", "now-12h", "now-24h", "now-7d",
+							"now+5m", "now+1h",
+							"remove", // For .pinat
+							time.Now().UTC().Format(time.RFC3339),
+						}
 						var out []string
 						for _, p := range presets {
-							if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+							// Show all presets when currentWord is empty or filter if typing
+							if currentWord == "" || strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
 								out = append(out, p)
 							}
 						}
@@ -427,10 +484,16 @@ cmds := []string{".help", ".labels", ".metrics", ".timestamps", ".load", ".save"
 								return []string{" "}
 							}
 						}
-						presets := []string{"now", "now-5m", "now-1h", time.Now().UTC().Format(time.RFC3339)}
+						presets := []string{
+							"now", "now-5m", "now-15m", "now-30m", "now-1h", "now-2h",
+							"now-6h", "now-12h", "now-24h", "now-7d",
+							"now+5m", "now+1h",
+							time.Now().UTC().Format(time.RFC3339),
+						}
 						var out []string
 						for _, p := range presets {
-							if strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+							// Show all presets when currentWord is empty or filter if typing
+							if currentWord == "" || strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
 								out = append(out, p)
 							}
 						}
@@ -976,7 +1039,7 @@ func (pac *PrometheusAutoCompleter) getMixedCompletions(prefix string) []string 
 	completions = append(completions, pac.getOperatorCompletions(prefix)...)
 
 	// Add common keywords
-	keywords := []string{"quit", "exit", "offset 5m"}
+	keywords := []string{"quit", "offset 5m"}
 	for _, keyword := range keywords {
 		if strings.HasPrefix(strings.ToLower(keyword), strings.ToLower(prefix)) {
 			completions = append(completions, keyword)
@@ -1015,7 +1078,7 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, s
 			continue
 		}
 
-		if query == "quit" || query == "exit" {
+		if query == "quit" {
 			break
 		}
 
@@ -1115,6 +1178,26 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 	}
 
 	printUpstreamQueryResult(result)
+}
+
+// getHistoryFilePath returns the path to the history file for readline
+func getHistoryFilePath() string {
+	// First check if PROMQL_CLI_HISTORY env var is set
+	if histPath := os.Getenv("PROMQL_CLI_HISTORY"); histPath != "" {
+		return histPath
+	}
+	
+	// Prefer the user's home directory
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".promql-cli_history")
+	}
+	// As a safer fallback than /tmp, use current working directory
+	cwd, err := os.Getwd()
+	if err == nil && cwd != "" {
+		return filepath.Join(cwd, ".promql-cli_history")
+	}
+	// Last resort: relative path in current process dir
+	return ".promql-cli_history"
 }
 
 // runInitCommands executes semicolon-separated commands before interactive session or one-off query.

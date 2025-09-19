@@ -10,6 +10,27 @@ A lightweight PromQL playground and REPL. Load Prometheus text-format metrics, q
   - Docker Hub: `docker pull xjjo/promql-cli:latest`
   - GHCR: `docker pull ghcr.io/jjo/promql-cli:latest`
 
+### Building from source
+
+The project supports two REPL backends with different feature sets:
+
+```shell
+# Default build (includes go-prompt with rich autocompletion):
+make build
+
+# Minimal build (uses liner, smaller binary):
+make build-no-prompt
+# or
+BUILD_TAGS="" make build
+
+# See all build options:
+make help
+```
+
+#### Build tags
+- `prompt`: Enables go-prompt backend with advanced autocompletion (default)
+- No tags: Uses liner backend for a minimal REPL
+
 ## Quick start
 
 ```shell
@@ -38,6 +59,7 @@ docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query [...]
 - `-c, --command "cmds"` — run semicolon-separated commands before the session or one-off query
   - Example: `-c ".scrape http://localhost:9100/metrics; .metrics"`
 - `-s, --silent` — suppress startup output and `-c` command output
+- `--repl {prompt|readline}` — select REPL backend (default: `prompt`)
 
 ## Ad-hoc commands (in the REPL)
 
@@ -80,7 +102,84 @@ docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query [...]
 
 ## Notes
 - Input files must be in Prometheus text exposition format.
-- The REPL supports tab-completion and keeps history in `/tmp/.promql-cli_history`.
+- The REPL supports tab-completion and keeps history in `~/.promql-cli_history`. Set `PROMQL_CLI_HISTORY` to override.
+- History navigation is prefix-aware: typing `rate` and pressing `↑` only shows history entries starting with `rate`.
+
+### Autocompletion features
+
+The default go-prompt backend provides rich PromQL-aware autocompletion:
+
+#### Features
+- **PromQL functions**: Complete function names with signatures (e.g., `rate(`, `histogram_quantile(`)
+- **Metric names**: Tab-complete metric names with help text descriptions
+- **Label completions**: After typing a metric name and `{`, get label name suggestions
+- **Label value completions**: After typing `label="`, get actual label values from the loaded data
+- **Range vectors**: Complete duration suffixes (`[5m]`, `[1h]`, etc.)
+- **Aggregations**: Context-aware suggestions for `by (...)` and `without (...)` clauses
+- **Ad-hoc commands**: Complete `.` commands with descriptions
+- **Dynamic updates**: Metrics cache refreshes automatically after `.load` or `.scrape` commands
+
+#### Examples
+```promql
+# Start typing and press Tab:
+http_req<Tab>              # → http_requests_total
+rate(http<Tab>             # → rate(http_requests_total
+http_requests_total{<Tab>  # → shows available labels
+http_requests_total{code="<Tab>  # → shows actual code values
+sum by (<Tab>              # → suggests relevant labels
+.<Tab>                     # → shows all ad-hoc commands
+
+# Multi-line queries (Alt+Enter or backslash):
+sum by (job) (           # Type Alt+Enter here
+  rate(                  # Type Alt+Enter here
+    http_requests[5m]   # Press Enter to execute
+  )
+)
+
+# Or with backslash continuation:
+sum by (job) ( \
+  rate(http_requests[5m]) \
+)
+```
+
+#### Configuration
+
+The completion behavior can be configured via environment variables:
+
+- `PROMQL_CLI_EAGER_COMPLETION=true`: Show completions immediately (invasive mode). Default is `false` - completions only appear when you press Tab or start typing.
+
+#### Key bindings
+
+##### Navigation
+- `Ctrl-A`: Move to beginning of line
+- `Ctrl-E`: Move to end of line
+- `Alt-B` / `ESC+b`: Move backward one word
+- `Alt-F` / `ESC+f`: Move forward one word
+- `↑` / `↓`: Navigate command history (prefix-filtered: only shows entries starting with current text)
+- `Tab`: Trigger completion
+
+##### Editing
+- `Ctrl-D`: Delete character under cursor (or exit if line is empty)
+- `Ctrl-K`: Delete from cursor to end of line
+- `Ctrl-U`: Delete from cursor to beginning of line
+- `Ctrl-W`: Delete word before cursor
+- `Ctrl-T`: Transpose characters (swap current with previous)
+- `Alt-D` / `ESC+d`: Delete word forward
+- `Alt-Backspace` / `ESC+Backspace`: Delete word backward
+- `Alt-.` / `ESC+.`: Insert last argument from previous command (useful for repeating metrics)
+- `Alt-Enter` / `ESC+Enter` or `Alt-J` / `ESC+j`: Insert newline for multi-line queries
+- `\` at end of line: Continue command on next line (backslash continuation)
+
+##### Text transformation
+- `Alt-U` / `ESC+u`: Convert word to uppercase
+- `Alt-L` / `ESC+l`: Convert word to lowercase  
+- `Alt-C` / `ESC+c`: Capitalize word
+
+##### Control
+- `Ctrl-C`: Clear current line (or exit if line is empty)
+- `Ctrl-L`: Clear screen
+- `Ctrl-D`: Exit REPL (on empty line)
+- `Enter`: Execute command
 
 ## Use cases
 
