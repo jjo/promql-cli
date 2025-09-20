@@ -33,7 +33,7 @@ func init() {
 // main is the entry point of the application.
 // It provides a command-line interface for loading metrics and executing PromQL queries.
 func main() {
-	if len(os.Args) < 2 {
+	usage := func() {
 		fmt.Println("Usage:")
 		fmt.Println("  Load metrics: go run main.go load <file.prom>")
 		fmt.Println("  Query:        go run main.go query [flags] <file.prom>")
@@ -55,13 +55,45 @@ func main() {
 		fmt.Println("  - Tab completion similar to Prometheus UI")
 		fmt.Println("  - Ad-hoc commands: .help, .labels, .metrics, .seed, .at")
 		fmt.Println("Tip: use -c to run startup commands before the session, e.g. -c \".scrape http://localhost:9100/metrics; .metrics\"")
+	}
+
+	if len(os.Args) < 2 {
+		usage()
 		os.Exit(1)
 	}
 
-	// Fast-path for version banner
-	if os.Args[1] == "version" {
-		printVersion()
-		return
+	// Global: parse --repl anywhere and locate the first subcommand token
+	replBackend := "prompt"
+	subcmd := ""
+	subIdx := -1
+	for i := 1; i < len(os.Args); i++ {
+		a := os.Args[i]
+		if a == "--repl" {
+			if i+1 >= len(os.Args) { log.Fatal("--repl requires an argument: prompt or readline") }
+			replBackend = strings.ToLower(os.Args[i+1])
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "--repl=") {
+			replBackend = strings.ToLower(strings.TrimPrefix(a, "--repl="))
+			continue
+		}
+		// Identify subcommand (first non-flag token matching known commands)
+		if !strings.HasPrefix(a, "-") && (a == "load" || a == "query" || a == "version") {
+			subcmd = a
+			subIdx = i
+			break
+		}
+	}
+
+	if subcmd == "" {
+		// Allow `promql-cli version` fast-path if first arg is version
+		if len(os.Args) >= 2 && os.Args[1] == "version" {
+			printVersion()
+			return
+		}
+		usage()
+		os.Exit(1)
 	}
 
 	storage := NewSimpleStorage()
@@ -80,28 +112,10 @@ func main() {
 		},
 	})
 
-
-	// Global: parse --repl from anywhere in args (default: prompt)
-	replBackend := "prompt"
-	for i := 1; i < len(os.Args); i++ {
-		a := os.Args[i]
-		if a == "--repl" {
-			if i+1 >= len(os.Args) {
-				log.Fatal("--repl requires an argument: prompt or readline")
-			}
-			replBackend = strings.ToLower(os.Args[i+1])
-			i++
-			continue
-		}
-		if strings.HasPrefix(a, "--repl=") {
-			replBackend = strings.ToLower(strings.TrimPrefix(a, "--repl="))
-		}
-	}
-
-	switch os.Args[1] {
+	switch subcmd {
 	case "load":
 		// Flags: -s/--silent
-		args := os.Args[2:]
+		args := os.Args[subIdx+1:]
 		var (
 			metricsFile string
 			silent      bool
@@ -115,11 +129,9 @@ func main() {
 			if a == "--repl" {
 				i++
 				if i >= len(args) { log.Fatal("--repl requires an argument") }
-				// already parsed globally; accept and continue
 				continue
 			}
 			if strings.HasPrefix(a, "--repl=") {
-				// already parsed globally; accept and continue
 				continue
 			}
 			if strings.HasPrefix(a, "-") {
@@ -146,7 +158,7 @@ func main() {
 
 	case "query":
 		// Parse flags: -q/--query, -o/--output, and metrics file path
-		args := os.Args[2:]
+		args := os.Args[subIdx+1:]
 		var (
 			metricsFile  string
 			oneOffQuery  string
@@ -158,77 +170,39 @@ func main() {
 			a := args[i]
 			if a == "-q" || a == "--query" {
 				i++
-				if i >= len(args) {
-					log.Fatal("--query requires an argument")
-				}
+				if i >= len(args) { log.Fatal("--query requires an argument") }
 				oneOffQuery = args[i]
 				continue
 			}
-			if strings.HasPrefix(a, "--query=") {
-				oneOffQuery = strings.TrimPrefix(a, "--query=")
-				continue
-			}
+			if strings.HasPrefix(a, "--query=") { oneOffQuery = strings.TrimPrefix(a, "--query="); continue }
 			if a == "-o" || a == "--output" {
 				i++
-				if i >= len(args) {
-					log.Fatal("--output requires an argument (e.g., json)")
-				}
-				if strings.EqualFold(args[i], "json") {
-					outputJSON = true
-				}
+				if i >= len(args) { log.Fatal("--output requires an argument (e.g., json)") }
+				if strings.EqualFold(args[i], "json") { outputJSON = true }
 				continue
 			}
 			if strings.HasPrefix(a, "--output=") {
 				val := strings.TrimPrefix(a, "--output=")
-				if strings.EqualFold(val, "json") {
-					outputJSON = true
-				}
+				if strings.EqualFold(val, "json") { outputJSON = true }
 				continue
 			}
 			if a == "-c" || a == "--command" {
 				i++
-				if i >= len(args) {
-					log.Fatal("--command requires an argument")
-				}
-				if initCommands == "" {
-					initCommands = args[i]
-				} else {
-					initCommands = initCommands + "; " + args[i]
-				}
+				if i >= len(args) { log.Fatal("--command requires an argument") }
+				if initCommands == "" { initCommands = args[i] } else { initCommands = initCommands + "; " + args[i] }
 				continue
 			}
 			if strings.HasPrefix(a, "--command=") {
 				val := strings.TrimPrefix(a, "--command=")
-				if initCommands == "" {
-					initCommands = val
-				} else {
-					initCommands = initCommands + "; " + val
-				}
+				if initCommands == "" { initCommands = val } else { initCommands = initCommands + "; " + val }
 				continue
 			}
-			if a == "-s" || a == "--silent" {
-				silent = true
-				continue
-			}
-			if a == "--repl" {
-				i++
-				if i >= len(args) { log.Fatal("--repl requires an argument") }
-				// already parsed globally; accept and continue
-				continue
-			}
-			if strings.HasPrefix(a, "--repl=") {
-				// already parsed globally; accept and continue
-				continue
-			}
-			if strings.HasPrefix(a, "-") {
-				log.Fatalf("Unknown flag: %s", a)
-			}
+			if a == "-s" || a == "--silent" { silent = true; continue }
+			if a == "--repl" { i++; if i >= len(args) { log.Fatal("--repl requires an argument") }; continue }
+			if strings.HasPrefix(a, "--repl=") { continue }
+			if strings.HasPrefix(a, "-") { log.Fatalf("Unknown flag: %s", a) }
 			// positional -> metrics file
-			if metricsFile == "" {
-				metricsFile = a
-			} else {
-				log.Fatalf("Unexpected extra argument: %s", a)
-			}
+			if metricsFile == "" { metricsFile = a } else { log.Fatalf("Unexpected extra argument: %s", a) }
 		}
 		if metricsFile != "" {
 			if err := loadMetricsFromFile(storage, metricsFile); err != nil {
@@ -242,38 +216,28 @@ func main() {
 		}
 
 		// Run initialization commands if provided (before one-off or REPL)
-		if initCommands != "" {
-			runInitCommands(engine, storage, initCommands, silent)
-		}
+		if initCommands != "" { runInitCommands(engine, storage, initCommands, silent) }
 
 		if oneOffQuery != "" {
-			// Execute a single expression and exit
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			q, err := engine.NewInstantQuery(ctx, storage, nil, oneOffQuery, time.Now())
-			if err != nil {
-				cancel()
-				log.Fatalf("Error creating query: %v", err)
-			}
+			if err != nil { cancel(); log.Fatalf("Error creating query: %v", err) }
 			res := q.Exec(ctx)
 			cancel()
-			if res.Err != nil {
-				log.Fatalf("Error: %v", res.Err)
-			}
-			if outputJSON {
-				if err := printResultJSON(res); err != nil {
-					log.Fatalf("Failed to render JSON: %v", err)
-				}
-			} else {
-				printUpstreamQueryResult(res)
-			}
+			if res.Err != nil { log.Fatalf("Error: %v", res.Err) }
+			if outputJSON { if err := printResultJSON(res); err != nil { log.Fatalf("Failed to render JSON: %v", err) } } else { printUpstreamQueryResult(res) }
 			return
 		}
 
 		// Interactive REPL
-			runInteractiveQueriesDispatch(engine, storage, silent, replBackend)
+		runInteractiveQueriesDispatch(engine, storage, silent, replBackend)
+
+	case "version":
+		printVersion()
+		return
 
 	default:
-		fmt.Printf("Unknown command: %s\n", os.Args[1])
+		usage()
 		os.Exit(1)
 	}
 }
