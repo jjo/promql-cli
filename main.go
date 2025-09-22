@@ -59,22 +59,15 @@ func normalizeLongOpts(args []string) []string {
 // main is the entry point of the application.
 // It provides a command-line interface for loading metrics and executing PromQL queries.
 func main() {
-	// Root (global) flags
-	rootFlags := flag.NewFlagSet("promql-cli", flag.ContinueOnError)
-	replBackend := rootFlags.String("repl", "prompt", "REPL backend: prompt|readline")
-	silent := rootFlags.Bool("silent", false, "suppress startup output")
-	rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
-	// AI flags (override envs)
-	aiProvider := rootFlags.String("ai-provider", "", "AI provider: ollama|openai|claude|grok (env PROMQL_CLI_AI_PROVIDER)")
-	aiNum := rootFlags.Int("ai-num", 3, "number of AI answers to request (env PROMQL_CLI_AI_NUM)")
-	aiOpenAIModel := rootFlags.String("ai-openai-model", "", "OpenAI model (env PROMQL_CLI_OPENAI_MODEL)")
-	aiOpenAIBase := rootFlags.String("ai-openai-base", "", "OpenAI API base URL (env PROMQL_CLI_OPENAI_BASE)")
-	aiClaudeModel := rootFlags.String("ai-claude-model", "", "Claude model (env PROMQL_CLI_ANTHROPIC_MODEL)")
-	aiClaudeBase := rootFlags.String("ai-claude-base", "", "Claude API base URL (env PROMQL_CLI_ANTHROPIC_BASE)")
-	aiXAIModel := rootFlags.String("ai-xai-model", "", "Grok (xAI) model (env PROMQL_CLI_XAI_MODEL)")
-	aiXAIBase := rootFlags.String("ai-xai-base", "", "Grok (xAI) API base URL (env PROMQL_CLI_XAI_BASE)")
-	aiOllamaModel := rootFlags.String("ai-ollama-model", "", "Ollama model (env PROMQL_CLI_OLLAMA_MODEL)")
-	aiOllamaHost := rootFlags.String("ai-ollama-host", "", "Ollama host (env PROMQL_CLI_OLLAMA_HOST)")
+// Root (global) flags
+rootFlags := flag.NewFlagSet("promql-cli", flag.ContinueOnError)
+replBackend := rootFlags.String("repl", "prompt", "REPL backend: prompt|readline")
+silent := rootFlags.Bool("silent", false, "suppress startup output")
+rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
+
+// Composite AI flag (preferred)
+var aikv aiKV
+rootFlags.Var(&aikv, "ai", "AI options as key=value pairs (comma/space separated). Example: --ai 'provider=claude model=opus answers=3' (env PROMQL_CLI_AI)")
 
 	// Prepare shared state
 	storage := NewSimpleStorage()
@@ -92,14 +85,13 @@ func main() {
 // load subcommand
 	loadFlags := flag.NewFlagSet("load", flag.ContinueOnError)
 	var loadCmd *ffcli.Command
-	loadCmd = &ffcli.Command{
+loadCmd = &ffcli.Command{
 		Name:       "load",
 		ShortUsage: "promql-cli [--repl=...] load <file.prom>",
 		FlagSet:    loadFlags,
-		Exec: func(ctx context.Context, args []string) error {
-			// Apply AI configuration from flags (override envs)
-			aiNumAnswersFlag = *aiNum
-			ConfigureAIFromFlags(*aiProvider, *aiOpenAIModel, *aiOpenAIBase, *aiClaudeModel, *aiClaudeBase, *aiXAIModel, *aiXAIBase, *aiOllamaModel, *aiOllamaHost)
+Exec: func(ctx context.Context, args []string) error {
+			// Apply AI configuration (composite/env/profile)
+			ConfigureAIComposite(map[string]string(aikv))
 			if len(args) != 1 {
 				return fmt.Errorf("load requires <file.prom>")
 			}
@@ -123,14 +115,13 @@ func main() {
 	initCommands := queryFlags.String("command", "", "semicolon-separated pre-commands")
 	queryFlags.StringVar(initCommands, "c", "", "shorthand for --command")
 
-	queryCmd := &ffcli.Command{
+queryCmd := &ffcli.Command{
 		Name:       "query",
 		ShortUsage: "promql-cli [--repl=...] query [flags] [<file.prom>]",
 		FlagSet:    queryFlags,
-		Exec: func(ctx context.Context, args []string) error {
-			// Apply AI configuration from flags (override envs)
-			aiNumAnswersFlag = *aiNum
-			ConfigureAIFromFlags(*aiProvider, *aiOpenAIModel, *aiOpenAIBase, *aiClaudeModel, *aiClaudeBase, *aiXAIModel, *aiXAIBase, *aiOllamaModel, *aiOllamaHost)
+Exec: func(ctx context.Context, args []string) error {
+			// Apply AI configuration (composite/env/profile)
+			ConfigureAIComposite(map[string]string(aikv))
 
 			// Optional positional metrics file
 			var metricsFile string

@@ -24,47 +24,41 @@ You can override these with flags (preferred) or environment variables.
 
 ## Quick start
 
-### 1) Choose provider via flags
+### 1) Use the composite --ai flag
 
-Use one of the following global flags:
-- `--ai-provider {ollama|openai|claude|grok}`
-- Provider-specific flags:
-  - OpenAI: `--ai-openai-model`, `--ai-openai-base`
-  - Claude: `--ai-claude-model`, `--ai-claude-base`
-  - Grok: `--ai-xai-model`, `--ai-xai-base`
-  - Ollama: `--ai-ollama-model`, `--ai-ollama-host`
+Pass key=value pairs (comma or space separated). Unknown keys are ignored.
 
 Examples:
 - OpenAI mini (requires OPENAI_API_KEY):
   ```shell
-  promql-cli --ai-provider=openai --ai-openai-model=gpt-4o-mini query
-  ```
-- OpenAI GPT‑5 (requires OPENAI_API_KEY):
-  ```shell
-  promql-cli --ai-provider=openai --ai-openai-model=gpt-5 query
+  promql-cli --ai 'provider=openai model=gpt-4o-mini' query
   ```
 - Claude Sonnet (requires ANTHROPIC_API_KEY):
   ```shell
-  promql-cli --ai-provider=claude --ai-claude-model=claude-3-5-sonnet-20240620 query
-  ```
-- Claude Opus‑4 (requires ANTHROPIC_API_KEY):
-  ```shell
-  promql-cli --ai-provider=claude --ai-claude-model=opus-4 query
+  promql-cli --ai 'provider=claude model=claude-3-5-sonnet-20240620' query
   ```
 - Grok 2 (requires XAI_API_KEY):
   ```shell
-  promql-cli --ai-provider=grok --ai-xai-model=grok-2 query
-  ```
-- Grok latest (requires XAI_API_KEY):
-  ```shell
-  promql-cli --ai-provider=grok --ai-xai-model=grok-2-latest query
+  promql-cli --ai 'provider=grok model=grok-2' query
   ```
 - Ollama llama3.1 (local):
   ```shell
-  promql-cli --ai-provider=ollama --ai-ollama-model=llama3.1 --ai-ollama-host=http://localhost:11434 query
+  promql-cli --ai 'provider=ollama model=llama3.1 host=http://localhost:11434' query
+  ```
+- Ask for more answers (default 3):
+  ```shell
+  promql-cli --ai 'provider=claude model=claude-3-5-sonnet-20240620 answers=5' query
   ```
 
-### 2) Or choose provider via environment variables
+Supported keys:
+- provider: ollama | openai | claude | grok (xAI)
+- model: model name for the provider
+- base: API base URL (openai/claude/grok) or host (ollama)
+- host: alias for base for ollama
+- answers: number of AI suggestions to request
+- profile: named profile to load from ~/.config/promql-cli/ai.toml
+
+### 2) Or use environment variables
 
 - Provider: `PROMQL_CLI_AI_PROVIDER=ollama|openai|claude|grok`
 - OpenAI: `OPENAI_API_KEY`, optional `PROMQL_CLI_OPENAI_MODEL`, `PROMQL_CLI_OPENAI_BASE`
@@ -187,20 +181,16 @@ PromQL> sum by (instance) (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[30m]
   - Flags apply at the start of the `load` and `query` subcommands. Ensure you pass them before running the REPL.
 
 
-## Reference: flags vs env
+## Reference: configuration
 
-- Provider:
-  - Flags: `--ai-provider` (ollama|openai|claude|grok)
-  - Env: `PROMQL_CLI_AI_PROVIDER`
-- OpenAI:
-  - Flags: `--ai-openai-model`, `--ai-openai-base`
-  - Env: `PROMQL_CLI_OPENAI_MODEL`, `PROMQL_CLI_OPENAI_BASE`, and `OPENAI_API_KEY`
-- Claude:
-  - Flags: `--ai-claude-model`, `--ai-claude-base`
-  - Env: `PROMQL_CLI_ANTHROPIC_MODEL`, `PROMQL_CLI_ANTHROPIC_BASE`, and `ANTHROPIC_API_KEY`
-- Grok (xAI):
-  - Flags: `--ai-xai-model`, `--ai-xai-base`
-  - Env: `PROMQL_CLI_XAI_MODEL`, `PROMQL_CLI_XAI_BASE`, and `XAI_API_KEY`
-- Ollama (local):
-  - Flags: `--ai-ollama-model`, `--ai-ollama-host`
-  - Env: `PROMQL_CLI_OLLAMA_MODEL`, `PROMQL_CLI_OLLAMA_HOST`
+- Composite flag (preferred):
+  - `--ai 'provider=<p> model=<m> [base=<url>|host=<url>] [answers=<n>] [profile=<name>]'
+- Environment variables:
+  - Generic composite: `PROMQL_CLI_AI='provider=... model=... base=... answers=...'`
+  - Profile selection: `PROMQL_CLI_AI_PROFILE=<name>`
+  - API keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`
+  - Provider-specific defaults (optional):
+    - OpenAI: `PROMQL_CLI_OPENAI_MODEL`, `PROMQL_CLI_OPENAI_BASE`
+    - Claude: `PROMQL_CLI_ANTHROPIC_MODEL`, `PROMQL_CLI_ANTHROPIC_BASE`
+    - Grok: `PROMQL_CLI_XAI_MODEL`, `PROMQL_CLI_XAI_BASE`
+    - Ollama: `PROMQL_CLI_OLLAMA_MODEL`, `PROMQL_CLI_OLLAMA_HOST`
