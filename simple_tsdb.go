@@ -86,7 +86,10 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 			// Clean up help text - replace newlines with spaces for better display
 			helpText := strings.ReplaceAll(*mf.Help, "\n", " ")
 			helpText = strings.TrimSpace(helpText)
-			s.metricsHelp[metricName] = helpText
+			// Only update if help text is new or changed
+			if existing, ok := s.metricsHelp[metricName]; !ok || existing != helpText {
+				s.metricsHelp[metricName] = helpText
+			}
 		}
 
 		// Process each metric within the family
