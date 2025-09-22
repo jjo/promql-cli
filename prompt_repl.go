@@ -1005,7 +1005,12 @@ func (r *promptREPL) Run() error {
 					if end > pos {
 						word := text[pos:end]
 						if len(word) > 0 {
-							capitalized := strings.ToUpper(string(word[0])) + strings.ToLower(word[1:])
+							var capitalized string
+							if len(word) > 1 {
+								capitalized = strings.ToUpper(string(word[0])) + strings.ToLower(word[1:])
+							} else {
+								capitalized = strings.ToUpper(word)
+							}
 							buf.Delete(len(word))
 							buf.InsertText(capitalized, false, true)
 						}
