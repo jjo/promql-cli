@@ -390,6 +390,10 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	if !inLabels && strings.HasPrefix(trimmed, ".") {
 			// If typing the command token, suggest available ad-hoc commands
 			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
+				// Special-case .ai to require subcommand
+				if strings.HasPrefix(strings.ToLower(currentWord), ".ai") {
+					return []string{".ai ask ", ".ai run ", ".ai edit ", ".ai show"}
+				}
 				cmds := GetAdHocCommandNames()
 				var out []string
 				for _, c := range cmds {
@@ -398,6 +402,33 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 					}
 				}
 				return out
+			}
+			// If after ".ai ", offer subcommands or indices
+			if strings.HasPrefix(strings.ToLower(trimmed), ".ai ") {
+				after := strings.TrimSpace(trimmed[4:])
+				low := strings.ToLower(after)
+				if after == "" {
+					return []string{"ask ", "run ", "edit ", "show"}
+				}
+				if strings.HasPrefix(low, "run ") || strings.HasPrefix(low, "edit ") {
+					// suggest indices
+					rest := after
+					if strings.HasPrefix(low, "run ") { rest = strings.TrimSpace(after[len("run "):]) }
+					if strings.HasPrefix(low, "edit ") { rest = strings.TrimSpace(after[len("edit "):]) }
+					prefixNum := rest
+					max := len(lastAISuggestions)
+					if max > 20 { max = 20 }
+					var out []string
+					for i := 1; i <= max; i++ {
+						n := fmt.Sprintf("%d", i)
+						if prefixNum == "" || strings.HasPrefix(n, prefixNum) {
+							out = append(out, n)
+						}
+					}
+					return out
+				}
+				// Otherwise, when typing "ask" or "show" we don't complete beyond token
+				return []string{}
 			}
 			// If after ".labels ", ".seed ", ".drop ", or ".timestamps ", complete metric names
 			if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") ||
@@ -1116,6 +1147,13 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 
 	// Ad-hoc commands
 	if handleAdHocFunction(query, storage) {
+		// If an ad-hoc command requested to run a generated query, run it now
+		if pendingAISuggestion != "" {
+			next := pendingAISuggestion
+			pendingAISuggestion = ""
+			// Execute the suggested PromQL line
+			executeOne(engine, storage, next)
+		}
 		return
 	}
 

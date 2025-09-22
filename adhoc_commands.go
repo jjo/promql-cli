@@ -17,6 +17,15 @@ var AdHocCommands = []AdHocCommand{
 		Usage:       ".help",
 	},
 	{
+		Command:     ".ai",
+		Description: "Use AI to propose PromQL queries for your loaded metrics",
+		Usage:       ".ai <intent> | .ai ask <intent> | .ai show | .ai run <N> | .ai edit <N>",
+		Examples: []string{
+			".ai top 5 pods by http error rate over last hour",
+			".ai cpu usage by mode per instance in 30m",
+		},
+	},
+	{
 		Command:     ".labels",
 		Description: "Show labels and example values for a metric",
 		Usage:       ".labels <metric>",

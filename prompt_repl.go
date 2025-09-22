@@ -1,3 +1,4 @@
+//go:build prompt
 // +build prompt
 
 package main
@@ -24,24 +25,25 @@ import (
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
+const suggestionLimit = 100
+
 // Global variables needed for prompt completions
 var (
-	client         v1.API
-	ctx            = context.Background()
-	metrics        []string
-	metricsHelp    map[string]string // metric name -> help text
-	replHistory    []string
-	executeOneFunc func(string) // Function pointer to executeOne
-	globalStorage  interface{} // Storage for accessing metrics metadata
+	client            v1.API
+	ctx               = context.Background()
+	metrics           []string
+	metricsHelp       map[string]string // metric name -> help text
+	replHistory       []string
+	executeOneFunc    func(string) // Function pointer to executeOne
+	globalStorage     interface{}  // Storage for accessing metrics metadata
+	inGoPromptSession bool         // true while running go-prompt REPL
 )
-
 
 // promptCompleter provides completions for go-prompt
 func promptCompleter(d prompt.Document) []prompt.Suggest {
 	text := d.TextBeforeCursor()
 	trimmedText := strings.TrimSpace(text)
-	
-	
+
 	// Reset history navigation if the text has changed from what's in filtered history
 	if historyIndex > 0 && len(filteredHistory) > 0 {
 		currentFullText := d.Text
@@ -60,20 +62,34 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			filteredHistory = nil
 		}
 	}
-	
+
 	// Early return for empty suggestions to avoid panic
 	emptySuggestions := []prompt.Suggest{}
-	
+
+	// If we are in AI selection mode, present the AI suggestions menu regardless of typing
+	if aiSelectionActive {
+		return getAISuggestionMenu()
+	}
+
+	// Suppress suggestions immediately after closing delimiters ) ] }
+	trimRight := strings.TrimRight(text, " \t")
+	if trimRight != "" {
+		last := trimRight[len(trimRight)-1]
+		if last == ')' || last == ']' || last == '}' {
+			return emptySuggestions
+		}
+	}
+
 	// Check if we should be aggressive with completions (old behavior)
 	// Users can set PROMQL_CLI_EAGER_COMPLETION=true to get the old behavior
 	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
-	
+
 	if !eagerCompletion {
 		// Don't show suggestions at the start of a new line - wait for Tab or typing
 		if text == "" {
 			return emptySuggestions
 		}
-		
+
 		// Don't show completions immediately after space unless it's an ad-hoc command
 		// or we're continuing to type something
 		if strings.HasSuffix(text, " ") {
@@ -85,7 +101,7 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 					break
 				}
 			}
-			
+
 			if !isAdHocWithCompletion {
 				return emptySuggestions
 			}
@@ -99,7 +115,7 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 
 	// Use go-prompt's word detection with our custom separators
 	wordBefore := d.GetWordBeforeCursorUntilSeparator("(){}[]\" \t\n,=")
-	
+
 	// Check if we're in ANY ad-hoc command context first
 	// This prevents range duration suggestions from appearing in ad-hoc commands
 	isAdHocCommand := false
@@ -109,20 +125,98 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			break
 		}
 	}
-	
+
 	// Check if we're typing an ad-hoc command itself
 	if strings.HasPrefix(wordBefore, ".") && !strings.Contains(text, " ") {
+		// Special-case .ai to require a subcommand even before the space
+		if strings.HasPrefix(wordBefore, ".ai") {
+			return []prompt.Suggest{
+				{Text: ".ai ask ", Description: "ask free text to ask the AI"},
+				{Text: ".ai edit ", Description: "prepare a suggestion for editing (Ctrl-Y to paste)"},
+				{Text: ".ai run ", Description: "run a suggestion number"},
+				{Text: ".ai show", Description: "show last AI suggestions"},
+			}
+		}
 		return getAdHocCommandSuggests(wordBefore)
 	}
-	
+
 	// If we're in an ad-hoc command context, handle it specifically
 	if isAdHocCommand {
+		// Handle .ai completions (subcommands and indices)
+		if strings.HasPrefix(trimmedText, ".ai") {
+			// Find the position after ".ai" token in the current line
+			pos := strings.Index(text, ".ai")
+			if pos == -1 {
+				return emptySuggestions
+			}
+			after := strings.TrimSpace(text[pos+3:])
+			// If no argument yet, suggest subcommands that always require an argument
+			if after == "" {
+				return []prompt.Suggest{
+					{Text: ".ai ask ", Description: "ask free text to ask the AI"},
+					{Text: ".ai edit ", Description: "prepare a suggestion for editing (Ctrl-Y to paste)"},
+					{Text: ".ai run ", Description: "run a suggestion number"},
+					{Text: ".ai show", Description: "show last AI suggestions"},
+				}
+			}
+			// If typing the subcommand token, provide filtered suggestions
+			low := strings.ToLower(after)
+			subs := []prompt.Suggest{
+				{Text: "ask ", Description: "ask free text to ask the AI"},
+				{Text: "edit ", Description: "prepare a suggestion for editing (Ctrl-Y to paste)"},
+				{Text: "run ", Description: "run a suggestion number"},
+				{Text: "show", Description: "show last AI suggestions"},
+			}
+			// Special handling when a subcommand is already chosen
+			if strings.HasPrefix(low, "run ") || strings.HasPrefix(low, "edit ") {
+				// Determine the number prefix after the subcommand
+				rest := ""
+				if strings.HasPrefix(after, "run ") {
+					rest = strings.TrimSpace(after[len("run "):])
+				} else if strings.HasPrefix(after, "edit ") {
+					rest = strings.TrimSpace(after[len("edit "):])
+				}
+				prefixNum := rest // may be empty; show all indices if empty
+				var sugg []prompt.Suggest
+				max := len(lastAISuggestions)
+				if max > 20 {
+					max = 20
+				}
+				for i := 1; i <= max; i++ {
+					num := fmt.Sprintf("%d", i)
+					if prefixNum == "" || strings.HasPrefix(num, prefixNum) {
+						desc := "suggestion"
+						if i-1 < len(lastAISuggestions) {
+							s := strings.TrimSpace(lastAISuggestions[i-1])
+							if len(s) > 0 {
+								if len(s) > suggestionLimit {
+									desc = s[:suggestionLimit] + "..."
+								} else {
+									desc = s
+								}
+							}
+						}
+						sugg = append(sugg, prompt.Suggest{Text: num, Description: desc})
+					}
+				}
+				return sugg
+			}
+			// If typing partial token (e.g., "ru", "ed", "sh", "as")
+			var filtered []prompt.Suggest
+			for _, s := range subs {
+				if strings.HasPrefix(s.Text, after) || strings.HasPrefix(strings.ToLower(s.Text), low) {
+					filtered = append(filtered, s)
+				}
+			}
+			return filtered
+		}
+
 		// Handle .scrape URL completions FIRST (before checking for other commands with metric completion)
 		if strings.HasPrefix(trimmedText, ".scrape") {
 			if strings.Contains(text, ".scrape ") {
 				cmdEnd := strings.Index(text, ".scrape ") + 8
 				afterCmd := strings.TrimSpace(text[cmdEnd:])
-				
+
 				// Only show URL examples if we haven't typed a space after the URL yet
 				if !strings.Contains(afterCmd, " ") {
 					return getScrapeURLCompletions(afterCmd)
@@ -131,10 +225,10 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			// After the URL, no more completions (regex, count, delay are too specific)
 			return emptySuggestions
 		}
-		
+
 		// Check if we're in a special ad-hoc command context for metric completion
 		if strings.Contains(text, ".labels ") || strings.Contains(text, ".timestamps ") ||
-		   strings.Contains(text, ".drop ") || strings.Contains(text, ".seed ") {
+			strings.Contains(text, ".drop ") || strings.Contains(text, ".seed ") {
 			// We're after .labels/.timestamps/.drop/.seed, show metric completions
 			if lastSpace := strings.LastIndex(text, " "); lastSpace != -1 {
 				wordAfterSpace := text[lastSpace+1:]
@@ -142,7 +236,7 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			}
 			return emptySuggestions
 		}
-		
+
 		// Check if we're after .load or .save for file completions
 		if strings.Contains(text, ".load ") || strings.Contains(text, ".save ") {
 			if lastSpace := strings.LastIndex(text, " "); lastSpace != -1 {
@@ -151,7 +245,7 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			}
 			return emptySuggestions
 		}
-		
+
 		// Handle .at and .pinat time completions
 		if strings.HasPrefix(trimmedText, ".at") || strings.HasPrefix(trimmedText, ".pinat") {
 			if strings.Contains(text, ".at ") || strings.Contains(text, ".pinat ") {
@@ -161,7 +255,7 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 				} else {
 					cmdEnd = strings.Index(text, ".pinat ") + 7
 				}
-				
+
 				afterCmd := text[cmdEnd:]
 				// Check if we already have a time token and a space (ready for query in .at case)
 				if strings.HasPrefix(trimmedText, ".at ") {
@@ -170,27 +264,27 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 						return getMixedSuggests(wordBefore)
 					}
 				}
-				
+
 				// Show time completions
 				return getTimeCompletions(strings.TrimSpace(afterCmd))
 			}
 			return emptySuggestions
 		}
-		
+
 		// No further completions for .help, .metrics, .quit
 		if trimmedText == ".help" || trimmedText == ".metrics" || trimmedText == ".quit" ||
-		   strings.HasPrefix(trimmedText, ".help ") || strings.HasPrefix(trimmedText, ".metrics ") ||
-		   strings.HasPrefix(trimmedText, ".quit ") {
+			strings.HasPrefix(trimmedText, ".help ") || strings.HasPrefix(trimmedText, ".metrics ") ||
+			strings.HasPrefix(trimmedText, ".quit ") {
 			return emptySuggestions
 		}
-		
+
 		// For any other ad-hoc command we don't have specific handling for
 		return emptySuggestions
 	}
-	
+
 	// Use the PromQL parser to understand context better
 	context := analyzePromQLContext(text)
-	
+
 	// Based on parser context, return appropriate suggestions
 	switch context.Type {
 	case "range_duration":
@@ -200,8 +294,8 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 	case "label_value":
 		return getLabelValueSuggests(wordBefore, context.MetricName, context.LabelName)
 	case "function_arg":
-		// Inside function, show metrics
-		return getMetricSuggests(wordBefore)
+		// Inside function args, offer both functions and metrics (functions like rate() are common)
+		return getMixedSuggests(wordBefore)
 	case "after_operator":
 		// After operator, show metrics
 		return getMetricSuggests(wordBefore)
@@ -252,19 +346,19 @@ func getScrapeURLCompletions(prefix string) []prompt.Suggest {
 		{Text: "http://localhost:9115/metrics", Description: "Blackbox Exporter metrics"},
 		{Text: "http://localhost:2112/metrics", Description: "Common exporter port"},
 	}
-	
+
 	// Filter based on prefix
 	if prefix == "" {
 		return urlOptions
 	}
-	
+
 	filtered := []prompt.Suggest{}
 	for _, opt := range urlOptions {
 		if strings.HasPrefix(opt.Text, prefix) {
 			filtered = append(filtered, opt)
 		}
 	}
-	
+
 	// Always return at least empty slice, never nil
 	if filtered == nil {
 		return []prompt.Suggest{}
@@ -289,22 +383,22 @@ func getTimeCompletions(prefix string) []prompt.Suggest {
 		{Text: "now+5m", Description: "5 minutes from now"},
 		{Text: "now+1h", Description: "1 hour from now"},
 	}
-	
+
 	// Add current timestamp in RFC3339 format as an example
 	now := time.Now().UTC()
 	timeOptions = append(timeOptions, prompt.Suggest{
 		Text:        now.Format(time.RFC3339),
 		Description: "RFC3339 format example",
 	})
-	
+
 	// Add unix timestamp examples
 	unixSec := now.Unix()
 	unixMs := now.UnixMilli()
-	timeOptions = append(timeOptions, 
+	timeOptions = append(timeOptions,
 		prompt.Suggest{Text: fmt.Sprintf("%d", unixSec), Description: "unix seconds"},
 		prompt.Suggest{Text: fmt.Sprintf("%d", unixMs), Description: "unix milliseconds"},
 	)
-	
+
 	// For .pinat specifically, add "remove" option
 	// We detect this by checking the caller context (a bit hacky but works)
 	// Since we're called from the completer, we can't directly know if it's .pinat
@@ -313,19 +407,19 @@ func getTimeCompletions(prefix string) []prompt.Suggest {
 		Text:        "remove",
 		Description: "remove pinned time (pinat only)",
 	})
-	
+
 	// Filter based on prefix
 	if prefix == "" {
 		return timeOptions
 	}
-	
+
 	filtered := []prompt.Suggest{}
 	for _, opt := range timeOptions {
 		if strings.HasPrefix(strings.ToLower(opt.Text), strings.ToLower(prefix)) {
 			filtered = append(filtered, opt)
 		}
 	}
-	
+
 	// Always return at least empty slice, never nil
 	if filtered == nil {
 		return []prompt.Suggest{}
@@ -339,7 +433,7 @@ func getFileCompletions(prefix string) []prompt.Suggest {
 	if prefix == "" {
 		prefix = "."
 	}
-	
+
 	dir := filepath.Dir(prefix)
 	if dir == "" {
 		dir = "."
@@ -471,7 +565,6 @@ func getFunctionSuggests(prefix string) []prompt.Suggest {
 	return filtered
 }
 
-
 // getMetricSuggests returns metric suggestions based on prefix
 func getMetricSuggests(prefix string) []prompt.Suggest {
 	if metrics == nil || len(metrics) == 0 {
@@ -481,12 +574,12 @@ func getMetricSuggests(prefix string) []prompt.Suggest {
 
 	var suggestions []prompt.Suggest
 	count := 0
-	
+
 	// Sort metrics to ensure consistent ordering
 	sortedMetrics := make([]string, len(metrics))
 	copy(sortedMetrics, metrics)
 	sort.Strings(sortedMetrics)
-	
+
 	for _, m := range sortedMetrics {
 		if count >= 100 { // Limit suggestions
 			break
@@ -512,12 +605,12 @@ func getMetricSuggests(prefix string) []prompt.Suggest {
 					description = "(metric)"
 				}
 			}
-			
+
 			// Ensure description fits nicely in the completion display
 			if len(description) > 100 {
-				description = description[:97] + "..."
+				description = description[:(suggestionLimit-3)] + "..."
 			}
-			
+
 			suggestions = append(suggestions, prompt.Suggest{
 				Text:        m,
 				Description: description,
@@ -568,8 +661,8 @@ var lastExecutedCommand string
 
 // Global variables for prefix-based history navigation
 var (
-	historyIndex    int    // Current position in filtered history
-	historyPrefix   string // Prefix to filter history by
+	historyIndex    int      // Current position in filtered history
+	historyPrefix   string   // Prefix to filter history by
 	filteredHistory []string // History entries matching the prefix
 )
 
@@ -579,15 +672,15 @@ var (
 	inMultiLine     bool     // Whether we're in multi-line mode
 )
 
-
-// promptExecutor handles command execution  
+// promptExecutor handles command execution
 func promptExecutor(s string) {
+	// If AI selection was active, clear it upon any command submission
+	aiSelectionActive = false
 	// Reset history navigation state when a command is executed
 	historyIndex = 0
 	historyPrefix = ""
 	filteredHistory = nil
 
-	
 	// Handle multi-line input (commands with embedded newlines)
 	if strings.Contains(s, "\n") {
 		// Process multi-line PromQL query
@@ -602,7 +695,7 @@ func promptExecutor(s string) {
 		if s == "" && !inMultiLine {
 			return
 		}
-		
+
 		// Check for line continuation (backslash at end)
 		if strings.HasSuffix(s, "\\") && !strings.HasSuffix(s, "\\\\") {
 			// Remove the backslash and store the line
@@ -612,7 +705,7 @@ func promptExecutor(s string) {
 			// The prompt will show again for the next line
 			return
 		}
-		
+
 		// If we're in multi-line mode from backslash continuation, combine all lines
 		if inMultiLine {
 			multiLineBuffer = append(multiLineBuffer, s)
@@ -625,7 +718,7 @@ func promptExecutor(s string) {
 			}
 		}
 	}
-	
+
 	// Handle quit (but not .exit which isn't implemented)
 	if s == "quit" || s == ".quit" {
 		// Save history before exiting
@@ -661,22 +754,188 @@ func createPromptREPL() *promptREPL {
 	return &promptREPL{}
 }
 
+// getAISuggestionMenu builds the dropdown items for AI selection (edit first, then run)
+func getAISuggestionMenu() []prompt.Suggest {
+	var items []prompt.Suggest
+	if len(lastAISuggestions) == 0 {
+		return items
+	}
+	// First: edit
+	for i, q := range lastAISuggestions {
+		preview := strings.TrimSpace(q)
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		if i < len(lastAIExplanations) && strings.TrimSpace(lastAIExplanations[i]) != "" {
+			ex := strings.TrimSpace(lastAIExplanations[i])
+			if len(ex) > 80 {
+				ex = ex[:80] + "..."
+			}
+			preview = preview + " — " + ex
+		}
+		items = append(items, prompt.Suggest{Text: fmt.Sprintf(".ai edit %d", i+1), Description: preview})
+	}
+	// Then: run
+	for i, q := range lastAISuggestions {
+		preview := strings.TrimSpace(q)
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		if i < len(lastAIExplanations) && strings.TrimSpace(lastAIExplanations[i]) != "" {
+			ex := strings.TrimSpace(lastAIExplanations[i])
+			if len(ex) > 80 {
+				ex = ex[:80] + "..."
+			}
+			preview = preview + " — " + ex
+		}
+		items = append(items, prompt.Suggest{Text: fmt.Sprintf(".ai run %d", i+1), Description: preview})
+	}
+	return items
+}
+
 type promptREPL struct {
 	prompt *prompt.Prompt
+}
+
+func pasteAISuggestionN(buf *prompt.Buffer, n int) {
+	if n <= 0 || n > len(lastAISuggestions) {
+		return
+	}
+	s := lastAISuggestions[n-1]
+	if s == "" {
+		return
+	}
+	// Replace entire line with the chosen suggestion
+	doc := buf.Document()
+	buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
+	buf.Delete(len(doc.Text))
+	buf.InsertText(s, false, true)
+}
+
+// runAIPicker opens a temporary go-prompt to pick an AI suggestion.
+// Returns true if a selection was made (either run or edit), false if canceled.
+func runAIPicker(validQ []string, validE []string) bool {
+	if len(validQ) == 0 {
+		return false
+	}
+	if !inGoPromptSession {
+		return false
+	}
+
+	// Build suggestion list: "run N" and "edit N" with query preview
+	var items []prompt.Suggest
+	// First, all edit options
+	for i, q := range validQ {
+		preview := strings.TrimSpace(q)
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		if i < len(validE) && strings.TrimSpace(validE[i]) != "" {
+			ex := strings.TrimSpace(validE[i])
+			if len(ex) > 80 {
+				ex = ex[:80] + "..."
+			}
+			preview = preview + " — " + ex
+		}
+		items = append(items,
+			prompt.Suggest{Text: fmt.Sprintf("edit %d", i+1), Description: preview},
+		)
+	}
+	// Then, all run options
+	for i, q := range validQ {
+		preview := strings.TrimSpace(q)
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		if i < len(validE) && strings.TrimSpace(validE[i]) != "" {
+			ex := strings.TrimSpace(validE[i])
+			if len(ex) > 80 {
+				ex = ex[:80] + "..."
+			}
+			preview = preview + " — " + ex
+		}
+		items = append(items,
+			prompt.Suggest{Text: fmt.Sprintf("run %d", i+1), Description: preview},
+		)
+	}
+
+	selected := false
+	pickerExec := func(in string) {
+		line := strings.TrimSpace(in)
+		if line == "" || line == "q" || line == "quit" || line == "exit" {
+			return
+		}
+		// Accept just a number => run N
+		if n, err := strconv.Atoi(line); err == nil && n > 0 && n <= len(validQ) {
+			pendingAISuggestion = validQ[n-1]
+			fmt.Printf("Running suggestion [%d]: %s\n", n, pendingAISuggestion)
+			selected = true
+			return
+		}
+		// Accept explicit run/edit forms
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "run ") {
+			idxStr := strings.TrimSpace(strings.TrimPrefix(lower, "run "))
+			if n, err := strconv.Atoi(idxStr); err == nil && n > 0 && n <= len(validQ) {
+				pendingAISuggestion = validQ[n-1]
+				fmt.Printf("Running suggestion [%d]: %s\n", n, pendingAISuggestion)
+				selected = true
+			}
+			return
+		}
+		if strings.HasPrefix(lower, "edit ") {
+			idxStr := strings.TrimSpace(strings.TrimPrefix(lower, "edit "))
+			if n, err := strconv.Atoi(idxStr); err == nil && n > 0 && n <= len(validQ) {
+				aiClipboard = validQ[n-1]
+				fmt.Printf("Prepared suggestion [%d] for editing. Press Ctrl-Y to paste.\n", n)
+				selected = true
+			}
+			return
+		}
+	}
+	pickerComp := func(d prompt.Document) []prompt.Suggest {
+		w := strings.ToLower(strings.TrimSpace(d.GetWordBeforeCursor()))
+		if w == "" {
+			return items
+		}
+		var out []prompt.Suggest
+		for _, it := range items {
+			if strings.HasPrefix(strings.ToLower(it.Text), w) {
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+
+	fmt.Println("Use number to run (e.g., 1), or \"run N\" / \"edit N\". Enter with empty input to cancel.")
+	p := prompt.New(
+		pickerExec,
+		pickerComp,
+		prompt.OptionPrefix("AI> "),
+		prompt.OptionTitle("AI Suggestions"),
+		prompt.OptionMaxSuggestion(uint16(len(items))),
+		prompt.OptionShowCompletionAtStart(),
+		prompt.OptionSelectedSuggestionBGColor(prompt.LightGray),
+		prompt.OptionSuggestionBGColor(prompt.DarkGray),
+		prompt.OptionDescriptionBGColor(prompt.DarkGray),
+		prompt.OptionDescriptionTextColor(prompt.White),
+	)
+	p.Run()
+	return selected
 }
 
 func (r *promptREPL) Run() error {
 	// Load history from file
 	loadHistory()
-	
+
 	// Save terminal state before starting
 	originalState := saveTerminalState()
 	globalOriginalState = originalState // Store globally for .quit handler
-	
+
 	// Set up signal handling to restore terminal on interrupt
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	
+
 	go func() {
 		<-sigChan
 		// Save history and restore terminal state
@@ -692,8 +951,9 @@ func (r *promptREPL) Run() error {
 
 	// Check if eager completion is enabled
 	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
-	
+
 	// Create the prompt with proper options
+	inGoPromptSession = true
 	opts := []prompt.Option{
 		prompt.OptionPrefix("PromQL> "),
 		prompt.OptionTitle("PromQL CLI"),
@@ -749,7 +1009,7 @@ func (r *promptREPL) Run() error {
 					separators := "(){}[]\" \t\n,="
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
-					
+
 					// Skip current word
 					for pos < len(text) && !strings.ContainsRune(separators, rune(text[pos])) {
 						pos++
@@ -776,11 +1036,11 @@ func (r *promptREPL) Run() error {
 					separators := "(){}[]\" \t\n,="
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
-					
+
 					if pos == 0 {
 						return
 					}
-					
+
 					// Skip separators backward
 					for pos > 0 && strings.ContainsRune(separators, rune(text[pos-1])) {
 						pos--
@@ -807,7 +1067,7 @@ func (r *promptREPL) Run() error {
 				if pos == 0 {
 					return
 				}
-				
+
 				// Find word boundary with PromQL-specific separators
 				separators := "(){}[]\" \t\n,="
 				start := pos - 1
@@ -820,7 +1080,7 @@ func (r *promptREPL) Run() error {
 					start--
 				}
 				start++ // Move to first char of word
-				
+
 				// Delete from start to current position
 				if start < pos {
 					buf.DeleteBeforeCursor(pos - start)
@@ -861,7 +1121,7 @@ func (r *promptREPL) Run() error {
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 					end := pos
-					
+
 					// Advance to end of current word but do NOT consume following separators
 					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
 						end++
@@ -885,7 +1145,7 @@ func (r *promptREPL) Run() error {
 					if pos == 0 {
 						return
 					}
-					
+
 					separators := "(){}[]\" \t\n,="
 					start := pos - 1
 					// Skip trailing separators
@@ -897,7 +1157,7 @@ func (r *promptREPL) Run() error {
 						start--
 					}
 					start++
-					
+
 					if start < pos {
 						buf.DeleteBeforeCursor(pos - start)
 					}
@@ -911,7 +1171,7 @@ func (r *promptREPL) Run() error {
 				doc := buf.Document()
 				text := doc.Text
 				pos := len(doc.TextBeforeCursor())
-				
+
 				// Need at least 2 characters to transpose
 				if pos > 0 && len(text) > 1 {
 					if pos == len(text) {
@@ -919,17 +1179,39 @@ func (r *promptREPL) Run() error {
 						if pos >= 2 {
 							buf.CursorLeft(2)
 							buf.Delete(2)
-							buf.InsertText(string(text[pos-1]) + string(text[pos-2]), false, true)
+							buf.InsertText(string(text[pos-1])+string(text[pos-2]), false, true)
 						}
 					} else if pos >= 1 {
 						// In middle, swap current with previous
 						buf.CursorLeft(1)
 						buf.Delete(2)
-						buf.InsertText(string(text[pos]) + string(text[pos-1]), false, true)
+						buf.InsertText(string(text[pos])+string(text[pos-1]), false, true)
 					}
 				}
 			},
 		}),
+		// Ctrl-Y: Paste AI clipboard (first suggestion or last edited)
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.ControlY,
+			Fn: func(buf *prompt.Buffer) {
+				if aiClipboard == "" {
+					// If clipboard is empty but we have suggestions, default to first
+					if len(lastAISuggestions) > 0 {
+						aiClipboard = lastAISuggestions[0]
+					} else {
+						return
+					}
+				}
+				// Replace entire line with clipboard content
+				doc := buf.Document()
+				buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
+				buf.Delete(len(doc.Text))
+				buf.InsertText(aiClipboard, false, true)
+			},
+		}),
+		// Alt-1..Alt-9: Paste corresponding AI suggestion directly
+		// Note: ESC+<digit> sequences
+
 		// Ctrl-L: Clear screen
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlL,
@@ -948,12 +1230,12 @@ func (r *promptREPL) Run() error {
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 					end := pos
-					
+
 					// Find end of current word
 					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
 						end++
 					}
-					
+
 					if end > pos {
 						wordLen := end - pos
 						buf.Delete(wordLen)
@@ -972,12 +1254,12 @@ func (r *promptREPL) Run() error {
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 					end := pos
-					
+
 					// Find end of current word
 					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
 						end++
 					}
-					
+
 					if end > pos {
 						wordLen := end - pos
 						buf.Delete(wordLen)
@@ -996,12 +1278,12 @@ func (r *promptREPL) Run() error {
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 					end := pos
-					
+
 					// Find end of current word
 					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
 						end++
 					}
-					
+
 					if end > pos {
 						word := text[pos:end]
 						if len(word) > 0 {
@@ -1027,7 +1309,7 @@ func (r *promptREPL) Run() error {
 					if lastExecutedCommand == "" {
 						return
 					}
-					
+
 					lastArg := extractLastArgument(lastExecutedCommand)
 					if lastArg != "" {
 						buf.InsertText(lastArg, false, true)
@@ -1060,7 +1342,7 @@ func (r *promptREPL) Run() error {
 			Key: prompt.Up,
 			Fn: func(buf *prompt.Buffer) {
 				currentText := buf.Text()
-				
+
 				// If we're starting fresh history navigation, set up the prefix filter
 				if historyIndex == 0 {
 					historyPrefix = currentText // Keep the exact text, not trimmed
@@ -1080,7 +1362,7 @@ func (r *promptREPL) Run() error {
 						}
 					}
 				}
-				
+
 				if len(filteredHistory) > 0 && historyIndex < len(filteredHistory) {
 					// Clear current line and insert history entry
 					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
@@ -1110,7 +1392,7 @@ func (r *promptREPL) Run() error {
 			},
 		}),
 	}
-	
+
 	// Add option to show completions at start only if eager completion is enabled
 	if eagerCompletion {
 		opts = append(opts, prompt.OptionShowCompletionAtStart())
@@ -1127,10 +1409,11 @@ func (r *promptREPL) Run() error {
 
 	// Run the prompt - this will handle terminal restoration on exit
 	r.prompt.Run()
-	
+	inGoPromptSession = false
+
 	// Save history when exiting normally
 	saveHistory()
-	
+
 	// Restore terminal state when exiting normally
 	if originalState != "" {
 		restoreTerminalState(originalState)
@@ -1157,7 +1440,7 @@ func fetchMetrics() {
 			return
 		}
 	}
-	
+
 	// Fallback to client if available
 	if client == nil {
 		return
@@ -1183,7 +1466,7 @@ func fetchMetrics() {
 // getMixedSuggests returns both metrics and functions (metrics prioritized)
 func getMixedSuggests(prefix string) []prompt.Suggest {
 	var suggestions []prompt.Suggest
-	
+
 	// Add metric suggestions FIRST (prioritized)
 	metricSuggests := getMetricSuggests(prefix)
 	for i := range metricSuggests {
@@ -1192,7 +1475,7 @@ func getMixedSuggests(prefix string) []prompt.Suggest {
 		}
 		suggestions = append(suggestions, metricSuggests[i])
 	}
-	
+
 	// Then add function suggestions
 	funcSuggests := getFunctionSuggests(prefix)
 	for i := range funcSuggests {
@@ -1201,7 +1484,7 @@ func getMixedSuggests(prefix string) []prompt.Suggest {
 		}
 		suggestions = append(suggestions, funcSuggests[i])
 	}
-	
+
 	return suggestions
 }
 
@@ -1230,20 +1513,20 @@ func restoreTerminalState(state string) {
 
 // PromQLContext represents the current context in a PromQL expression
 type PromQLContext struct {
-	Type       string // "function_arg", "label_name", "label_value", "range_duration", "after_operator", etc.
-	MetricName string
-	LabelName  string
+	Type         string // "function_arg", "label_name", "label_value", "range_duration", "after_operator", etc.
+	MetricName   string
+	LabelName    string
 	FunctionName string
 }
 
 // analyzePromQLContext uses the PromQL parser to understand the current context
 func analyzePromQLContext(text string) PromQLContext {
 	context := PromQLContext{Type: "unknown"}
-	
+
 	// Try to parse what we have so far
 	// Even if incomplete, the parser can give us useful information
 	_, err := parser.ParseExpr(text)
-	
+
 	// Check for specific patterns that indicate context
 	// Look for unclosed brackets (range selector)
 	lastOpenBracket := strings.LastIndex(text, "[")
@@ -1262,14 +1545,14 @@ func analyzePromQLContext(text string) PromQLContext {
 		}
 		return context
 	}
-	
+
 	// Check for label selector context
 	lastOpenBrace := strings.LastIndex(text, "{")
 	lastCloseBrace := strings.LastIndex(text, "}")
 	if lastOpenBrace > lastCloseBrace && lastOpenBrace != -1 {
 		// We're in a label selector
 		labelPart := text[lastOpenBrace+1:]
-		
+
 		// Check if we're typing a label value (after =, !=, =~, !~)
 		if matches := regexp.MustCompile(`([a-zA-Z_][a-zA-Z0-9_]*)\s*(!?[=~])\s*"?([^"]*)$`).FindStringSubmatch(labelPart); len(matches) > 1 {
 			context.Type = "label_value"
@@ -1277,7 +1560,7 @@ func analyzePromQLContext(text string) PromQLContext {
 		} else {
 			context.Type = "label_name"
 		}
-		
+
 		// Extract metric name before brace
 		metricEnd := lastOpenBrace
 		metricStart := lastOpenBrace - 1
@@ -1290,7 +1573,7 @@ func analyzePromQLContext(text string) PromQLContext {
 		}
 		return context
 	}
-	
+
 	// Check if we're inside a function
 	lastOpenParen := strings.LastIndex(text, "(")
 	lastCloseParen := strings.LastIndex(text, ")")
@@ -1307,22 +1590,22 @@ func analyzePromQLContext(text string) PromQLContext {
 		}
 		return context
 	}
-	
+
 	// Check if we're after an operator
 	operators := []string{"+", "-", "*", "/", "^", "%", "and", "or", "unless", ">", "<", ">=", "<=", "==", "!=", "by", "without"}
 	for _, op := range operators {
-		if strings.HasSuffix(strings.TrimSpace(text), op) || 
-		   strings.HasSuffix(strings.TrimSpace(text), op + " ") {
+		if strings.HasSuffix(strings.TrimSpace(text), op) ||
+			strings.HasSuffix(strings.TrimSpace(text), op+" ") {
 			context.Type = "after_operator"
 			break
 		}
 	}
-	
+
 	// Check for aggregation context
 	if err != nil && strings.Contains(err.Error(), "aggregation") {
 		context.Type = "aggregation"
 	}
-	
+
 	return context
 }
 
@@ -1331,12 +1614,12 @@ func getLabelNameSuggests(prefix string, metricName string) []prompt.Suggest {
 	if globalStorage == nil {
 		return []prompt.Suggest{}
 	}
-	
+
 	storage, ok := globalStorage.(*SimpleStorage)
 	if !ok || storage == nil {
 		return []prompt.Suggest{}
 	}
-	
+
 	// Collect unique label names from the metric
 	labelNames := make(map[string]bool)
 	if samples, exists := storage.metrics[metricName]; exists {
@@ -1348,7 +1631,7 @@ func getLabelNameSuggests(prefix string, metricName string) []prompt.Suggest {
 			}
 		}
 	}
-	
+
 	var suggestions []prompt.Suggest
 	for labelName := range labelNames {
 		if prefix == "" || strings.HasPrefix(labelName, prefix) {
@@ -1358,11 +1641,11 @@ func getLabelNameSuggests(prefix string, metricName string) []prompt.Suggest {
 			})
 		}
 	}
-	
+
 	sort.Slice(suggestions, func(i, j int) bool {
 		return suggestions[i].Text < suggestions[j].Text
 	})
-	
+
 	return suggestions
 }
 
@@ -1371,12 +1654,12 @@ func getLabelValueSuggests(prefix string, metricName string, labelName string) [
 	if globalStorage == nil {
 		return []prompt.Suggest{}
 	}
-	
+
 	storage, ok := globalStorage.(*SimpleStorage)
 	if !ok || storage == nil {
 		return []prompt.Suggest{}
 	}
-	
+
 	// Collect unique label values
 	labelValues := make(map[string]bool)
 	if samples, exists := storage.metrics[metricName]; exists {
@@ -1386,7 +1669,7 @@ func getLabelValueSuggests(prefix string, metricName string, labelName string) [
 			}
 		}
 	}
-	
+
 	// Check if prefix already has quotes
 	prefixHasOpenQuote := strings.HasPrefix(prefix, "\"")
 	prefixToMatch := prefix
@@ -1394,7 +1677,7 @@ func getLabelValueSuggests(prefix string, metricName string, labelName string) [
 		// Remove the opening quote for matching
 		prefixToMatch = strings.TrimPrefix(prefix, "\"")
 	}
-	
+
 	var suggestions []prompt.Suggest
 	for labelValue := range labelValues {
 		if prefixToMatch == "" || strings.HasPrefix(labelValue, prefixToMatch) {
@@ -1410,11 +1693,11 @@ func getLabelValueSuggests(prefix string, metricName string, labelName string) [
 			})
 		}
 	}
-	
+
 	sort.Slice(suggestions, func(i, j int) bool {
 		return suggestions[i].Text < suggestions[j].Text
 	})
-	
+
 	return suggestions
 }
 
@@ -1434,14 +1717,14 @@ func getAggregationSuggests(prefix string) []prompt.Suggest {
 		{Text: "topk", Description: "largest k elements"},
 		{Text: "quantile", Description: "calculate quantile"},
 	}
-	
+
 	var filtered []prompt.Suggest
 	for _, agg := range aggregations {
 		if strings.HasPrefix(agg.Text, prefix) {
 			filtered = append(filtered, agg)
 		}
 	}
-	
+
 	return filtered
 }
 
@@ -1451,7 +1734,7 @@ func getHistoryPath() string {
 	if histPath := os.Getenv("PROMQL_CLI_HISTORY"); histPath != "" {
 		return histPath
 	}
-	
+
 	// Prefer the user's home directory
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, ".promql-cli_history")
@@ -1474,7 +1757,7 @@ func loadHistory() {
 		replHistory = []string{}
 		return
 	}
-	
+
 	replHistory = []string{}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
@@ -1483,7 +1766,7 @@ func loadHistory() {
 			replHistory = append(replHistory, line)
 		}
 	}
-	
+
 	// Limit history size to last 1000 entries
 	if len(replHistory) > 1000 {
 		replHistory = replHistory[len(replHistory)-1000:]
@@ -1495,29 +1778,29 @@ func saveHistory() {
 	if len(replHistory) == 0 {
 		return
 	}
-	
+
 	histPath := getHistoryPath()
-	
+
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(histPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return // Silently fail if we can't create directory
 	}
-	
+
 	// Write history to file
 	file, err := os.Create(histPath)
 	if err != nil {
 		return // Silently fail if we can't create file
 	}
 	defer file.Close()
-	
+
 	writer := bufio.NewWriter(file)
 	// Keep only last 1000 entries
 	start := 0
 	if len(replHistory) > 1000 {
 		start = len(replHistory) - 1000
 	}
-	
+
 	for i := start; i < len(replHistory); i++ {
 		_, _ = writer.WriteString(replHistory[i] + "\n")
 	}
@@ -1527,20 +1810,20 @@ func saveHistory() {
 // appendToHistoryFile appends a single command to the history file
 func appendToHistoryFile(cmd string) {
 	histPath := getHistoryPath()
-	
+
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(histPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return // Silently fail
 	}
-	
+
 	// Append to file
 	file, err := os.OpenFile(histPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return // Silently fail
 	}
 	defer file.Close()
-	
+
 	_, _ = file.WriteString(cmd + "\n")
 }
 
@@ -1557,7 +1840,7 @@ func extractLastArgument(cmd string) string {
 	if cmd == "" {
 		return ""
 	}
-	
+
 	// Handle ad-hoc commands first
 	if strings.HasPrefix(cmd, ".") {
 		parts := strings.Fields(cmd)
@@ -1567,13 +1850,13 @@ func extractLastArgument(cmd string) string {
 		}
 		return ""
 	}
-	
+
 	// For PromQL expressions, we need to find the last meaningful token
 	// This is typically a metric name, label value, or duration
 	separators := "(){}[]\" \t\n,="
 	tokens := []string{}
 	currentToken := ""
-	
+
 	for _, ch := range cmd {
 		if strings.ContainsRune(separators, ch) {
 			if currentToken != "" {
@@ -1587,7 +1870,7 @@ func extractLastArgument(cmd string) string {
 	if currentToken != "" {
 		tokens = append(tokens, currentToken)
 	}
-	
+
 	// Find the last meaningful token (skip operators and keywords)
 	operators := map[string]bool{
 		"and": true, "or": true, "unless": true,
@@ -1595,7 +1878,7 @@ func extractLastArgument(cmd string) string {
 		"group_left": true, "group_right": true,
 		"offset": true, "bool": true,
 	}
-	
+
 	for i := len(tokens) - 1; i >= 0; i-- {
 		token := tokens[i]
 		// Skip operators and common keywords
@@ -1613,6 +1896,6 @@ func extractLastArgument(cmd string) string {
 		// This looks like a metric name or label value - return it
 		return token
 	}
-	
+
 	return ""
 }

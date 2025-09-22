@@ -64,6 +64,17 @@ func main() {
 	replBackend := rootFlags.String("repl", "prompt", "REPL backend: prompt|readline")
 	silent := rootFlags.Bool("silent", false, "suppress startup output")
 	rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
+	// AI flags (override envs)
+	aiProvider := rootFlags.String("ai-provider", "", "AI provider: ollama|openai|claude|grok (env PROMQL_CLI_AI_PROVIDER)")
+	aiNum := rootFlags.Int("ai-num", 3, "number of AI answers to request (env PROMQL_CLI_AI_NUM)")
+	aiOpenAIModel := rootFlags.String("ai-openai-model", "", "OpenAI model (env PROMQL_CLI_OPENAI_MODEL)")
+	aiOpenAIBase := rootFlags.String("ai-openai-base", "", "OpenAI API base URL (env PROMQL_CLI_OPENAI_BASE)")
+	aiClaudeModel := rootFlags.String("ai-claude-model", "", "Claude model (env PROMQL_CLI_ANTHROPIC_MODEL)")
+	aiClaudeBase := rootFlags.String("ai-claude-base", "", "Claude API base URL (env PROMQL_CLI_ANTHROPIC_BASE)")
+	aiXAIModel := rootFlags.String("ai-xai-model", "", "Grok (xAI) model (env PROMQL_CLI_XAI_MODEL)")
+	aiXAIBase := rootFlags.String("ai-xai-base", "", "Grok (xAI) API base URL (env PROMQL_CLI_XAI_BASE)")
+	aiOllamaModel := rootFlags.String("ai-ollama-model", "", "Ollama model (env PROMQL_CLI_OLLAMA_MODEL)")
+	aiOllamaHost := rootFlags.String("ai-ollama-host", "", "Ollama host (env PROMQL_CLI_OLLAMA_HOST)")
 
 	// Prepare shared state
 	storage := NewSimpleStorage()
@@ -78,13 +89,17 @@ func main() {
 		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
 	})
 
-	// load subcommand
+// load subcommand
 	loadFlags := flag.NewFlagSet("load", flag.ContinueOnError)
-	loadCmd := &ffcli.Command{
+	var loadCmd *ffcli.Command
+	loadCmd = &ffcli.Command{
 		Name:       "load",
 		ShortUsage: "promql-cli [--repl=...] load <file.prom>",
 		FlagSet:    loadFlags,
 		Exec: func(ctx context.Context, args []string) error {
+			// Apply AI configuration from flags (override envs)
+			aiNumAnswersFlag = *aiNum
+			ConfigureAIFromFlags(*aiProvider, *aiOpenAIModel, *aiOpenAIBase, *aiClaudeModel, *aiClaudeBase, *aiXAIModel, *aiXAIBase, *aiOllamaModel, *aiOllamaHost)
 			if len(args) != 1 {
 				return fmt.Errorf("load requires <file.prom>")
 			}
@@ -113,6 +128,10 @@ func main() {
 		ShortUsage: "promql-cli [--repl=...] query [flags] [<file.prom>]",
 		FlagSet:    queryFlags,
 		Exec: func(ctx context.Context, args []string) error {
+			// Apply AI configuration from flags (override envs)
+			aiNumAnswersFlag = *aiNum
+			ConfigureAIFromFlags(*aiProvider, *aiOpenAIModel, *aiOpenAIBase, *aiClaudeModel, *aiClaudeBase, *aiXAIModel, *aiXAIBase, *aiOllamaModel, *aiOllamaHost)
+
 			// Optional positional metrics file
 			var metricsFile string
 			if len(args) > 0 {
@@ -234,7 +253,7 @@ func printUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 	switch v := result.Value.(type) {
 	case promql.Vector:
 		if len(v) == 0 {
-		fmt.Fprintln(w, "No results found")
+			fmt.Fprintln(w, "No results found")
 			return
 		}
 		fmt.Fprintf(w, "Vector (%d samples):\n", len(v))
@@ -247,6 +266,8 @@ func printUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 		}
 	case promql.Scalar:
 		fmt.Fprintf(w, "Scalar: %g @ %s\n", v.V, model.Time(v.T).Time().Format(time.RFC3339))
+	case promql.String:
+		fmt.Fprintf(w, "String: %s\n", v.V)
 	case promql.Matrix:
 		if len(v) == 0 {
 			fmt.Println("No results found")
