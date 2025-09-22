@@ -1,5 +1,4 @@
 //go:build prompt
-// +build prompt
 
 package main
 
