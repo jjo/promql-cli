@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
@@ -30,250 +31,171 @@ func init() {
 	promparser.EnableExperimentalFunctions = true
 }
 
+// normalizeLongOpts converts GNU-style "--long" options to stdlib-flag style "-long".
+// It leaves the "--" end-of-flags marker intact and doesn't touch single-dash or positional args.
+func normalizeLongOpts(args []string) []string {
+	out := make([]string, 0, len(args))
+	seenTerminator := false
+	for _, a := range args {
+		if seenTerminator {
+			out = append(out, a)
+			continue
+		}
+		if a == "--" {
+			seenTerminator = true
+			out = append(out, a)
+			continue
+		}
+		if strings.HasPrefix(a, "--") && len(a) > 2 {
+			// Convert --flag and --flag=value to -flag and -flag=value
+			out = append(out, "-"+a[2:])
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // main is the entry point of the application.
 // It provides a command-line interface for loading metrics and executing PromQL queries.
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage:")
-		fmt.Println("  Load metrics: go run main.go load <file.prom>")
-		fmt.Println("  Query:        go run main.go query [flags] <file.prom>")
-		fmt.Println("  Version:      go run main.go version")
-		fmt.Println("")
-		fmt.Println("Common flags:")
-		fmt.Println("  -s, --silent                 Suppress startup output (banners, summaries)")
-		fmt.Println("      --repl {prompt|readline} Select REPL backend (default: prompt)")
-		fmt.Println("")
-		fmt.Println("Flags (query mode):")
-		fmt.Println("  -q, --query \"<expr>\"       Execute a single PromQL expression and exit (no REPL)")
-		fmt.Println("  -o, --output json             When used with -q, output JSON (default is text)")
-		fmt.Println("  -c, --command \"cmds\"        Run semicolon-separated commands before the session (e.g., \".scrape URL; .metrics\")")
-		fmt.Println("")
-		fmt.Println("Features:")
-		fmt.Println("  - Dynamic auto-completion for metric names, labels, and values")
-		fmt.Println("  - Context-aware suggestions based on query position")
-		fmt.Println("  - Full PromQL function and operator completion")
-		fmt.Println("  - Tab completion similar to Prometheus UI")
-		fmt.Println("  - Ad-hoc commands: .help, .labels, .metrics, .seed, .at")
-		fmt.Println("Tip: use -c to run startup commands before the session, e.g. -c \".scrape http://localhost:9100/metrics; .metrics\"")
-		os.Exit(1)
-	}
+	// Root (global) flags
+	rootFlags := flag.NewFlagSet("promql-cli", flag.ContinueOnError)
+	replBackend := rootFlags.String("repl", "prompt", "REPL backend: prompt|readline")
+	silent := rootFlags.Bool("silent", false, "suppress startup output")
+	rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
 
-	// Fast-path for version banner
-	if os.Args[1] == "version" {
-		printVersion()
-		return
-	}
+	// Composite AI flag (preferred)
+	var aikv aiKV
+	rootFlags.Var(&aikv, "ai", "AI options as key=value pairs (comma/space separated). Example: --ai 'provider=claude model=opus answers=3' (env PROMQL_CLI_AI)")
 
+	// Prepare shared state
 	storage := NewSimpleStorage()
-
-	// Create upstream Prometheus PromQL engine
 	engine := promql.NewEngine(promql.EngineOpts{
-		Logger:               nil,
-		Reg:                  nil,
-		MaxSamples:           50000000,
-		Timeout:              30 * time.Second,
-		LookbackDelta:        5 * time.Minute,
-		EnableAtModifier:     true,
-		EnableNegativeOffset: true,
-		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 {
-			return 60 * 1000 // 60 seconds
-		},
+		Logger:                   nil,
+		Reg:                      nil,
+		MaxSamples:               50000000,
+		Timeout:                  30 * time.Second,
+		LookbackDelta:            5 * time.Minute,
+		EnableAtModifier:         true,
+		EnableNegativeOffset:     true,
+		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
 	})
 
-
-	// Global: parse --repl from anywhere in args (default: prompt)
-	replBackend := "prompt"
-	for i := 1; i < len(os.Args); i++ {
-		a := os.Args[i]
-		if a == "--repl" {
-			if i+1 >= len(os.Args) {
-				log.Fatal("--repl requires an argument: prompt or readline")
+	// load subcommand
+	loadFlags := flag.NewFlagSet("load", flag.ContinueOnError)
+	var loadCmd *ffcli.Command
+	loadCmd = &ffcli.Command{
+		Name:       "load",
+		ShortUsage: "promql-cli [--repl=...] load <file.prom>",
+		FlagSet:    loadFlags,
+		Exec: func(ctx context.Context, args []string) error {
+			// Apply AI configuration (composite/env/profile)
+			ConfigureAIComposite(map[string]string(aikv))
+			if len(args) != 1 {
+				return fmt.Errorf("load requires <file.prom>")
 			}
-			replBackend = strings.ToLower(os.Args[i+1])
-			i++
-			continue
-		}
-		if strings.HasPrefix(a, "--repl=") {
-			replBackend = strings.ToLower(strings.TrimPrefix(a, "--repl="))
-		}
+			metricsFile := args[0]
+			if err := loadMetricsFromFile(storage, metricsFile); err != nil {
+				return fmt.Errorf("failed to load metrics: %w", err)
+			}
+			if !*silent {
+				fmt.Printf("Successfully loaded metrics from %s\n", metricsFile)
+				printStorageInfo(storage)
+			}
+			return nil
+		},
 	}
 
-	switch os.Args[1] {
-	case "load":
-		// Flags: -s/--silent
-		args := os.Args[2:]
-		var (
-			metricsFile string
-			silent      bool
-		)
-		for i := 0; i < len(args); i++ {
-			a := args[i]
-			if a == "-s" || a == "--silent" {
-				silent = true
-				continue
-			}
-			if a == "--repl" {
-				i++
-				if i >= len(args) { log.Fatal("--repl requires an argument") }
-				// already parsed globally; accept and continue
-				continue
-			}
-			if strings.HasPrefix(a, "--repl=") {
-				// already parsed globally; accept and continue
-				continue
-			}
-			if strings.HasPrefix(a, "-") {
-				log.Fatalf("Unknown flag: %s", a)
-			}
-			if metricsFile == "" {
-				metricsFile = a
-			} else {
-				log.Fatalf("Unexpected extra argument: %s", a)
-			}
-		}
-		if metricsFile == "" {
-			log.Fatal("Please specify a metrics file")
-		}
+	// query subcommand
+	queryFlags := flag.NewFlagSet("query", flag.ContinueOnError)
+	oneOffQuery := queryFlags.String("query", "", "one-off query expr; exit")
+	queryFlags.StringVar(oneOffQuery, "q", "", "shorthand for --query")
+	output := queryFlags.String("output", "", "output format for -q (json)")
+	initCommands := queryFlags.String("command", "", "semicolon-separated pre-commands")
+	queryFlags.StringVar(initCommands, "c", "", "shorthand for --command")
 
-		if err := loadMetricsFromFile(storage, metricsFile); err != nil {
-			log.Fatalf("Failed to load metrics: %v", err)
-		}
+	queryCmd := &ffcli.Command{
+		Name:       "query",
+		ShortUsage: "promql-cli [--repl=...] query [flags] [<file.prom>]",
+		FlagSet:    queryFlags,
+		Exec: func(ctx context.Context, args []string) error {
+			// Apply AI configuration (composite/env/profile)
+			ConfigureAIComposite(map[string]string(aikv))
 
-		if !silent {
-			fmt.Printf("Successfully loaded metrics from %s\n", metricsFile)
-			printStorageInfo(storage)
-		}
+			// Optional positional metrics file
+			var metricsFile string
+			if len(args) > 0 {
+				metricsFile = args[0]
+			}
+			if metricsFile != "" {
+				if err := loadMetricsFromFile(storage, metricsFile); err != nil {
+					return fmt.Errorf("failed to load metrics: %w", err)
+				}
+				if !*silent {
+					fmt.Printf("Loaded metrics from %s\n", metricsFile)
+					printStorageInfo(storage)
+					fmt.Println()
+				}
+			}
 
-	case "query":
-		// Parse flags: -q/--query, -o/--output, and metrics file path
-		args := os.Args[2:]
-		var (
-			metricsFile  string
-			oneOffQuery  string
-			outputJSON   bool
-			silent       bool
-			initCommands string
-		)
-		for i := 0; i < len(args); i++ {
-			a := args[i]
-			if a == "-q" || a == "--query" {
-				i++
-				if i >= len(args) {
-					log.Fatal("--query requires an argument")
-				}
-				oneOffQuery = args[i]
-				continue
+			if *initCommands != "" {
+				runInitCommands(engine, storage, *initCommands, *silent)
 			}
-			if strings.HasPrefix(a, "--query=") {
-				oneOffQuery = strings.TrimPrefix(a, "--query=")
-				continue
-			}
-			if a == "-o" || a == "--output" {
-				i++
-				if i >= len(args) {
-					log.Fatal("--output requires an argument (e.g., json)")
-				}
-				if strings.EqualFold(args[i], "json") {
-					outputJSON = true
-				}
-				continue
-			}
-			if strings.HasPrefix(a, "--output=") {
-				val := strings.TrimPrefix(a, "--output=")
-				if strings.EqualFold(val, "json") {
-					outputJSON = true
-				}
-				continue
-			}
-			if a == "-c" || a == "--command" {
-				i++
-				if i >= len(args) {
-					log.Fatal("--command requires an argument")
-				}
-				if initCommands == "" {
-					initCommands = args[i]
-				} else {
-					initCommands = initCommands + "; " + args[i]
-				}
-				continue
-			}
-			if strings.HasPrefix(a, "--command=") {
-				val := strings.TrimPrefix(a, "--command=")
-				if initCommands == "" {
-					initCommands = val
-				} else {
-					initCommands = initCommands + "; " + val
-				}
-				continue
-			}
-			if a == "-s" || a == "--silent" {
-				silent = true
-				continue
-			}
-			if a == "--repl" {
-				i++
-				if i >= len(args) { log.Fatal("--repl requires an argument") }
-				// already parsed globally; accept and continue
-				continue
-			}
-			if strings.HasPrefix(a, "--repl=") {
-				// already parsed globally; accept and continue
-				continue
-			}
-			if strings.HasPrefix(a, "-") {
-				log.Fatalf("Unknown flag: %s", a)
-			}
-			// positional -> metrics file
-			if metricsFile == "" {
-				metricsFile = a
-			} else {
-				log.Fatalf("Unexpected extra argument: %s", a)
-			}
-		}
-		if metricsFile != "" {
-			if err := loadMetricsFromFile(storage, metricsFile); err != nil {
-				log.Fatalf("Failed to load metrics: %v", err)
-			}
-			if !silent {
-				fmt.Printf("Loaded metrics from %s\n", metricsFile)
-				printStorageInfo(storage)
-				fmt.Println()
-			}
-		}
 
-		// Run initialization commands if provided (before one-off or REPL)
-		if initCommands != "" {
-			runInitCommands(engine, storage, initCommands, silent)
-		}
-
-		if oneOffQuery != "" {
-			// Execute a single expression and exit
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			q, err := engine.NewInstantQuery(ctx, storage, nil, oneOffQuery, time.Now())
-			if err != nil {
+			if *oneOffQuery != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				q, err := engine.NewInstantQuery(ctx, storage, nil, *oneOffQuery, time.Now())
+				if err != nil {
+					cancel()
+					return fmt.Errorf("error creating query: %w", err)
+				}
+				res := q.Exec(ctx)
 				cancel()
-				log.Fatalf("Error creating query: %v", err)
-			}
-			res := q.Exec(ctx)
-			cancel()
-			if res.Err != nil {
-				log.Fatalf("Error: %v", res.Err)
-			}
-			if outputJSON {
-				if err := printResultJSON(res); err != nil {
-					log.Fatalf("Failed to render JSON: %v", err)
+				if res.Err != nil {
+					return fmt.Errorf("error: %w", res.Err)
 				}
-			} else {
-				printUpstreamQueryResult(res)
+				if strings.EqualFold(*output, "json") {
+					if err := printResultJSON(res); err != nil {
+						return fmt.Errorf("failed to render JSON: %w", err)
+					}
+				} else {
+					printUpstreamQueryResult(res)
+				}
+				return nil
 			}
-			return
+
+			// Interactive REPL
+			runInteractiveQueriesDispatch(engine, storage, *silent, *replBackend)
+			return nil
+		},
+	}
+
+	// version subcommand
+	versionCmd := &ffcli.Command{
+		Name: "version",
+		Exec: func(ctx context.Context, _ []string) error { printVersion(); return nil },
+	}
+
+	root := &ffcli.Command{
+		Name:       "promql-cli",
+		ShortUsage: "promql-cli [--repl=prompt|readline] <subcommand> [flags]",
+		FlagSet:    rootFlags,
+		Subcommands: []*ffcli.Command{
+			loadCmd, queryCmd, versionCmd,
+		},
+		Exec: func(ctx context.Context, _ []string) error { return flag.ErrHelp },
+	}
+
+	// Normalize GNU-style long options ("--long") to stdlib format ("-long")
+	norm := normalizeLongOpts(os.Args[1:])
+	// Parse args and run
+	if err := root.ParseAndRun(context.Background(), norm); err != nil {
+		if err == flag.ErrHelp {
+			root.FlagSet.Usage()
+			os.Exit(1)
 		}
-
-		// Interactive REPL
-			runInteractiveQueriesDispatch(engine, storage, silent, replBackend)
-
-	default:
-		fmt.Printf("Unknown command: %s\n", os.Args[1])
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -329,7 +251,7 @@ func printUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 	switch v := result.Value.(type) {
 	case promql.Vector:
 		if len(v) == 0 {
-		fmt.Fprintln(w, "No results found")
+			fmt.Fprintln(w, "No results found")
 			return
 		}
 		fmt.Fprintf(w, "Vector (%d samples):\n", len(v))
@@ -342,6 +264,8 @@ func printUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 		}
 	case promql.Scalar:
 		fmt.Fprintf(w, "Scalar: %g @ %s\n", v.V, model.Time(v.T).Time().Format(time.RFC3339))
+	case promql.String:
+		fmt.Fprintf(w, "String: %s\n", v.V)
 	case promql.Matrix:
 		if len(v) == 0 {
 			fmt.Println("No results found")

@@ -99,6 +99,10 @@ docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query [...]
   - Without args, show current pinned evaluation time
   - With an argument, pin all future queries to a specific evaluation time until removed
   - Examples: `.pinat` (show), `.pinat now`, `.pinat 2025-09-16T20:40:00Z`, `.pinat remove`
+- `.ai <intent>`
+  - Use AI to propose PromQL queries for your loaded metrics
+  - Providers: ollama (default), openai, claude, grok — set via `PROMQL_CLI_AI_PROVIDER`
+  - Examples: `.ai top 5 pods by http error rate over last hour`, `.ai cpu usage by mode per instance in 30m`
 
 ## Notes
 - Input files must be in Prometheus text exposition format.
@@ -143,6 +147,13 @@ sum by (job) ( \
 ```
 
 #### Configuration
+
+Environment variables:
+- `PROMQL_CLI_AI_PROVIDER` = `ollama` | `openai` | `claude` | `grok` (default: `ollama`)
+- For OpenAI: `OPENAI_API_KEY`, optional `PROMQL_CLI_OPENAI_MODEL` (default: gpt-4o-mini), `PROMQL_CLI_OPENAI_BASE` (default: https://api.openai.com/v1)
+- For Claude: `ANTHROPIC_API_KEY`, optional `PROMQL_CLI_ANTHROPIC_MODEL` (default: claude-3-5-sonnet-20240620), `PROMQL_CLI_ANTHROPIC_BASE`
+- For Grok (xAI): `XAI_API_KEY`, optional `PROMQL_CLI_XAI_MODEL` (default: grok-2), `PROMQL_CLI_XAI_BASE`
+- For Ollama: optional `PROMQL_CLI_OLLAMA_MODEL` (default: llama3.1), `PROMQL_CLI_OLLAMA_HOST` (default: http://localhost:11434)
 
 The completion behavior can be configured via environment variables:
 

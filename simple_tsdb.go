@@ -80,7 +80,7 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 	// Convert each metric family to individual samples
 	for _, mf := range metricFamilies {
 		metricName := mf.GetName()
-		
+
 		// Store help text if available
 		if mf.Help != nil && *mf.Help != "" {
 			// Clean up help text - replace newlines with spaces for better display

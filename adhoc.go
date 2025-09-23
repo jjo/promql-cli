@@ -9,11 +9,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	promparser "github.com/prometheus/prometheus/promql/parser"
 )
 
 // pinnedEvalTime, when set, forces future query evaluation to use this timestamp.
 // It is used by the REPL and can be controlled via the .pinat ad-hoc command.
 var pinnedEvalTime *time.Time
+
+// When true, the go-prompt completer will present an AI selection menu
+var aiSelectionActive bool
 
 // refreshMetricsCache is a function pointer to refresh the metrics cache for autocompletion
 // It's set by the prompt backend when active
@@ -21,6 +26,11 @@ var refreshMetricsCache func(*SimpleStorage)
 
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 // Returns true if the query was handled as an ad-hoc function, false otherwise
+var lastAISuggestions []string
+var lastAIExplanations []string
+var pendingAISuggestion string
+var aiClipboard string
+
 func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 	// .help: show ad-hoc commands usage
 	if strings.HasPrefix(query, ".help") {
@@ -40,6 +50,137 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			}
 		}
 		fmt.Println()
+		return true
+	}
+
+	// .ai: AI-assisted query suggestions
+	if strings.HasPrefix(strings.TrimSpace(query), ".ai") {
+		args := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), ".ai"))
+		if args == "" || args == "help" { // help
+			fmt.Println("Usage: .ai <intent> | .ai ask <intent> | .ai show | .ai <N> | .ai run <N> | .ai edit <N>")
+			fmt.Println("Examples:")
+			fmt.Println("  .ai top 5 pods by http error rate over last hour")
+			fmt.Println("  .ai 1        # run suggestion [1] if available")
+			fmt.Println("  .ai show     # reprint last suggestions")
+			return true
+		}
+		// Selection: .ai show
+		if args == "show" {
+			if len(lastAISuggestions) == 0 {
+				fmt.Println("No AI suggestions yet. Try: .ai <intent>")
+				return true
+			}
+			// Activate the inline AI selection workflow (same as post-ask)
+			aiSelectionActive = true
+			fmt.Println("AI suggestions (valid PromQL):")
+			for i, s := range lastAISuggestions {
+				fmt.Printf("  [%d] %s\n", i+1, s)
+				if i < len(lastAIExplanations) {
+					if ex := strings.TrimSpace(lastAIExplanations[i]); ex != "" {
+						fmt.Printf("      - %s\n", ex)
+					}
+				}
+			}
+			fmt.Println("Choose with: .ai edit <N>  or  .ai run <N>  (1-based)")
+			fmt.Println("Tips: use Tab to open the dropdown and pick an item.")
+			return true
+		}
+		// Selection: .ai run N or .ai N
+		if strings.HasPrefix(args, "run ") || regexp.MustCompile(`^\d+$`).MatchString(args) {
+			var idxStr string
+			if strings.HasPrefix(args, "run ") {
+				idxStr = strings.TrimSpace(strings.TrimPrefix(args, "run "))
+			} else {
+				idxStr = args
+			}
+			n, err := strconv.Atoi(idxStr)
+			if err != nil || n <= 0 {
+				fmt.Println("Usage: .ai run <N>  (N is 1-based)")
+				return true
+			}
+			if len(lastAISuggestions) == 0 {
+				fmt.Println("No AI suggestions yet. Try: .ai <intent>")
+				return true
+			}
+			if n > len(lastAISuggestions) {
+				fmt.Printf("Only %d suggestions available\n", len(lastAISuggestions))
+				return true
+			}
+			pendingAISuggestion = lastAISuggestions[n-1]
+			fmt.Printf("Running suggestion [%d]: %s\n", n, pendingAISuggestion)
+			return true
+		}
+		// Selection: .ai edit N
+		if strings.HasPrefix(args, "edit ") {
+			idxStr := strings.TrimSpace(strings.TrimPrefix(args, "edit "))
+			n, err := strconv.Atoi(idxStr)
+			if err != nil || n <= 0 {
+				fmt.Println("Usage: .ai edit <N>  (N is 1-based)")
+				return true
+			}
+			if len(lastAISuggestions) == 0 {
+				fmt.Println("No AI suggestions yet. Try: .ai <intent>")
+				return true
+			}
+			if n > len(lastAISuggestions) {
+				fmt.Printf("Only %d suggestions available\n", len(lastAISuggestions))
+				return true
+			}
+			aiClipboard = lastAISuggestions[n-1]
+			fmt.Printf("Prepared suggestion [%d] for editing. Press Ctrl-Y to paste.\n", n)
+			return true
+		}
+		// Guard: ".ai run" or ".ai edit" without index should not call AI, show usage instead
+		if args == "run" || strings.HasPrefix(args, "run\t") || strings.HasSuffix(args, "run ") {
+			fmt.Println("Usage: .ai run <N>  (N is 1-based)")
+			return true
+		}
+		if args == "edit" || strings.HasPrefix(args, "edit\t") || strings.HasSuffix(args, "edit ") {
+			fmt.Println("Usage: .ai edit <N>  (N is 1-based)")
+			return true
+		}
+		// Support alias: .ai ask <intent>
+		if strings.HasPrefix(args, "ask ") {
+			args = strings.TrimSpace(strings.TrimPrefix(args, "ask "))
+		}
+		// Generate new suggestions
+		suggestions, err := aiSuggestQueries(storage, args)
+		if err != nil {
+			fmt.Printf("AI error: %v\n", err)
+			return true
+		}
+		var validQ []string
+		var validE []string
+		for _, sug := range suggestions {
+			q := strings.TrimSpace(sug.Query)
+			if q == "" {
+				continue
+			}
+			q = cleanCandidate(q)
+			if q == "" {
+				continue
+			}
+			if _, err := promparser.ParseExpr(q); err == nil {
+				validQ = append(validQ, q)
+				validE = append(validE, strings.TrimSpace(sug.Explain))
+			}
+		}
+		if len(validQ) == 0 {
+			fmt.Println("AI returned no valid PromQL suggestions.")
+			return true
+		}
+		lastAISuggestions = validQ
+		lastAIExplanations = validE
+		aiSelectionActive = true
+		fmt.Println("AI suggestions (valid PromQL):")
+		for i := range validQ {
+			fmt.Printf("  [%d] %s\n", i+1, validQ[i])
+			if ex := strings.TrimSpace(validE[i]); ex != "" {
+				fmt.Printf("      - %s\n", ex)
+			}
+		}
+		fmt.Println("Choose with: .ai edit <N>  or  .ai run <N>  (1-based)")
+		fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion.")
 		return true
 	}
 
@@ -279,12 +420,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			totalSamples += len(ss)
 		}
 		fmt.Printf("Dropped '%s': -%d samples (now: %d metrics, %d samples)\n", metric, removed, totalMetrics, totalSamples)
-		
+
 		// Refresh metrics cache for autocompletion if using prompt backend
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)
 		}
-		
+
 		return true
 	}
 
@@ -339,12 +480,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			afterSamples += len(ss)
 		}
 		fmt.Printf("Loaded %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n", path, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
-		
+
 		// Refresh metrics cache for autocompletion if using prompt backend
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)
 		}
-		
+
 		return true
 	}
 
@@ -431,7 +572,7 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			}
 		}
 
-		client := &http.Client{Timeout: 20 * time.Second}
+		client := &http.Client{Timeout: 60 * time.Second}
 		for i := 0; i < count; i++ {
 			beforeMetrics := len(storage.metrics)
 			beforeSamples := 0
@@ -475,12 +616,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 				time.Sleep(delay)
 			}
 		}
-		
+
 		// Refresh metrics cache for autocompletion if using prompt backend
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)
 		}
-		
+
 		return true
 	}
 
@@ -525,12 +666,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		}
 		seedHistory(storage, metric, steps, step)
 		fmt.Printf("Seeded %d historical points (step %s) for metric '%s'\n", steps, step, metric)
-		
+
 		// Refresh metrics cache for autocompletion if using prompt backend
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)
 		}
-		
+
 		return true
 	}
 
