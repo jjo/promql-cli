@@ -59,37 +59,37 @@ func normalizeLongOpts(args []string) []string {
 // main is the entry point of the application.
 // It provides a command-line interface for loading metrics and executing PromQL queries.
 func main() {
-// Root (global) flags
-rootFlags := flag.NewFlagSet("promql-cli", flag.ContinueOnError)
-replBackend := rootFlags.String("repl", "prompt", "REPL backend: prompt|readline")
-silent := rootFlags.Bool("silent", false, "suppress startup output")
-rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
+	// Root (global) flags
+	rootFlags := flag.NewFlagSet("promql-cli", flag.ContinueOnError)
+	replBackend := rootFlags.String("repl", "prompt", "REPL backend: prompt|readline")
+	silent := rootFlags.Bool("silent", false, "suppress startup output")
+	rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
 
-// Composite AI flag (preferred)
-var aikv aiKV
-rootFlags.Var(&aikv, "ai", "AI options as key=value pairs (comma/space separated). Example: --ai 'provider=claude model=opus answers=3' (env PROMQL_CLI_AI)")
+	// Composite AI flag (preferred)
+	var aikv aiKV
+	rootFlags.Var(&aikv, "ai", "AI options as key=value pairs (comma/space separated). Example: --ai 'provider=claude model=opus answers=3' (env PROMQL_CLI_AI)")
 
 	// Prepare shared state
 	storage := NewSimpleStorage()
 	engine := promql.NewEngine(promql.EngineOpts{
-		Logger:               nil,
-		Reg:                  nil,
-		MaxSamples:           50000000,
-		Timeout:              30 * time.Second,
-		LookbackDelta:        5 * time.Minute,
-		EnableAtModifier:     true,
-		EnableNegativeOffset: true,
+		Logger:                   nil,
+		Reg:                      nil,
+		MaxSamples:               50000000,
+		Timeout:                  30 * time.Second,
+		LookbackDelta:            5 * time.Minute,
+		EnableAtModifier:         true,
+		EnableNegativeOffset:     true,
 		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
 	})
 
-// load subcommand
+	// load subcommand
 	loadFlags := flag.NewFlagSet("load", flag.ContinueOnError)
 	var loadCmd *ffcli.Command
-loadCmd = &ffcli.Command{
+	loadCmd = &ffcli.Command{
 		Name:       "load",
 		ShortUsage: "promql-cli [--repl=...] load <file.prom>",
 		FlagSet:    loadFlags,
-Exec: func(ctx context.Context, args []string) error {
+		Exec: func(ctx context.Context, args []string) error {
 			// Apply AI configuration (composite/env/profile)
 			ConfigureAIComposite(map[string]string(aikv))
 			if len(args) != 1 {
@@ -115,11 +115,11 @@ Exec: func(ctx context.Context, args []string) error {
 	initCommands := queryFlags.String("command", "", "semicolon-separated pre-commands")
 	queryFlags.StringVar(initCommands, "c", "", "shorthand for --command")
 
-queryCmd := &ffcli.Command{
+	queryCmd := &ffcli.Command{
 		Name:       "query",
 		ShortUsage: "promql-cli [--repl=...] query [flags] [<file.prom>]",
 		FlagSet:    queryFlags,
-Exec: func(ctx context.Context, args []string) error {
+		Exec: func(ctx context.Context, args []string) error {
 			// Apply AI configuration (composite/env/profile)
 			ConfigureAIComposite(map[string]string(aikv))
 
@@ -146,12 +146,19 @@ Exec: func(ctx context.Context, args []string) error {
 			if *oneOffQuery != "" {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				q, err := engine.NewInstantQuery(ctx, storage, nil, *oneOffQuery, time.Now())
-				if err != nil { cancel(); return fmt.Errorf("error creating query: %w", err) }
+				if err != nil {
+					cancel()
+					return fmt.Errorf("error creating query: %w", err)
+				}
 				res := q.Exec(ctx)
 				cancel()
-				if res.Err != nil { return fmt.Errorf("error: %w", res.Err) }
+				if res.Err != nil {
+					return fmt.Errorf("error: %w", res.Err)
+				}
 				if strings.EqualFold(*output, "json") {
-					if err := printResultJSON(res); err != nil { return fmt.Errorf("failed to render JSON: %w", err) }
+					if err := printResultJSON(res); err != nil {
+						return fmt.Errorf("failed to render JSON: %w", err)
+					}
 				} else {
 					printUpstreamQueryResult(res)
 				}
@@ -166,7 +173,7 @@ Exec: func(ctx context.Context, args []string) error {
 
 	// version subcommand
 	versionCmd := &ffcli.Command{
-		Name:    "version",
+		Name: "version",
 		Exec: func(ctx context.Context, _ []string) error { printVersion(); return nil },
 	}
 

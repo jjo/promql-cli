@@ -147,7 +147,7 @@ func ConfigureAIComposite(kv map[string]string) {
 		aiOpenAIModelFlag, aiOpenAIBaseFlag = "", ""
 		aiAnthropicModelFlag, aiAnthropicBaseFlag = "", ""
 		aiOllamaModelFlag, aiOllamaHostFlag = "", ""
-	case "ollama", "":
+	case "ollama":
 		// default provider if unspecified
 		aiProviderFlag = "ollama"
 		aiOllamaModelFlag = firstNonEmpty(cfg["model"], cfg["ollama_model"], os.Getenv("PROMQL_CLI_OLLAMA_MODEL"), "llama3.1")

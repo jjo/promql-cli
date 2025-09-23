@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/prometheus/promql"
 	promparser "github.com/prometheus/prometheus/promql/parser"
 )
+
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
 func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent bool) {
@@ -41,10 +42,10 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 
 	// State for prefix-based history navigation
 	type histState struct {
-		lastPrefix string   // prefix captured before Up/Down
-		seedLine   []rune   // editing line before entering navigation for lastPrefix
-		matches    []int    // indices into userHistory (most recent first)
-		idx        int      // current selection index in matches; len(matches) means seedLine
+		lastPrefix string // prefix captured before Up/Down
+		seedLine   []rune // editing line before entering navigation for lastPrefix
+		matches    []int  // indices into userHistory (most recent first)
+		idx        int    // current selection index in matches; len(matches) means seedLine
 	}
 	state := &histState{idx: 0}
 
@@ -327,12 +328,12 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 								break
 							}
 						}
-						
+
 						// If no opening quote, add it at the beginning
 						if !hasOpenQuote {
 							suf = append([]rune{'"'}, suf...)
 						}
-						
+
 						// Add closing quote if option is enabled
 						if pac.opts.AutoCloseQuote {
 							suf = append(suf, '"')
@@ -401,159 +402,165 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	inLabels := lastOpenBrace > lastCloseBrace && lastOpenBrace != -1
 
 	if !inLabels && strings.HasPrefix(trimmed, ".") {
-			// If typing the command token, suggest available ad-hoc commands
-			if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-				// Special-case .ai to require subcommand
-				if strings.HasPrefix(strings.ToLower(currentWord), ".ai") {
-					return []string{".ai ask ", ".ai run ", ".ai edit ", ".ai show"}
+		// If typing the command token, suggest available ad-hoc commands
+		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
+			// Special-case .ai to require subcommand
+			if strings.HasPrefix(strings.ToLower(currentWord), ".ai") {
+				return []string{".ai ask ", ".ai run ", ".ai edit ", ".ai show"}
+			}
+			cmds := GetAdHocCommandNames()
+			var out []string
+			for _, c := range cmds {
+				if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
+					out = append(out, c)
 				}
-				cmds := GetAdHocCommandNames()
+			}
+			return out
+		}
+		// If after ".ai ", offer subcommands or indices
+		if strings.HasPrefix(strings.ToLower(trimmed), ".ai ") {
+			after := strings.TrimSpace(trimmed[4:])
+			low := strings.ToLower(after)
+			if after == "" {
+				return []string{"ask ", "run ", "edit ", "show"}
+			}
+			if strings.HasPrefix(low, "run ") || strings.HasPrefix(low, "edit ") {
+				// suggest indices
+				rest := after
+				if strings.HasPrefix(low, "run ") {
+					rest = strings.TrimSpace(after[len("run "):])
+				}
+				if strings.HasPrefix(low, "edit ") {
+					rest = strings.TrimSpace(after[len("edit "):])
+				}
+				prefixNum := rest
+				max := len(lastAISuggestions)
+				if max > 20 {
+					max = 20
+				}
 				var out []string
-				for _, c := range cmds {
-					if strings.HasPrefix(strings.ToLower(c), strings.ToLower(currentWord)) {
-						out = append(out, c)
+				for i := 1; i <= max; i++ {
+					n := fmt.Sprintf("%d", i)
+					if prefixNum == "" || strings.HasPrefix(n, prefixNum) {
+						out = append(out, n)
 					}
 				}
 				return out
 			}
-			// If after ".ai ", offer subcommands or indices
-			if strings.HasPrefix(strings.ToLower(trimmed), ".ai ") {
-				after := strings.TrimSpace(trimmed[4:])
-				low := strings.ToLower(after)
-				if after == "" {
-					return []string{"ask ", "run ", "edit ", "show"}
+			// Otherwise, when typing "ask" or "show" we don't complete beyond token
+			return []string{}
+		}
+		// If after ".labels ", ".seed ", ".drop ", or ".timestamps ", complete metric names
+		if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") ||
+			strings.HasPrefix(trimmed, ".drop ") || strings.HasPrefix(trimmed, ".timestamps ") {
+			return pac.getMetricNameCompletions(currentWord)
+		}
+		// No further completions for .help and .metrics
+		if trimmed == ".help" || trimmed == ".metrics" || strings.HasPrefix(trimmed, ".help ") || strings.HasPrefix(trimmed, ".metrics ") {
+			return []string{}
+		}
+		// If after ".load " or ".save ", complete filesystem paths (current word = base name)
+		if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") {
+			// Extract the path substring after the command token
+			var pathSoFar string
+			if strings.HasPrefix(trimmed, ".load ") {
+				pathSoFar = trimmed[len(".load "):]
+			} else {
+				pathSoFar = trimmed[len(".save "):]
+			}
+			return pac.getFilePathCompletions(pathSoFar, currentWord)
+		}
+		// If after ".scrape ", offer URL examples
+		if strings.HasPrefix(trimmed, ".scrape ") {
+			after := trimmed[len(".scrape "):]
+			// Only offer suggestions if no space yet (still typing URL)
+			if !strings.Contains(after, " ") {
+				urlExamples := []string{
+					"http://localhost:9090/metrics",
+					"http://localhost:9100/metrics",
+					"http://localhost:8080/metrics",
+					"http://localhost:3000/metrics",
+					"http://localhost:9093/metrics",
+					"http://localhost:9091/metrics",
+					"http://localhost:2112/metrics",
+					"http://localhost:9115/metrics",
 				}
-				if strings.HasPrefix(low, "run ") || strings.HasPrefix(low, "edit ") {
-					// suggest indices
-					rest := after
-					if strings.HasPrefix(low, "run ") { rest = strings.TrimSpace(after[len("run "):]) }
-					if strings.HasPrefix(low, "edit ") { rest = strings.TrimSpace(after[len("edit "):]) }
-					prefixNum := rest
-					max := len(lastAISuggestions)
-					if max > 20 { max = 20 }
+				var out []string
+				for _, url := range urlExamples {
+					// Show all URLs when currentWord is empty or filter if typing
+					if currentWord == "" || strings.HasPrefix(url, currentWord) {
+						out = append(out, url)
+					}
+				}
+				return out
+			}
+			return []string{}
+		}
+		// If after ".pinat ", offer time presets similar to .at
+		if strings.HasPrefix(trimmed, ".pinat ") {
+			cmdIdx := strings.LastIndex(line[:pos], ".pinat ")
+			if cmdIdx >= 0 {
+				after := line[cmdIdx+7 : pos]
+				// If still typing time token (no space yet), suggest presets
+				if sp := strings.IndexAny(after, " \t"); sp == -1 {
+					presets := []string{
+						"now", "now-5m", "now-15m", "now-30m", "now-1h", "now-2h",
+						"now-6h", "now-12h", "now-24h", "now-7d",
+						"now+5m", "now+1h",
+						"remove", // For .pinat
+						time.Now().UTC().Format(time.RFC3339),
+					}
 					var out []string
-					for i := 1; i <= max; i++ {
-						n := fmt.Sprintf("%d", i)
-						if prefixNum == "" || strings.HasPrefix(n, prefixNum) {
-							out = append(out, n)
+					for _, p := range presets {
+						// Show all presets when currentWord is empty or filter if typing
+						if currentWord == "" || strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+							out = append(out, p)
 						}
 					}
 					return out
-				}
-				// Otherwise, when typing "ask" or "show" we don't complete beyond token
-				return []string{}
-			}
-			// If after ".labels ", ".seed ", ".drop ", or ".timestamps ", complete metric names
-			if strings.HasPrefix(trimmed, ".labels ") || strings.HasPrefix(trimmed, ".seed ") ||
-			   strings.HasPrefix(trimmed, ".drop ") || strings.HasPrefix(trimmed, ".timestamps ") {
-				return pac.getMetricNameCompletions(currentWord)
-			}
-			// No further completions for .help and .metrics
-			if trimmed == ".help" || trimmed == ".metrics" || strings.HasPrefix(trimmed, ".help ") || strings.HasPrefix(trimmed, ".metrics ") {
-				return []string{}
-			}
-			// If after ".load " or ".save ", complete filesystem paths (current word = base name)
-			if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") {
-				// Extract the path substring after the command token
-				var pathSoFar string
-				if strings.HasPrefix(trimmed, ".load ") {
-					pathSoFar = trimmed[len(".load "):]
-				} else {
-					pathSoFar = trimmed[len(".save "):]
-				}
-				return pac.getFilePathCompletions(pathSoFar, currentWord)
-			}
-			// If after ".scrape ", offer URL examples
-			if strings.HasPrefix(trimmed, ".scrape ") {
-				after := trimmed[len(".scrape "):]
-				// Only offer suggestions if no space yet (still typing URL)
-				if !strings.Contains(after, " ") {
-					urlExamples := []string{
-						"http://localhost:9090/metrics",
-						"http://localhost:9100/metrics",
-						"http://localhost:8080/metrics",
-						"http://localhost:3000/metrics",
-						"http://localhost:9093/metrics",
-						"http://localhost:9091/metrics",
-						"http://localhost:2112/metrics",
-						"http://localhost:9115/metrics",
-					}
-					var out []string
-					for _, url := range urlExamples {
-						// Show all URLs when currentWord is empty or filter if typing
-						if currentWord == "" || strings.HasPrefix(url, currentWord) {
-							out = append(out, url)
-						}
-					}
-					return out
-				}
-				return []string{}
-			}
-			// If after ".pinat ", offer time presets similar to .at
-			if strings.HasPrefix(trimmed, ".pinat ") {
-				cmdIdx := strings.LastIndex(line[:pos], ".pinat ")
-				if cmdIdx >= 0 {
-					after := line[cmdIdx+7 : pos]
-					// If still typing time token (no space yet), suggest presets
-					if sp := strings.IndexAny(after, " \t"); sp == -1 {
-						presets := []string{
-							"now", "now-5m", "now-15m", "now-30m", "now-1h", "now-2h",
-							"now-6h", "now-12h", "now-24h", "now-7d",
-							"now+5m", "now+1h",
-							"remove", // For .pinat
-							time.Now().UTC().Format(time.RFC3339),
-						}
-						var out []string
-						for _, p := range presets {
-							// Show all presets when currentWord is empty or filter if typing
-							if currentWord == "" || strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
-								out = append(out, p)
-							}
-						}
-						return out
-					}
-				}
-			}
-			// If after ".at ", either offer time presets or transition into query completions
-			if strings.HasPrefix(trimmed, ".at ") {
-				cmdIdx := strings.LastIndex(line[:pos], ".at ")
-				if cmdIdx >= 0 {
-					after := line[cmdIdx+4 : pos]
-					// If still typing time token (no space yet), suggest presets or a space once token is valid
-					if sp := strings.IndexAny(after, " \t"); sp == -1 {
-						tok := strings.TrimSpace(after)
-						if tok != "" {
-							if _, err := parseEvalTime(tok); err == nil || strings.EqualFold(tok, "now") {
-								// insert a space to move into query context
-								return []string{" "}
-							}
-						}
-						presets := []string{
-							"now", "now-5m", "now-15m", "now-30m", "now-1h", "now-2h",
-							"now-6h", "now-12h", "now-24h", "now-7d",
-							"now+5m", "now+1h",
-							time.Now().UTC().Format(time.RFC3339),
-						}
-						var out []string
-						for _, p := range presets {
-							// Show all presets when currentWord is empty or filter if typing
-							if currentWord == "" || strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
-								out = append(out, p)
-							}
-						}
-						return out
-					}
-					// We have a space after time; delegate to query completions for the remainder
-					queryStart := cmdIdx + 4 + strings.IndexAny(line[cmdIdx+4:], " \t") + 1
-					if queryStart <= len(line) {
-						subline := line[queryStart:]
-						subpos := pos - queryStart
-						subWord, _ := pac.getCurrentWord(subline, subpos)
-						return pac.getCompletions(subline, subpos, subWord)
-					}
 				}
 			}
 		}
+		// If after ".at ", either offer time presets or transition into query completions
+		if strings.HasPrefix(trimmed, ".at ") {
+			cmdIdx := strings.LastIndex(line[:pos], ".at ")
+			if cmdIdx >= 0 {
+				after := line[cmdIdx+4 : pos]
+				// If still typing time token (no space yet), suggest presets or a space once token is valid
+				if sp := strings.IndexAny(after, " \t"); sp == -1 {
+					tok := strings.TrimSpace(after)
+					if tok != "" {
+						if _, err := parseEvalTime(tok); err == nil || strings.EqualFold(tok, "now") {
+							// insert a space to move into query context
+							return []string{" "}
+						}
+					}
+					presets := []string{
+						"now", "now-5m", "now-15m", "now-30m", "now-1h", "now-2h",
+						"now-6h", "now-12h", "now-24h", "now-7d",
+						"now+5m", "now+1h",
+						time.Now().UTC().Format(time.RFC3339),
+					}
+					var out []string
+					for _, p := range presets {
+						// Show all presets when currentWord is empty or filter if typing
+						if currentWord == "" || strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
+							out = append(out, p)
+						}
+					}
+					return out
+				}
+				// We have a space after time; delegate to query completions for the remainder
+				queryStart := cmdIdx + 4 + strings.IndexAny(line[cmdIdx+4:], " \t") + 1
+				if queryStart <= len(line) {
+					subline := line[queryStart:]
+					subpos := pos - queryStart
+					subWord, _ := pac.getCurrentWord(subline, subpos)
+					return pac.getCompletions(subline, subpos, subWord)
+				}
+			}
+		}
+	}
 
 	// Analyze the context to determine what type of completion to provide
 	context := pac.analyzeContext(line, pos)
@@ -1237,7 +1244,7 @@ func getHistoryFilePath() string {
 	if histPath := os.Getenv("PROMQL_CLI_HISTORY"); histPath != "" {
 		return histPath
 	}
-	
+
 	// Prefer the user's home directory
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, ".promql-cli_history")

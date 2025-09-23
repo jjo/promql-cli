@@ -1,3 +1,4 @@
+//go:build prompt
 // +build prompt
 
 package main
@@ -43,16 +44,16 @@ func runPromptREPL(engine *promql.Engine, storage *SimpleStorage, silent bool) {
 	executeOneFunc = func(s string) {
 		executeOne(engine, storage, s)
 	}
-	
+
 	// Set global storage for metric help text access
 	globalStorage = storage
-	
+
 	// Set up the refresh function for adhoc.go to call after loading metrics
 	refreshMetricsCache = func(s *SimpleStorage) {
 		if s != nil {
 			// Update the global storage reference
 			globalStorage = s
-			
+
 			// Rebuild metrics list
 			var metricNames []string
 			for name := range s.metrics {
@@ -60,7 +61,7 @@ func runPromptREPL(engine *promql.Engine, storage *SimpleStorage, silent bool) {
 			}
 			metrics = metricNames
 			metricsHelp = s.metricsHelp
-			
+
 			// Clear the cached metrics in fetchMetrics to force re-fetch
 			// This ensures the next completion request gets fresh data
 			if !silent {
@@ -84,7 +85,7 @@ func runPromptREPL(engine *promql.Engine, storage *SimpleStorage, silent bool) {
 	if err := repl.Run(); err != nil {
 		fmt.Printf("Error running prompt REPL: %v\n", err)
 	}
-	
+
 	// Clean up when exiting
 	refreshMetricsCache = nil
 }
