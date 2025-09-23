@@ -88,14 +88,24 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		// Selection: .ai run N or .ai N
 		if strings.HasPrefix(args, "run ") || regexp.MustCompile(`^\d+$`).MatchString(args) {
 			var idxStr string
-			if strings.HasPrefix(args, "run ") { idxStr = strings.TrimSpace(strings.TrimPrefix(args, "run ")) } else { idxStr = args }
+			if strings.HasPrefix(args, "run ") {
+				idxStr = strings.TrimSpace(strings.TrimPrefix(args, "run "))
+			} else {
+				idxStr = args
+			}
 			n, err := strconv.Atoi(idxStr)
 			if err != nil || n <= 0 {
 				fmt.Println("Usage: .ai run <N>  (N is 1-based)")
 				return true
 			}
-			if len(lastAISuggestions) == 0 { fmt.Println("No AI suggestions yet. Try: .ai <intent>"); return true }
-			if n > len(lastAISuggestions) { fmt.Printf("Only %d suggestions available\n", len(lastAISuggestions)); return true }
+			if len(lastAISuggestions) == 0 {
+				fmt.Println("No AI suggestions yet. Try: .ai <intent>")
+				return true
+			}
+			if n > len(lastAISuggestions) {
+				fmt.Printf("Only %d suggestions available\n", len(lastAISuggestions))
+				return true
+			}
 			pendingAISuggestion = lastAISuggestions[n-1]
 			fmt.Printf("Running suggestion [%d]: %s\n", n, pendingAISuggestion)
 			return true
@@ -108,8 +118,14 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 				fmt.Println("Usage: .ai edit <N>  (N is 1-based)")
 				return true
 			}
-			if len(lastAISuggestions) == 0 { fmt.Println("No AI suggestions yet. Try: .ai <intent>"); return true }
-			if n > len(lastAISuggestions) { fmt.Printf("Only %d suggestions available\n", len(lastAISuggestions)); return true }
+			if len(lastAISuggestions) == 0 {
+				fmt.Println("No AI suggestions yet. Try: .ai <intent>")
+				return true
+			}
+			if n > len(lastAISuggestions) {
+				fmt.Printf("Only %d suggestions available\n", len(lastAISuggestions))
+				return true
+			}
 			aiClipboard = lastAISuggestions[n-1]
 			fmt.Printf("Prepared suggestion [%d] for editing. Press Ctrl-Y to paste.\n", n)
 			return true
@@ -137,9 +153,13 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		var validE []string
 		for _, sug := range suggestions {
 			q := strings.TrimSpace(sug.Query)
-			if q == "" { continue }
+			if q == "" {
+				continue
+			}
 			q = cleanCandidate(q)
-			if q == "" { continue }
+			if q == "" {
+				continue
+			}
 			if _, err := promparser.ParseExpr(q); err == nil {
 				validQ = append(validQ, q)
 				validE = append(validE, strings.TrimSpace(sug.Explain))
@@ -400,12 +420,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			totalSamples += len(ss)
 		}
 		fmt.Printf("Dropped '%s': -%d samples (now: %d metrics, %d samples)\n", metric, removed, totalMetrics, totalSamples)
-		
+
 		// Refresh metrics cache for autocompletion if using prompt backend
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)
 		}
-		
+
 		return true
 	}
 
@@ -460,12 +480,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			afterSamples += len(ss)
 		}
 		fmt.Printf("Loaded %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n", path, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
-		
+
 		// Refresh metrics cache for autocompletion if using prompt backend
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)
 		}
-		
+
 		return true
 	}
 
@@ -552,7 +572,7 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			}
 		}
 
-		client := &http.Client{Timeout: 20 * time.Second}
+		client := &http.Client{Timeout: 60 * time.Second}
 		for i := 0; i < count; i++ {
 			beforeMetrics := len(storage.metrics)
 			beforeSamples := 0
@@ -596,12 +616,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 				time.Sleep(delay)
 			}
 		}
-		
+
 		// Refresh metrics cache for autocompletion if using prompt backend
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)
 		}
-		
+
 		return true
 	}
 
@@ -646,12 +666,12 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		}
 		seedHistory(storage, metric, steps, step)
 		fmt.Printf("Seeded %d historical points (step %s) for metric '%s'\n", steps, step, metric)
-		
+
 		// Refresh metrics cache for autocompletion if using prompt backend
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)
 		}
-		
+
 		return true
 	}
 

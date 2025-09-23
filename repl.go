@@ -67,8 +67,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 
 	listener := func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
 		const (
-			keyDown = rune(14) // readline CharNext
-			keyUp   = rune(16) // readline CharPrev
+			keyDown  = rune(14) // readline CharNext (Ctrl-N)
+			keyUp    = rune(16) // readline CharPrev (Ctrl-P)
+			keyCtrlY = rune(25) // Ctrl-Y (Yank/paste AI clipboard)
 		)
 
 		// Helper to ensure matches for current prefix are ready
@@ -83,6 +84,18 @@ func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent
 		// Always recompute based on current content left of cursor
 		prefix := string(line[:pos])
 		recompute(prefix, line)
+
+		// Ctrl-Y: paste AI clipboard (from .ai edit N)
+		if key == keyCtrlY {
+			// Prefer AI clipboard over readline kill-ring. If empty, swallow Ctrl-Y to avoid pasting stale kill-ring content.
+			if strings.TrimSpace(aiClipboard) == "" {
+				// Keep current line unchanged and consume the key
+				cur := append([]rune(nil), line...)
+				return cur, pos, true
+			}
+			newLine := []rune(aiClipboard)
+			return newLine, len(newLine), true
+		}
 
 		// Up: previous matching history (older)
 		if key == keyUp {
