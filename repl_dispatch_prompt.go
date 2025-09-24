@@ -29,14 +29,6 @@ func runInteractiveQueriesDispatch(engine *promql.Engine, storage *SimpleStorage
 func runPromptREPL(engine *promql.Engine, storage *SimpleStorage, silent bool) {
 	if !silent {
 		fmt.Println("Enter PromQL queries (or 'quit' to exit):")
-		fmt.Println("Supported queries:")
-		fmt.Println("  - Basic selectors: metric_name, metric_name{label=\"value\"}")
-		fmt.Println("  - Aggregations: sum(metric_name), avg(metric_name), count(metric_name), min(metric_name), max(metric_name)")
-		fmt.Println("  - Group by: sum(metric_name) by (label)")
-		fmt.Println("  - Binary operations: metric_name + 10, metric_name1 * metric_name2")
-		fmt.Println("  - Functions: rate(metric_name), increase(metric_name), abs(metric_name)")
-		fmt.Println("  - Comparisons: metric_name > 100, metric_name == 0")
-		fmt.Println("  - Ad-hoc commands: .help, .labels <metric>, .metrics, .seed <metric> [steps=N] [step=1m], .at <time> <query>")
 		fmt.Println()
 	}
 
