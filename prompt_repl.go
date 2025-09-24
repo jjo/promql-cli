@@ -936,15 +936,20 @@ func (r *promptREPL) Run() error {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		<-sigChan
-		// Save history and restore terminal state
-		saveHistory()
-		fmt.Println("\nInterrupted. Exiting...")
-		restoreTerminalState(originalState)
-		if r.prompt != nil {
-			// go-prompt should handle terminal restoration in its Run() method
-			// but we'll ensure a clean exit
-			os.Exit(0)
+		for {
+			<-sigChan
+			// If an AI request is in-flight, cancel it instead of exiting
+			if aiCancelRequest != nil {
+				aiCancelRequest()
+				continue
+			}
+			// Otherwise exit cleanly
+			saveHistory()
+			fmt.Println("\nInterrupted. Exiting...")
+			restoreTerminalState(originalState)
+			if r.prompt != nil {
+				os.Exit(0)
+			}
 		}
 	}()
 
@@ -958,8 +963,11 @@ func (r *promptREPL) Run() error {
 		prompt.OptionTitle("PromQL CLI"),
 		// NOTE: We don't pass OptionHistory() as we implement our own prefix-based history navigation
 		prompt.OptionPrefixTextColor(prompt.Blue),
-		// Use a live prefix that updates based on state for multi-line mode
+		// Use a live prefix that updates based on state
 		prompt.OptionLivePrefix(func() (string, bool) {
+			if aiInProgress {
+				return "AI...> ", true
+			}
 			if inMultiLine {
 				return "      > ", true // Continuation prompt
 			}
@@ -973,6 +981,21 @@ func (r *promptREPL) Run() error {
 		prompt.OptionMaxSuggestion(20),
 		// NOTE: OptionCompletionOnDown() removed to prevent panic when arrow-down is pressed with empty suggestions
 		prompt.OptionCompletionWordSeparator("(){}[]\" \t\n,="), // PromQL-specific word separators
+		// Ctrl-C: cancel in-flight AI or clear current line
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.ControlC,
+			Fn: func(buf *prompt.Buffer) {
+				if aiCancelRequest != nil {
+					aiCancelRequest()
+					return
+				}
+				// Clear line (do not submit 0x03 as input)
+				doc := buf.Document()
+				buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
+				buf.Delete(len(doc.Text))
+			},
+		}),
+
 		// Emacs-style key bindings
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlA,

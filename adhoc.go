@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -30,6 +32,12 @@ var lastAISuggestions []string
 var lastAIExplanations []string
 var pendingAISuggestion string
 var aiClipboard string
+
+// aiCancelRequest, when non-nil, cancels an in-flight AI request (e.g., on Ctrl-C)
+var aiCancelRequest func()
+
+// aiInProgress indicates an AI request is running asynchronously.
+var aiInProgress bool
 
 func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 	// .help: show ad-hoc commands usage
@@ -143,44 +151,64 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 		if strings.HasPrefix(args, "ask ") {
 			args = strings.TrimSpace(strings.TrimPrefix(args, "ask "))
 		}
-		// Generate new suggestions
-		suggestions, err := aiSuggestQueries(storage, args)
-		if err != nil {
-			fmt.Printf("AI error: %v\n", err)
+		// Start AI request asynchronously so Ctrl-C can cancel it while the prompt remains responsive
+		if aiInProgress || aiCancelRequest != nil {
+			fmt.Println("AI request already in progress. Press Ctrl-C to cancel it.")
 			return true
 		}
-		var validQ []string
-		var validE []string
-		for _, sug := range suggestions {
-			q := strings.TrimSpace(sug.Query)
-			if q == "" {
-				continue
+		ctx, cancel := context.WithCancel(context.Background())
+		aiCancelRequest = cancel
+		aiInProgress = true
+		fmt.Println("Asking AI... (press Ctrl-C to cancel)")
+		go func(intent string) {
+			defer func() {
+				aiInProgress = false
+				aiCancelRequest = nil
+				cancel()
+			}()
+			suggestions, err := aiSuggestQueriesCtx(ctx, storage, intent)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || strings.Contains(strings.ToLower(err.Error()), "context canceled") || strings.Contains(strings.ToLower(err.Error()), "request canceled") {
+					fmt.Println("AI request canceled")
+					return
+				}
+				fmt.Printf("AI error: %v\n", err)
+				return
 			}
-			q = cleanCandidate(q)
-			if q == "" {
-				continue
+			var validQ []string
+			var validE []string
+			for _, sug := range suggestions {
+				q := strings.TrimSpace(sug.Query)
+				if q == "" {
+					continue
+				}
+				q = cleanCandidate(q)
+				if q == "" {
+					continue
+				}
+				if _, err := promparser.ParseExpr(q); err == nil {
+					validQ = append(validQ, q)
+					validE = append(validE, strings.TrimSpace(sug.Explain))
+				}
 			}
-			if _, err := promparser.ParseExpr(q); err == nil {
-				validQ = append(validQ, q)
-				validE = append(validE, strings.TrimSpace(sug.Explain))
+			if len(validQ) == 0 {
+				fmt.Println("AI returned no valid PromQL suggestions.")
+				return
 			}
-		}
-		if len(validQ) == 0 {
-			fmt.Println("AI returned no valid PromQL suggestions.")
-			return true
-		}
-		lastAISuggestions = validQ
-		lastAIExplanations = validE
-		aiSelectionActive = true
-		fmt.Println("AI suggestions (valid PromQL):")
-		for i := range validQ {
-			fmt.Printf("  [%d] %s\n", i+1, validQ[i])
-			if ex := strings.TrimSpace(validE[i]); ex != "" {
-				fmt.Printf("      - %s\n", ex)
+			lastAISuggestions = validQ
+			lastAIExplanations = validE
+			aiSelectionActive = true
+			fmt.Println("AI suggestions (valid PromQL):")
+			for i := range validQ {
+				fmt.Printf("  [%d] %s\n", i+1, validQ[i])
+				if ex := strings.TrimSpace(validE[i]); ex != "" {
+					fmt.Printf("      - %s\n", ex)
+				}
 			}
-		}
-		fmt.Println("Choose with: .ai edit <N>  or  .ai run <N>  (1-based)")
-		fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion.")
+			fmt.Println("Choose with: .ai edit <N>  or  .ai run <N>  (1-based)")
+			fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion.")
+		}(args)
+		// Return immediately to keep the prompt interactive
 		return true
 	}
 

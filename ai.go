@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +45,11 @@ func ConfigureAIFromFlags(provider string, openaiModel, openaiBase, claudeModel,
 }
 
 func aiSuggestQueries(storage *SimpleStorage, intent string) ([]AISuggestion, error) {
+	return aiSuggestQueriesCtx(context.Background(), storage, intent)
+}
+
+// aiSuggestQueriesCtx is like aiSuggestQueries but allows cancellation via context.
+func aiSuggestQueriesCtx(ctx context.Context, storage *SimpleStorage, intent string) ([]AISuggestion, error) {
 	provider := aiProviderFlag
 	if provider == "" {
 		provider = strings.ToLower(strings.TrimSpace(os.Getenv("PROMQL_CLI_AI_PROVIDER")))
@@ -51,18 +57,18 @@ func aiSuggestQueries(storage *SimpleStorage, intent string) ([]AISuggestion, er
 	if provider == "" {
 		provider = "ollama"
 	}
-	ctx := buildAIPromptContext(storage)
-	prompt := buildAIPrompt(ctx, intent)
+	pctx := buildAIPromptContext(storage)
+	prompt := buildAIPrompt(pctx, intent)
 
 	switch provider {
-	case "ollama":
-		return aiOllama(prompt)
+case "ollama":
+		return aiOllama(ctx, prompt)
 	case "openai":
-		return aiOpenAI(prompt)
+		return aiOpenAI(ctx, prompt)
 	case "claude":
-		return aiClaude(prompt)
+		return aiClaude(ctx, prompt)
 	case "grok":
-		return aiGrok(prompt)
+		return aiGrok(ctx, prompt)
 	default:
 		return nil, fmt.Errorf("unknown AI provider: %s", provider)
 	}
@@ -159,7 +165,7 @@ func buildAIPrompt(ctx promptContext, intent string) string {
 }
 
 // Provider: Ollama (local)
-func aiOllama(prompt string) ([]AISuggestion, error) {
+func aiOllama(ctx context.Context, prompt string) ([]AISuggestion, error) {
 	host := aiOllamaHostFlag
 	if host == "" {
 		host = os.Getenv("PROMQL_CLI_OLLAMA_HOST")
@@ -180,7 +186,7 @@ func aiOllama(prompt string) ([]AISuggestion, error) {
 		"messages": []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"stream":   false,
 	}
-	return postAndExtractAISuggestions(url, "", reqBody, func(r io.Reader) (string, error) {
+return postAndExtractAISuggestions(ctx, url, "", reqBody, func(r io.Reader) (string, error) {
 		var resp struct {
 			Message struct {
 				Content string `json:"content"`
@@ -194,7 +200,7 @@ func aiOllama(prompt string) ([]AISuggestion, error) {
 }
 
 // Provider: OpenAI-compatible
-func aiOpenAI(prompt string) ([]AISuggestion, error) {
+func aiOpenAI(ctx context.Context, prompt string) ([]AISuggestion, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		return nil, errors.New("missing OPENAI_API_KEY")
@@ -220,7 +226,7 @@ func aiOpenAI(prompt string) ([]AISuggestion, error) {
 		"messages":    []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"temperature": 0.2,
 	}
-	return postAndExtractAISuggestions(url, head, reqBody, func(r io.Reader) (string, error) {
+return postAndExtractAISuggestions(ctx, url, head, reqBody, func(r io.Reader) (string, error) {
 		var resp struct {
 			Choices []struct {
 				Message struct {
@@ -239,7 +245,7 @@ func aiOpenAI(prompt string) ([]AISuggestion, error) {
 }
 
 // Provider: Claude (Anthropic)
-func aiClaude(prompt string) ([]AISuggestion, error) {
+func aiClaude(ctx context.Context, prompt string) ([]AISuggestion, error) {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
 		return nil, errors.New("missing ANTHROPIC_API_KEY")
@@ -268,11 +274,11 @@ func aiClaude(prompt string) ([]AISuggestion, error) {
 			"content": []map[string]string{{"type": "text", "text": prompt}},
 		}},
 	}
-	return postAndExtractAISuggestionsAnthropic(url, head, reqBody)
+return postAndExtractAISuggestionsAnthropic(ctx, url, head, reqBody)
 }
 
 // Provider: Grok (xAI) — OpenAI-compatible style
-func aiGrok(prompt string) ([]AISuggestion, error) {
+func aiGrok(ctx context.Context, prompt string) ([]AISuggestion, error) {
 	apiKey := os.Getenv("XAI_API_KEY")
 	if apiKey == "" {
 		return nil, errors.New("missing XAI_API_KEY")
@@ -298,7 +304,7 @@ func aiGrok(prompt string) ([]AISuggestion, error) {
 		"messages":    []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"temperature": 0.2,
 	}
-	return postAndExtractAISuggestions(url, head, reqBody, func(r io.Reader) (string, error) {
+return postAndExtractAISuggestions(ctx, url, head, reqBody, func(r io.Reader) (string, error) {
 		var resp struct {
 			Choices []struct {
 				Message struct {
@@ -317,12 +323,12 @@ func aiGrok(prompt string) ([]AISuggestion, error) {
 }
 
 // Helpers
-func postAndExtractAISuggestions(url, bearer string, body any, extract func(io.Reader) (string, error)) ([]AISuggestion, error) {
+func postAndExtractAISuggestions(ctx context.Context, url, bearer string, body any, extract func(io.Reader) (string, error)) ([]AISuggestion, error) {
 	buf := &bytes.Buffer{}
 	if err := json.NewEncoder(buf).Encode(body); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest("POST", url, buf)
+req, err := http.NewRequestWithContext(ctx, "POST", url, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -351,12 +357,12 @@ func postAndExtractAISuggestions(url, bearer string, body any, extract func(io.R
 	return sug, nil
 }
 
-func postAndExtractAISuggestionsAnthropic(url, apiKey string, body any) ([]AISuggestion, error) {
+func postAndExtractAISuggestionsAnthropic(ctx context.Context, url, apiKey string, body any) ([]AISuggestion, error) {
 	buf := &bytes.Buffer{}
 	if err := json.NewEncoder(buf).Encode(body); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest("POST", url, buf)
+req, err := http.NewRequestWithContext(ctx, "POST", url, buf)
 	if err != nil {
 		return nil, err
 	}
