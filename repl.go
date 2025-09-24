@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -1165,16 +1166,50 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 	queryPart, pipeCmd, hasPipe := splitQueryAndPipe(orig)
 	query := strings.TrimSpace(queryPart)
 
-	// Ad-hoc commands
-	if handleAdHocFunction(query, storage) {
-		// If an ad-hoc command requested to run a generated query, run it now
-		if pendingAISuggestion != "" {
-			next := pendingAISuggestion
-			pendingAISuggestion = ""
-			// Execute the suggested PromQL line
-			executeOne(engine, storage, next)
+	// Ad-hoc commands (support piping for their printed output)
+	if strings.HasPrefix(query, ".") {
+		if hasPipe {
+			captured, _ := captureStdout(func() {
+				_ = handleAdHocFunction(query, storage)
+			})
+			if aiInProgress {
+				fmt.Println("[note] AI request started asynchronously; subsequent output will not be piped")
+			}
+			if pendingAISuggestion != "" {
+				next := pendingAISuggestion
+				pendingAISuggestion = ""
+				// Execute the suggested PromQL line while preserving the original pipe
+				executeOne(engine, storage, next+" | "+pipeCmd)
+				return
+			}
+			cmd := exec.Command("/bin/sh", "-c", pipeCmd)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				fmt.Printf("Pipe setup failed: %v\n", err)
+				return
+			}
+			if err := cmd.Start(); err != nil {
+				fmt.Printf("Command start failed: %v\n", err)
+				_ = stdin.Close()
+				return
+			}
+			_, _ = io.WriteString(stdin, captured)
+			_ = stdin.Close()
+			if err := cmd.Wait(); err != nil {
+				fmt.Printf("Command failed: %v\n", err)
+			}
+			return
 		}
-		return
+		if handleAdHocFunction(query, storage) {
+			if pendingAISuggestion != "" {
+				next := pendingAISuggestion
+				pendingAISuggestion = ""
+				executeOne(engine, storage, next)
+			}
+			return
+		}
 	}
 
 	// Support pinned evaluation time set via .pinat, unless overridden by .at
@@ -1211,7 +1246,8 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 	}
 
 	if hasPipe {
-		// Run external command and pipe our rendered output to its stdin by temporarily redirecting Stdout
+		// Capture the normal printed output and feed it to the pipe command
+		captured, _ := captureStdout(func() { printUpstreamQueryResult(result) })
 		cmd := exec.Command("/bin/sh", "-c", pipeCmd)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -1225,10 +1261,8 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 			_ = stdin.Close()
 			return
 		}
-		// Write the result into the command's stdin
-		printUpstreamQueryResultToWriter(result, stdin)
+		_, _ = io.WriteString(stdin, captured)
 		_ = stdin.Close()
-		// Wait for command to finish
 		if err := cmd.Wait(); err != nil {
 			fmt.Printf("Command failed: %v\n", err)
 		}
@@ -1236,6 +1270,28 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 	}
 
 	printUpstreamQueryResult(result)
+}
+
+// captureStdout captures stdout produced by fn and returns it as a string.
+func captureStdout(fn func()) (string, error) {
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		return "", err
+	}
+	os.Stdout = w
+	outCh := make(chan []byte)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		outCh <- buf.Bytes()
+	}()
+	fn()
+	_ = w.Close()
+	os.Stdout = orig
+	b := <-outCh
+	_ = r.Close()
+	return string(b), nil
 }
 
 // getHistoryFilePath returns the path to the history file for readline

@@ -979,7 +979,8 @@ func (r *promptREPL) Run() error {
 		prompt.OptionDescriptionBGColor(prompt.DarkGray),
 		prompt.OptionDescriptionTextColor(prompt.White), // Make descriptions more visible
 		prompt.OptionMaxSuggestion(20),
-		// NOTE: OptionCompletionOnDown() removed to prevent panic when arrow-down is pressed with empty suggestions
+		// Allow Down arrow to open the completion dropdown when suggestions exist
+		prompt.OptionCompletionOnDown(),
 		prompt.OptionCompletionWordSeparator("(){}[]\" \t\n,="), // PromQL-specific word separators
 		// Ctrl-C: cancel in-flight AI or clear current line
 		prompt.OptionAddKeyBind(prompt.KeyBind{
@@ -1359,10 +1360,15 @@ func (r *promptREPL) Run() error {
 				},
 			},
 		),
-		// Custom Up arrow: Navigate backward through prefix-filtered history
+		// Custom Up arrow: Navigate backward through prefix-filtered history (unless suggestions are available)
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.Up,
 			Fn: func(buf *prompt.Buffer) {
+				// If completion suggestions exist, let go-prompt handle Up for dropdown navigation
+				doc := buf.Document()
+				if len(promptCompleter(*doc)) > 0 || aiSelectionActive {
+					return
+				}
 				currentText := buf.Text()
 
 				// If we're starting fresh history navigation, set up the prefix filter
@@ -1394,10 +1400,15 @@ func (r *promptREPL) Run() error {
 				}
 			},
 		}),
-		// Custom Down arrow: Navigate forward through prefix-filtered history
+		// Custom Down arrow: Navigate forward through prefix-filtered history (unless suggestions are available)
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.Down,
 			Fn: func(buf *prompt.Buffer) {
+				// If completion suggestions exist, let go-prompt handle Down to open/navigate dropdown
+				doc := buf.Document()
+				if len(promptCompleter(*doc)) > 0 || aiSelectionActive {
+					return
+				}
 				if historyIndex > 1 {
 					historyIndex--
 					// Clear current line and insert history entry
