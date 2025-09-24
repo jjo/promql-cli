@@ -206,7 +206,7 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 				}
 			}
 			fmt.Println("Choose with: .ai edit <N>  or  .ai run <N>  (1-based)")
-			fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion.")
+			fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion; Tab to show the dropdown.")
 		}(args)
 		// Return immediately to keep the prompt interactive
 		return true
