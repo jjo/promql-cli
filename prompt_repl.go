@@ -961,7 +961,8 @@ func (r *promptREPL) Run() error {
 	opts := []prompt.Option{
 		prompt.OptionPrefix("PromQL> "),
 		prompt.OptionTitle("PromQL CLI"),
-		// NOTE: We don't pass OptionHistory() as we implement our own prefix-based history navigation
+		// Provide saved history to go-prompt so Up/Down navigate past entries
+		prompt.OptionHistory(replHistory),
 		prompt.OptionPrefixTextColor(prompt.Blue),
 		// Use a live prefix that updates based on state
 		prompt.OptionLivePrefix(func() (string, bool) {
@@ -979,8 +980,7 @@ func (r *promptREPL) Run() error {
 		prompt.OptionDescriptionBGColor(prompt.DarkGray),
 		prompt.OptionDescriptionTextColor(prompt.White), // Make descriptions more visible
 		prompt.OptionMaxSuggestion(20),
-		// Allow Down arrow to open the completion dropdown when suggestions exist
-		prompt.OptionCompletionOnDown(),
+		// Use PromQL-specific word separators for word detection
 		prompt.OptionCompletionWordSeparator("(){}[]\" \t\n,="), // PromQL-specific word separators
 		// Ctrl-C: cancel in-flight AI or clear current line
 		prompt.OptionAddKeyBind(prompt.KeyBind{
@@ -1360,70 +1360,6 @@ func (r *promptREPL) Run() error {
 				},
 			},
 		),
-		// Custom Up arrow: Navigate backward through prefix-filtered history (unless suggestions are available)
-		prompt.OptionAddKeyBind(prompt.KeyBind{
-			Key: prompt.Up,
-			Fn: func(buf *prompt.Buffer) {
-				// If completion suggestions exist, let go-prompt handle Up for dropdown navigation
-				doc := buf.Document()
-				if len(promptCompleter(*doc)) > 0 || aiSelectionActive {
-					return
-				}
-				currentText := buf.Text()
-
-				// If we're starting fresh history navigation, set up the prefix filter
-				if historyIndex == 0 {
-					historyPrefix = currentText // Keep the exact text, not trimmed
-					// Build filtered history based on prefix
-					filteredHistory = []string{}
-					seen := make(map[string]bool) // Track seen entries to avoid duplicates
-					for i := len(replHistory) - 1; i >= 0; i-- {
-						entry := replHistory[i]
-						// Skip if we've seen this exact entry already
-						if seen[entry] {
-							continue
-						}
-						// Check prefix match
-						if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
-							filteredHistory = append(filteredHistory, entry)
-							seen[entry] = true
-						}
-					}
-				}
-
-				if len(filteredHistory) > 0 && historyIndex < len(filteredHistory) {
-					// Clear current line and insert history entry
-					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
-					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
-					buf.InsertText(filteredHistory[historyIndex], false, true)
-					historyIndex++
-				}
-			},
-		}),
-		// Custom Down arrow: Navigate forward through prefix-filtered history (unless suggestions are available)
-		prompt.OptionAddKeyBind(prompt.KeyBind{
-			Key: prompt.Down,
-			Fn: func(buf *prompt.Buffer) {
-				// If completion suggestions exist, let go-prompt handle Down to open/navigate dropdown
-				doc := buf.Document()
-				if len(promptCompleter(*doc)) > 0 || aiSelectionActive {
-					return
-				}
-				if historyIndex > 1 {
-					historyIndex--
-					// Clear current line and insert history entry
-					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
-					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
-					buf.InsertText(filteredHistory[historyIndex-1], false, true)
-				} else if historyIndex == 1 {
-					// Return to the original prefix that was typed
-					historyIndex = 0
-					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
-					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
-					buf.InsertText(historyPrefix, false, true)
-				}
-			},
-		}),
 	}
 
 	// Add option to show completions at start only if eager completion is enabled
