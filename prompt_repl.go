@@ -661,8 +661,13 @@ var lastExecutedCommand string
 // Global variables for prefix-based history navigation
 var (
 	historyIndex    int      // Current position in filtered history
-	historyPrefix   string   // Prefix to filter history by
+	historyPrefix   string   // Prefix to filter history by (captured at activation)
 	filteredHistory []string // History entries matching the prefix
+
+	// State for active prefix-search navigation on arrows
+	historyActive   bool   // true while navigating with Up/Down
+	historySeed     string // full line captured at activation (to restore on Down at end)
+	historyLastLine string // last line inserted by history navigation
 )
 
 // Global variables for multi-line editing
@@ -961,8 +966,7 @@ func (r *promptREPL) Run() error {
 	opts := []prompt.Option{
 		prompt.OptionPrefix("PromQL> "),
 		prompt.OptionTitle("PromQL CLI"),
-		// Provide saved history to go-prompt so Up/Down navigate past entries
-		prompt.OptionHistory(replHistory),
+		// We implement our own prefix-based history on arrow keys
 		prompt.OptionPrefixTextColor(prompt.Blue),
 		// Use a live prefix that updates based on state
 		prompt.OptionLivePrefix(func() (string, bool) {
@@ -982,6 +986,78 @@ func (r *promptREPL) Run() error {
 		prompt.OptionMaxSuggestion(20),
 		// Use PromQL-specific word separators for word detection
 		prompt.OptionCompletionWordSeparator("(){}[]\" \t\n,="), // PromQL-specific word separators
+// Arrow Up: prefix-search history navigation
+prompt.OptionAddKeyBind(prompt.KeyBind{
+	Key: prompt.Up,
+	Fn: func(buf *prompt.Buffer) {
+		// If user has edited since last insertion from history, restart nav
+		if historyActive && buf.Text() != historyLastLine {
+			historyActive = false
+			historyIndex = 0
+			filteredHistory = nil
+		}
+		// Activate if not active
+		if !historyActive {
+			historyActive = true
+			historySeed = buf.Text()
+			historyPrefix = buf.Document().TextBeforeCursor()
+			// Build filtered history based on captured prefix
+			filteredHistory = []string{}
+			seen := make(map[string]bool)
+			for i := len(replHistory) - 1; i >= 0; i-- {
+				entry := replHistory[i]
+				if seen[entry] {
+					continue
+				}
+				if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
+					filteredHistory = append(filteredHistory, entry)
+					seen[entry] = true
+				}
+			}
+			historyIndex = 0
+		}
+		if len(filteredHistory) == 0 {
+			return
+		}
+		if historyIndex < len(filteredHistory) {
+			// Insert next older match
+			buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+			buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+			line := filteredHistory[historyIndex]
+			buf.InsertText(line, false, true)
+			historyLastLine = line
+			historyIndex++
+		}
+	},
+}),
+// Arrow Down: prefix-search history navigation forward
+prompt.OptionAddKeyBind(prompt.KeyBind{
+	Key: prompt.Down,
+	Fn: func(buf *prompt.Buffer) {
+		if !historyActive || len(filteredHistory) == 0 {
+			return
+		}
+		if historyIndex > 1 {
+			historyIndex--
+			buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+			buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+			line := filteredHistory[historyIndex-1]
+			buf.InsertText(line, false, true)
+			historyLastLine = line
+			return
+		}
+		if historyIndex == 1 {
+			// Restore the original seed line and exit navigation
+			buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+			buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+			buf.InsertText(historySeed, false, true)
+			historyLastLine = historySeed
+			historyActive = false
+			historyIndex = 0
+			filteredHistory = nil
+		}
+	},
+}),
 		// Ctrl-C: cancel in-flight AI or clear current line
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlC,

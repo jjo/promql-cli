@@ -206,9 +206,45 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 				}
 			}
 			fmt.Println("Choose with: .ai edit <N>  or  .ai run <N>  (1-based)")
-			fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion; Tab to show the dropdown.")
+			fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion.")
 		}(args)
 		// Return immediately to keep the prompt interactive
+		return true
+	}
+
+	// .history: show full history or last N
+	if strings.HasPrefix(strings.TrimSpace(query), ".history") {
+		fields := strings.Fields(strings.TrimSpace(query))
+		var n int = -1
+		if len(fields) == 2 {
+			if v, err := strconv.Atoi(fields[1]); err == nil && v > 0 {
+				n = v
+			} else {
+				fmt.Println("Usage: .history [N]")
+				return true
+			}
+		} else if len(fields) > 2 {
+			fmt.Println("Usage: .history [N]")
+			return true
+		}
+		// Prefer in-memory history when available (prompt backend)
+		entries := replHistory
+		if len(entries) == 0 {
+			// Fallback to file
+			path := getHistoryFilePath()
+			entries = loadHistoryFromFile(path)
+		}
+		if len(entries) == 0 {
+			fmt.Println("No history available")
+			return true
+		}
+		start := 0
+		if n > 0 && n < len(entries) {
+			start = len(entries) - n
+		}
+		for i := start; i < len(entries); i++ {
+			fmt.Println(entries[i])
+		}
 		return true
 	}
 
