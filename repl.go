@@ -405,10 +405,6 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 	if !inLabels && strings.HasPrefix(trimmed, ".") {
 		// If typing the command token, suggest available ad-hoc commands
 		if strings.HasPrefix(currentWord, ".") || strings.TrimSpace(trimmed) == "." {
-			// Special-case .ai to require subcommand
-			if strings.HasPrefix(strings.ToLower(currentWord), ".ai") {
-				return []string{".ai ask ", ".ai run ", ".ai edit ", ".ai show"}
-			}
 			cmds := GetAdHocCommandNames()
 			var out []string
 			for _, c := range cmds {

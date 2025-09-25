@@ -47,8 +47,8 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 	// Reset history navigation if the text has changed from what's in filtered history
 	resetHistoryNavigationIfNeeded(d.Text, historyPrefix)
 
-	// If we are in AI selection mode, present the AI suggestions menu regardless of typing
-	if aiSelectionActive {
+	// If we are in AI selection mode, present the AI suggestions menu unless user is typing a .ai command
+	if aiSelectionActive && !strings.HasPrefix(strings.TrimSpace(text), ".ai") {
 		return getAISuggestionMenu()
 	}
 
@@ -94,13 +94,13 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 				return emptySuggestions
 			}
 			after := strings.TrimSpace(text[pos+3:])
-			// If no argument yet, suggest subcommands that always require an argument
+			// If no argument yet, suggest subcommands (no prefix)
 			if after == "" {
 				return []prompt.Suggest{
-					{Text: ".ai ask ", Description: "ask free text to ask the AI"},
-					{Text: ".ai edit ", Description: "prepare a suggestion for editing (Ctrl-Y to paste)"},
-					{Text: ".ai run ", Description: "run a suggestion number"},
-					{Text: ".ai show", Description: "show last AI suggestions"},
+					{Text: "ask ", Description: "ask free text to ask the AI"},
+					{Text: "edit ", Description: "prepare a suggestion for editing (Ctrl-Y to paste)"},
+					{Text: "run ", Description: "run a suggestion number"},
+					{Text: "show", Description: "show last AI suggestions"},
 				}
 			}
 			// If typing the subcommand token, provide filtered suggestions
@@ -1937,12 +1937,16 @@ func shouldSuppressCompletions(text, trimmedText string) bool {
 		if strings.HasSuffix(text, " ") {
 			// Check if we're in an ad-hoc command that expects completions after space
 			isAdHocWithCompletion := false
-			adHocCompletionCommands := []string{".labels ", ".timestamps ", ".drop ", ".seed ", ".at ", ".pinat ", ".scrape ", ".load ", ".save "}
+			adHocCompletionCommands := []string{".labels ", ".timestamps ", ".drop ", ".seed ", ".at ", ".pinat ", ".scrape ", ".load ", ".save ", ".ai "}
 			for _, cmd := range adHocCompletionCommands {
 				if strings.Contains(text, cmd) {
 					isAdHocWithCompletion = true
 					break
 				}
+			}
+			// Special case for .ai - it should show completions after space
+			if strings.HasPrefix(trimmedText, ".ai ") {
+				isAdHocWithCompletion = true
 			}
 			if !isAdHocWithCompletion {
 				return true
