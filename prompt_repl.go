@@ -1963,7 +1963,10 @@ func shouldSuppressCompletions(text, trimmedText string) bool {
 		if strings.HasSuffix(text, " ") {
 			// Check if we're in an ad-hoc command that expects completions after space
 			isAdHocWithCompletion := false
-			adHocCompletionCommands := []string{".labels ", ".timestamps ", ".drop ", ".seed ", ".at ", ".pinat ", ".scrape ", ".load ", ".save ", ".ai "}
+			adHocCompletionCommands := make([]string, len(AdHocCommands))
+			for i, cmd := range AdHocCommands {
+				adHocCompletionCommands[i] = cmd.Command + " "
+			}
 			for _, cmd := range adHocCompletionCommands {
 				if strings.Contains(text, cmd) {
 					isAdHocWithCompletion = true
