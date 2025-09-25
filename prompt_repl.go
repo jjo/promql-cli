@@ -937,9 +937,7 @@ func (r *promptREPL) Run() error {
 			Fn: func(buf *prompt.Buffer) {
 				// If user has edited since last insertion from history, restart nav
 				if historyActive && buf.Text() != historyLastLine {
-					historyActive = false
-					historyIndex = 0
-					filteredHistory = nil
+					resetHistoryState()
 				}
 				// Activate if not active
 				if !historyActive {
@@ -996,10 +994,7 @@ func (r *promptREPL) Run() error {
 					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
 					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
 					buf.InsertText(historySeed, false, true)
-					historyLastLine = historySeed
-					historyActive = false
-					historyIndex = 0
-					filteredHistory = nil
+					resetHistoryState()
 				}
 			},
 		}),
@@ -1016,11 +1011,7 @@ func (r *promptREPL) Run() error {
 				buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
 				buf.Delete(len(doc.Text))
 				// Reset history navigation state when line is cleared
-				historyActive = false
-				historyIndex = 0
-				historyPrefix = ""
-				filteredHistory = nil
-				historyLastLine = ""
+				resetHistoryState()
 			},
 		}),
 
@@ -1049,11 +1040,7 @@ func (r *promptREPL) Run() error {
 				buf.Delete(len(x))
 				// If we just cleared the entire line, reset history navigation
 				if buf.Text() == "" {
-					historyActive = false
-					historyIndex = 0
-					historyPrefix = ""
-					filteredHistory = nil
-					historyLastLine = ""
+					resetHistoryState()
 				}
 			},
 		}),
@@ -1153,11 +1140,7 @@ func (r *promptREPL) Run() error {
 				buf.DeleteBeforeCursor(len(x))
 				// If we just cleared the entire line, reset history navigation
 				if buf.Text() == "" {
-					historyActive = false
-					historyIndex = 0
-					historyPrefix = ""
-					filteredHistory = nil
-					historyLastLine = ""
+					resetHistoryState()
 				}
 			},
 		}),
@@ -1913,7 +1896,7 @@ func extractLastArgument(cmd string) string {
 }
 
 // resetHistoryNavigationIfNeeded resets history navigation state if user has typed something different
-func resetHistoryNavigationIfNeeded(currentFullText, historyPrefix string) {
+func resetHistoryNavigationIfNeeded(currentFullText, previousHistoryPrefix string) {
 	if historyIndex > 0 && len(filteredHistory) > 0 {
 		// Check if current text matches any history entry we've navigated to
 		isHistoryEntry := false
@@ -1924,10 +1907,8 @@ func resetHistoryNavigationIfNeeded(currentFullText, historyPrefix string) {
 			}
 		}
 		// If user has typed something different, reset history navigation
-		if !isHistoryEntry && currentFullText != historyPrefix {
-			historyIndex = 0
-			historyPrefix = ""
-			filteredHistory = nil
+		if !isHistoryEntry && currentFullText != previousHistoryPrefix {
+			resetHistoryState()
 		}
 	}
 }
@@ -1980,4 +1961,13 @@ func isInAdHocCommandContext(trimmedText string) bool {
 		}
 	}
 	return false
+}
+
+// resetHistoryState fully resets all history navigation state
+func resetHistoryState() {
+	historyActive = false
+	historyIndex = 0
+	historyPrefix = ""
+	filteredHistory = nil
+	historyLastLine = ""
 }
