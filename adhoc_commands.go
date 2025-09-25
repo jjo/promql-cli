@@ -102,6 +102,15 @@ var AdHocCommands = []AdHocCommand{
 		Description: "Exit the REPL",
 		Usage:       ".quit",
 	},
+	{
+		Command:     ".history",
+		Description: "Show REPL history (all or last N entries)",
+		Usage:       ".history [N]",
+		Examples: []string{
+			".history",
+			".history 20",
+		},
+	},
 }
 
 // GetAdHocCommandNames returns just the command names for autocompletion

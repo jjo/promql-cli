@@ -36,80 +36,32 @@ var (
 	executeOneFunc    func(string) // Function pointer to executeOne
 	globalStorage     interface{}  // Storage for accessing metrics metadata
 	inGoPromptSession bool         // true while running go-prompt REPL
+	dropdownActive    bool         // true if user opened completion with Tab
 )
 
 // promptCompleter provides completions for go-prompt
 func promptCompleter(d prompt.Document) []prompt.Suggest {
 	text := d.TextBeforeCursor()
 	trimmedText := strings.TrimSpace(text)
-
-	// Reset history navigation if the text has changed from what's in filtered history
-	if historyIndex > 0 && len(filteredHistory) > 0 {
-		currentFullText := d.Text
-		// Check if current text matches any history entry we've navigated to
-		isHistoryEntry := false
-		for i := 0; i < historyIndex && i < len(filteredHistory); i++ {
-			if currentFullText == filteredHistory[i] {
-				isHistoryEntry = true
-				break
-			}
-		}
-		// If user has typed something different, reset history navigation
-		if !isHistoryEntry && currentFullText != historyPrefix {
-			historyIndex = 0
-			historyPrefix = ""
-			filteredHistory = nil
-		}
-	}
-
-	// Early return for empty suggestions to avoid panic
 	emptySuggestions := []prompt.Suggest{}
 
-	// If we are in AI selection mode, present the AI suggestions menu regardless of typing
-	if aiSelectionActive {
+	// Reset history navigation if the text has changed from what's in filtered history
+	resetHistoryNavigationIfNeeded(d.Text, historyPrefix)
+
+	// If we are in AI selection mode, present the AI suggestions menu unless user is typing a .ai command
+	if aiSelectionActive && !strings.HasPrefix(strings.TrimSpace(text), ".ai") {
 		return getAISuggestionMenu()
 	}
 
-	// Suppress suggestions immediately after closing delimiters ) ] }
-	trimRight := strings.TrimRight(text, " \t")
-	if trimRight != "" {
-		last := trimRight[len(trimRight)-1]
-		if last == ')' || last == ']' || last == '}' {
-			return emptySuggestions
-		}
+	// Check if we should suppress completions based on context
+	if shouldSuppressCompletions(text, trimmedText) {
+		return emptySuggestions
 	}
 
-	// Check if we should be aggressive with completions (old behavior)
-	// Users can set PROMQL_CLI_EAGER_COMPLETION=true to get the old behavior
+	// Handle eager completion mode - show suggestions at start
 	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
-
-	if !eagerCompletion {
-		// Don't show suggestions at the start of a new line - wait for Tab or typing
-		if text == "" {
-			return emptySuggestions
-		}
-
-		// Don't show completions immediately after space unless it's an ad-hoc command
-		// or we're continuing to type something
-		if strings.HasSuffix(text, " ") {
-			// Check if we're in an ad-hoc command that expects completions after space
-			isAdHocWithCompletion := false
-			for _, cmd := range []string{".labels ", ".timestamps ", ".drop ", ".seed ", ".at ", ".pinat ", ".scrape ", ".load ", ".save "} {
-				if strings.Contains(text, cmd) {
-					isAdHocWithCompletion = true
-					break
-				}
-			}
-
-			if !isAdHocWithCompletion {
-				return emptySuggestions
-			}
-		}
-	} else {
-		// Old behavior - show suggestions at start
-		if text == "" {
-			return getMixedSuggests("")
-		}
+	if eagerCompletion && text == "" {
+		return getMixedSuggests("")
 	}
 
 	// Use go-prompt's word detection with our custom separators
@@ -117,13 +69,7 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 
 	// Check if we're in ANY ad-hoc command context first
 	// This prevents range duration suggestions from appearing in ad-hoc commands
-	isAdHocCommand := false
-	for _, cmd := range AdHocCommands {
-		if strings.HasPrefix(trimmedText, cmd.Command) {
-			isAdHocCommand = true
-			break
-		}
-	}
+	isAdHocCommand := isInAdHocCommandContext(trimmedText)
 
 	// Check if we're typing an ad-hoc command itself
 	if strings.HasPrefix(wordBefore, ".") && !strings.Contains(text, " ") {
@@ -149,13 +95,13 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 				return emptySuggestions
 			}
 			after := strings.TrimSpace(text[pos+3:])
-			// If no argument yet, suggest subcommands that always require an argument
+			// If no argument yet, suggest subcommands (no prefix)
 			if after == "" {
 				return []prompt.Suggest{
-					{Text: ".ai ask ", Description: "ask free text to ask the AI"},
-					{Text: ".ai edit ", Description: "prepare a suggestion for editing (Ctrl-Y to paste)"},
-					{Text: ".ai run ", Description: "run a suggestion number"},
-					{Text: ".ai show", Description: "show last AI suggestions"},
+					{Text: "ask ", Description: "ask free text to ask the AI"},
+					{Text: "edit ", Description: "prepare a suggestion for editing (Ctrl-Y to paste)"},
+					{Text: "run ", Description: "run a suggestion number"},
+					{Text: "show", Description: "show last AI suggestions"},
 				}
 			}
 			// If typing the subcommand token, provide filtered suggestions
@@ -661,8 +607,13 @@ var lastExecutedCommand string
 // Global variables for prefix-based history navigation
 var (
 	historyIndex    int      // Current position in filtered history
-	historyPrefix   string   // Prefix to filter history by
+	historyPrefix   string   // Prefix to filter history by (captured at activation)
 	filteredHistory []string // History entries matching the prefix
+
+	// State for active prefix-search navigation on arrows
+	historyActive   bool   // true while navigating with Up/Down
+	historySeed     string // full line captured at activation (to restore on Down at end)
+	historyLastLine string // last line inserted by history navigation
 )
 
 // Global variables for multi-line editing
@@ -675,6 +626,8 @@ var (
 func promptExecutor(s string) {
 	// If AI selection was active, clear it upon any command submission
 	aiSelectionActive = false
+	// Any command submission exits dropdown mode
+	dropdownActive = false
 	// Reset history navigation state when a command is executed
 	historyIndex = 0
 	historyPrefix = ""
@@ -961,7 +914,7 @@ func (r *promptREPL) Run() error {
 	opts := []prompt.Option{
 		prompt.OptionPrefix("PromQL> "),
 		prompt.OptionTitle("PromQL CLI"),
-		// NOTE: We don't pass OptionHistory() as we implement our own prefix-based history navigation
+		// We implement our own prefix-based history on arrow keys
 		prompt.OptionPrefixTextColor(prompt.Blue),
 		// Use a live prefix that updates based on state
 		prompt.OptionLivePrefix(func() (string, bool) {
@@ -979,9 +932,98 @@ func (r *promptREPL) Run() error {
 		prompt.OptionDescriptionBGColor(prompt.DarkGray),
 		prompt.OptionDescriptionTextColor(prompt.White), // Make descriptions more visible
 		prompt.OptionMaxSuggestion(20),
-		// Allow Down arrow to open the completion dropdown when suggestions exist
-		prompt.OptionCompletionOnDown(),
+		// Use PromQL-specific word separators for word detection
 		prompt.OptionCompletionWordSeparator("(){}[]\" \t\n,="), // PromQL-specific word separators
+		// Track when user explicitly opens the dropdown via Tab
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.Tab,
+			Fn: func(buf *prompt.Buffer) {
+				dropdownActive = true
+			},
+		}),
+		// Arrow Up: prefix-search history navigation
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.Up,
+			Fn: func(buf *prompt.Buffer) {
+				// If user has edited since last insertion from history, restart nav
+				if historyActive && buf.Text() != historyLastLine {
+					resetHistoryState()
+				}
+		// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
+		if dropdownActive {
+			if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
+				return
+			}
+			// dropdown was likely closed (no suggestions now)
+			dropdownActive = false
+		}
+		// Activate if not active
+		if !historyActive {
+			historyActive = true
+			historySeed = buf.Text()
+			historyPrefix = buf.Document().TextBeforeCursor()
+			// Build filtered history based on captured prefix
+			filteredHistory = []string{}
+			seen := make(map[string]bool)
+			for i := len(replHistory) - 1; i >= 0; i-- {
+				entry := replHistory[i]
+				if seen[entry] {
+					continue
+				}
+				if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
+					filteredHistory = append(filteredHistory, entry)
+					seen[entry] = true
+				}
+			}
+			historyIndex = 0
+		}
+				if len(filteredHistory) == 0 {
+					return
+				}
+				if historyIndex < len(filteredHistory) {
+					// Insert next older match
+					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+					line := filteredHistory[historyIndex]
+					buf.InsertText(line, false, true)
+					historyLastLine = line
+					historyIndex++
+				}
+			},
+		}),
+		// Arrow Down: prefix-search history navigation forward
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.Down,
+			Fn: func(buf *prompt.Buffer) {
+		// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
+		if dropdownActive {
+			if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
+				return
+			}
+			// dropdown was likely closed
+			dropdownActive = false
+		}
+		if !historyActive || len(filteredHistory) == 0 {
+			return
+		}
+				if historyIndex > 1 {
+					historyIndex--
+					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+					line := filteredHistory[historyIndex-1]
+					buf.InsertText(line, false, true)
+					historyLastLine = line
+					return
+				}
+				if historyIndex == 1 {
+					// Restore the original seed line and exit navigation
+					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
+					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
+					buf.InsertText(historySeed, false, true)
+					resetHistoryState()
+				}
+			},
+		}),
 		// Ctrl-C: cancel in-flight AI or clear current line
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlC,
@@ -994,6 +1036,8 @@ func (r *promptREPL) Run() error {
 				doc := buf.Document()
 				buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
 				buf.Delete(len(doc.Text))
+				// Reset history navigation state when line is cleared
+				resetHistoryState()
 			},
 		}),
 
@@ -1020,6 +1064,10 @@ func (r *promptREPL) Run() error {
 				// Kill line from cursor to end
 				x := []rune(buf.Document().CurrentLineAfterCursor())
 				buf.Delete(len(x))
+				// If we just cleared the entire line, reset history navigation
+				if buf.Text() == "" {
+					resetHistoryState()
+				}
 			},
 		}),
 		// Alt-F: Forward one word (ESC+f)
@@ -1116,6 +1164,10 @@ func (r *promptREPL) Run() error {
 			Fn: func(buf *prompt.Buffer) {
 				x := []rune(buf.Document().CurrentLineBeforeCursor())
 				buf.DeleteBeforeCursor(len(x))
+				// If we just cleared the entire line, reset history navigation
+				if buf.Text() == "" {
+					resetHistoryState()
+				}
 			},
 		}),
 		// Ctrl-D: Delete character under cursor (or exit if line is empty)
@@ -1360,70 +1412,6 @@ func (r *promptREPL) Run() error {
 				},
 			},
 		),
-		// Custom Up arrow: Navigate backward through prefix-filtered history (unless suggestions are available)
-		prompt.OptionAddKeyBind(prompt.KeyBind{
-			Key: prompt.Up,
-			Fn: func(buf *prompt.Buffer) {
-				// If completion suggestions exist, let go-prompt handle Up for dropdown navigation
-				doc := buf.Document()
-				if len(promptCompleter(*doc)) > 0 || aiSelectionActive {
-					return
-				}
-				currentText := buf.Text()
-
-				// If we're starting fresh history navigation, set up the prefix filter
-				if historyIndex == 0 {
-					historyPrefix = currentText // Keep the exact text, not trimmed
-					// Build filtered history based on prefix
-					filteredHistory = []string{}
-					seen := make(map[string]bool) // Track seen entries to avoid duplicates
-					for i := len(replHistory) - 1; i >= 0; i-- {
-						entry := replHistory[i]
-						// Skip if we've seen this exact entry already
-						if seen[entry] {
-							continue
-						}
-						// Check prefix match
-						if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
-							filteredHistory = append(filteredHistory, entry)
-							seen[entry] = true
-						}
-					}
-				}
-
-				if len(filteredHistory) > 0 && historyIndex < len(filteredHistory) {
-					// Clear current line and insert history entry
-					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
-					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
-					buf.InsertText(filteredHistory[historyIndex], false, true)
-					historyIndex++
-				}
-			},
-		}),
-		// Custom Down arrow: Navigate forward through prefix-filtered history (unless suggestions are available)
-		prompt.OptionAddKeyBind(prompt.KeyBind{
-			Key: prompt.Down,
-			Fn: func(buf *prompt.Buffer) {
-				// If completion suggestions exist, let go-prompt handle Down to open/navigate dropdown
-				doc := buf.Document()
-				if len(promptCompleter(*doc)) > 0 || aiSelectionActive {
-					return
-				}
-				if historyIndex > 1 {
-					historyIndex--
-					// Clear current line and insert history entry
-					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
-					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
-					buf.InsertText(filteredHistory[historyIndex-1], false, true)
-				} else if historyIndex == 1 {
-					// Return to the original prefix that was typed
-					historyIndex = 0
-					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
-					buf.Delete(len([]rune(buf.Document().CurrentLineAfterCursor())))
-					buf.InsertText(historyPrefix, false, true)
-				}
-			},
-		}),
 	}
 
 	// Add option to show completions at start only if eager completion is enabled
@@ -1931,4 +1919,88 @@ func extractLastArgument(cmd string) string {
 	}
 
 	return ""
+}
+
+// resetHistoryNavigationIfNeeded resets history navigation state if user has typed something different
+func resetHistoryNavigationIfNeeded(currentFullText, previousHistoryPrefix string) {
+	if historyIndex > 0 && len(filteredHistory) > 0 {
+		// Check if current text matches any history entry we've navigated to
+		isHistoryEntry := false
+		for i := 0; i < historyIndex && i < len(filteredHistory); i++ {
+			if currentFullText == filteredHistory[i] {
+				isHistoryEntry = true
+				break
+			}
+		}
+		// If user has typed something different, reset history navigation
+		if !isHistoryEntry && currentFullText != previousHistoryPrefix {
+			resetHistoryState()
+		}
+	}
+}
+
+// shouldSuppressCompletions determines if completions should be suppressed based on context
+func shouldSuppressCompletions(text, trimmedText string) bool {
+	// Suppress suggestions immediately after closing delimiters ) ] }
+	trimRight := strings.TrimRight(text, " \t")
+	if trimRight != "" {
+		last := trimRight[len(trimRight)-1]
+		if last == ')' || last == ']' || last == '}' {
+			return true
+		}
+	}
+
+	// Check eager completion setting
+	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
+
+	if !eagerCompletion {
+		// Don't show suggestions at the start of a new line - wait for Tab or typing
+		if text == "" {
+			return true
+		}
+
+		// Don't show completions immediately after space unless it's an ad-hoc command
+		if strings.HasSuffix(text, " ") {
+			// Check if we're in an ad-hoc command that expects completions after space
+			isAdHocWithCompletion := false
+			adHocCompletionCommands := make([]string, len(AdHocCommands))
+			for i, cmd := range AdHocCommands {
+				adHocCompletionCommands[i] = cmd.Command + " "
+			}
+			for _, cmd := range adHocCompletionCommands {
+				if strings.Contains(text, cmd) {
+					isAdHocWithCompletion = true
+					break
+				}
+			}
+			// Special case for .ai - it should show completions after space
+			if strings.HasPrefix(trimmedText, ".ai ") {
+				isAdHocWithCompletion = true
+			}
+			if !isAdHocWithCompletion {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// isInAdHocCommandContext checks if we're currently typing within an ad-hoc command
+func isInAdHocCommandContext(trimmedText string) bool {
+	for _, cmd := range AdHocCommands {
+		if strings.HasPrefix(trimmedText, cmd.Command) {
+			return true
+		}
+	}
+	return false
+}
+
+// resetHistoryState fully resets all history navigation state
+func resetHistoryState() {
+	historyActive = false
+	historyIndex = 0
+	historyPrefix = ""
+	filteredHistory = nil
+	historyLastLine = ""
 }

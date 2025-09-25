@@ -61,7 +61,7 @@ func aiSuggestQueriesCtx(ctx context.Context, storage *SimpleStorage, intent str
 	prompt := buildAIPrompt(pctx, intent)
 
 	switch provider {
-case "ollama":
+	case "ollama":
 		return aiOllama(ctx, prompt)
 	case "openai":
 		return aiOpenAI(ctx, prompt)
@@ -186,7 +186,7 @@ func aiOllama(ctx context.Context, prompt string) ([]AISuggestion, error) {
 		"messages": []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"stream":   false,
 	}
-return postAndExtractAISuggestions(ctx, url, "", reqBody, func(r io.Reader) (string, error) {
+	return postAndExtractAISuggestions(ctx, url, "", reqBody, func(r io.Reader) (string, error) {
 		var resp struct {
 			Message struct {
 				Content string `json:"content"`
@@ -226,7 +226,7 @@ func aiOpenAI(ctx context.Context, prompt string) ([]AISuggestion, error) {
 		"messages":    []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"temperature": 0.2,
 	}
-return postAndExtractAISuggestions(ctx, url, head, reqBody, func(r io.Reader) (string, error) {
+	return postAndExtractAISuggestions(ctx, url, head, reqBody, func(r io.Reader) (string, error) {
 		var resp struct {
 			Choices []struct {
 				Message struct {
@@ -274,7 +274,7 @@ func aiClaude(ctx context.Context, prompt string) ([]AISuggestion, error) {
 			"content": []map[string]string{{"type": "text", "text": prompt}},
 		}},
 	}
-return postAndExtractAISuggestionsAnthropic(ctx, url, head, reqBody)
+	return postAndExtractAISuggestionsAnthropic(ctx, url, head, reqBody)
 }
 
 // Provider: Grok (xAI) — OpenAI-compatible style
@@ -304,7 +304,7 @@ func aiGrok(ctx context.Context, prompt string) ([]AISuggestion, error) {
 		"messages":    []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"temperature": 0.2,
 	}
-return postAndExtractAISuggestions(ctx, url, head, reqBody, func(r io.Reader) (string, error) {
+	return postAndExtractAISuggestions(ctx, url, head, reqBody, func(r io.Reader) (string, error) {
 		var resp struct {
 			Choices []struct {
 				Message struct {
@@ -328,7 +328,7 @@ func postAndExtractAISuggestions(ctx context.Context, url, bearer string, body a
 	if err := json.NewEncoder(buf).Encode(body); err != nil {
 		return nil, err
 	}
-req, err := http.NewRequestWithContext(ctx, "POST", url, buf)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +362,7 @@ func postAndExtractAISuggestionsAnthropic(ctx context.Context, url, apiKey strin
 	if err := json.NewEncoder(buf).Encode(body); err != nil {
 		return nil, err
 	}
-req, err := http.NewRequestWithContext(ctx, "POST", url, buf)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, buf)
 	if err != nil {
 		return nil, err
 	}

@@ -28,10 +28,12 @@ var refreshMetricsCache func(*SimpleStorage)
 
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 // Returns true if the query was handled as an ad-hoc function, false otherwise
-var lastAISuggestions []string
-var lastAIExplanations []string
-var pendingAISuggestion string
-var aiClipboard string
+var (
+	lastAISuggestions   []string
+	lastAIExplanations  []string
+	pendingAISuggestion string
+	aiClipboard         string
+)
 
 // aiCancelRequest, when non-nil, cancels an in-flight AI request (e.g., on Ctrl-C)
 var aiCancelRequest func()
@@ -42,22 +44,7 @@ var aiInProgress bool
 func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 	// .help: show ad-hoc commands usage
 	if strings.HasPrefix(query, ".help") {
-		fmt.Println("\nAd-hoc commands:")
-		for _, cmd := range AdHocCommands {
-			fmt.Printf("  %s\n", cmd.Usage)
-			fmt.Printf("    %s\n", cmd.Description)
-			if len(cmd.Examples) > 0 {
-				if len(cmd.Examples) == 1 {
-					fmt.Printf("    Example: %s\n", cmd.Examples[0])
-				} else {
-					fmt.Println("    Examples:")
-					for _, ex := range cmd.Examples {
-						fmt.Printf("      %s\n", ex)
-					}
-				}
-			}
-		}
-		fmt.Println()
+		handleHelpCommand()
 		return true
 	}
 
@@ -206,9 +193,45 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 				}
 			}
 			fmt.Println("Choose with: .ai edit <N>  or  .ai run <N>  (1-based)")
-			fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion; Tab to show the dropdown.")
+			fmt.Println("Tips: Alt-1..Alt-9 to paste a suggestion; Ctrl-Y to paste the first suggestion.")
 		}(args)
 		// Return immediately to keep the prompt interactive
+		return true
+	}
+
+	// .history: show full history or last N
+	if strings.HasPrefix(strings.TrimSpace(query), ".history") {
+		fields := strings.Fields(strings.TrimSpace(query))
+		var n int = -1
+		if len(fields) == 2 {
+			if v, err := strconv.Atoi(fields[1]); err == nil && v > 0 {
+				n = v
+			} else {
+				fmt.Println("Usage: .history [N]")
+				return true
+			}
+		} else if len(fields) > 2 {
+			fmt.Println("Usage: .history [N]")
+			return true
+		}
+		// Prefer in-memory history when available (prompt backend)
+		entries := getInMemoryHistory()
+		if len(entries) == 0 {
+			// Fallback to file
+			path := getHistoryFilePath()
+			entries = loadHistoryFromFile(path)
+		}
+		if len(entries) == 0 {
+			fmt.Println("No history available")
+			return true
+		}
+		start := 0
+		if n > 0 && n < len(entries) {
+			start = len(entries) - n
+		}
+		for i := start; i < len(entries); i++ {
+			fmt.Println(entries[i])
+		}
 		return true
 	}
 
@@ -704,4 +727,96 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 	}
 
 	return false
+}
+
+// handleHelpCommand handles the .help command
+func handleHelpCommand() {
+	fmt.Println("\nAd-hoc commands:")
+	for _, cmd := range AdHocCommands {
+		fmt.Printf("  %s\n", cmd.Usage)
+		fmt.Printf("    %s\n", cmd.Description)
+		if len(cmd.Examples) > 0 {
+			if len(cmd.Examples) == 1 {
+				fmt.Printf("    Example: %s\n", cmd.Examples[0])
+			} else {
+				fmt.Println("    Examples:")
+				for _, ex := range cmd.Examples {
+					fmt.Printf("      %s\n", ex)
+				}
+			}
+		}
+	}
+	fmt.Println()
+}
+
+// handleLabelsCommand handles the .labels command
+func handleLabelsCommand(query string, storage *SimpleStorage) bool {
+	if !strings.HasPrefix(query, ".labels ") && !(strings.HasPrefix(query, ".labels(") && strings.HasSuffix(query, ")")) {
+		return false
+	}
+
+	var metric string
+	if strings.HasPrefix(query, ".labels ") {
+		metric = strings.TrimSpace(strings.TrimPrefix(query, ".labels "))
+	} else {
+		// Handle .labels(metric_name) format
+		metric = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(query, ".labels("), ")"))
+	}
+
+	if metric == "" {
+		fmt.Println("Usage: .labels <metric>")
+		return true
+	}
+
+	samples, exists := storage.metrics[metric]
+	if !exists {
+		fmt.Printf("Metric %s not found\n", metric)
+		return true
+	}
+
+	// Collect all unique label keys and sample values for each
+	labelInfo := make(map[string]map[string]bool)
+	for _, sample := range samples {
+		for labelName, labelValue := range sample.Labels {
+			if labelName == "__name__" {
+				continue
+			}
+			if labelInfo[labelName] == nil {
+				labelInfo[labelName] = make(map[string]bool)
+			}
+			labelInfo[labelName][labelValue] = true
+		}
+	}
+
+	if len(labelInfo) == 0 {
+		fmt.Printf("No labels found for metric %s\n", metric)
+		return true
+	}
+
+	// Sort label names
+	var labelNames []string
+	for labelName := range labelInfo {
+		labelNames = append(labelNames, labelName)
+	}
+	sort.Strings(labelNames)
+
+	fmt.Printf("Labels for metric %s:\n", metric)
+	for _, labelName := range labelNames {
+		values := labelInfo[labelName]
+		var valueList []string
+		for value := range values {
+			valueList = append(valueList, value)
+		}
+		sort.Strings(valueList)
+
+		// Show up to 5 example values
+		displayValues := valueList
+		if len(displayValues) > 5 {
+			displayValues = displayValues[:5]
+			fmt.Printf("  %s: %s ... (%d total values)\n", labelName, strings.Join(displayValues, ", "), len(valueList))
+		} else {
+			fmt.Printf("  %s: %s\n", labelName, strings.Join(displayValues, ", "))
+		}
+	}
+	return true
 }
