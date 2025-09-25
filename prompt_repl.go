@@ -36,6 +36,7 @@ var (
 	executeOneFunc    func(string) // Function pointer to executeOne
 	globalStorage     interface{}  // Storage for accessing metrics metadata
 	inGoPromptSession bool         // true while running go-prompt REPL
+	dropdownActive    bool         // true if user opened completion with Tab
 )
 
 // promptCompleter provides completions for go-prompt
@@ -625,6 +626,8 @@ var (
 func promptExecutor(s string) {
 	// If AI selection was active, clear it upon any command submission
 	aiSelectionActive = false
+	// Any command submission exits dropdown mode
+	dropdownActive = false
 	// Reset history navigation state when a command is executed
 	historyIndex = 0
 	historyPrefix = ""
@@ -931,6 +934,13 @@ func (r *promptREPL) Run() error {
 		prompt.OptionMaxSuggestion(20),
 		// Use PromQL-specific word separators for word detection
 		prompt.OptionCompletionWordSeparator("(){}[]\" \t\n,="), // PromQL-specific word separators
+		// Track when user explicitly opens the dropdown via Tab
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.Tab,
+			Fn: func(buf *prompt.Buffer) {
+				dropdownActive = true
+			},
+		}),
 		// Arrow Up: prefix-search history navigation
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.Up,
@@ -939,26 +949,34 @@ func (r *promptREPL) Run() error {
 				if historyActive && buf.Text() != historyLastLine {
 					resetHistoryState()
 				}
-				// Activate if not active
-				if !historyActive {
-					historyActive = true
-					historySeed = buf.Text()
-					historyPrefix = buf.Document().TextBeforeCursor()
-					// Build filtered history based on captured prefix
-					filteredHistory = []string{}
-					seen := make(map[string]bool)
-					for i := len(replHistory) - 1; i >= 0; i-- {
-						entry := replHistory[i]
-						if seen[entry] {
-							continue
-						}
-						if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
-							filteredHistory = append(filteredHistory, entry)
-							seen[entry] = true
-						}
-					}
-					historyIndex = 0
+		// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
+		if dropdownActive {
+			if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
+				return
+			}
+			// dropdown was likely closed (no suggestions now)
+			dropdownActive = false
+		}
+		// Activate if not active
+		if !historyActive {
+			historyActive = true
+			historySeed = buf.Text()
+			historyPrefix = buf.Document().TextBeforeCursor()
+			// Build filtered history based on captured prefix
+			filteredHistory = []string{}
+			seen := make(map[string]bool)
+			for i := len(replHistory) - 1; i >= 0; i-- {
+				entry := replHistory[i]
+				if seen[entry] {
+					continue
 				}
+				if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
+					filteredHistory = append(filteredHistory, entry)
+					seen[entry] = true
+				}
+			}
+			historyIndex = 0
+		}
 				if len(filteredHistory) == 0 {
 					return
 				}
@@ -977,9 +995,17 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.Down,
 			Fn: func(buf *prompt.Buffer) {
-				if !historyActive || len(filteredHistory) == 0 {
-					return
-				}
+		// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
+		if dropdownActive {
+			if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
+				return
+			}
+			// dropdown was likely closed
+			dropdownActive = false
+		}
+		if !historyActive || len(filteredHistory) == 0 {
+			return
+		}
 				if historyIndex > 1 {
 					historyIndex--
 					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
