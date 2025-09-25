@@ -1169,7 +1169,7 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 	// Ad-hoc commands (support piping for their printed output)
 	if strings.HasPrefix(query, ".") {
 		if hasPipe {
-captured, _ := captureOutput(func() {
+			captured, _ := captureOutput(func() {
 				_ = handleAdHocFunction(query, storage)
 			})
 			if aiInProgress {
@@ -1247,7 +1247,7 @@ captured, _ := captureOutput(func() {
 
 	if hasPipe {
 		// Capture the normal printed output and feed it to the pipe command
-captured, _ := captureOutput(func() { printUpstreamQueryResult(result) })
+		captured, _ := captureOutput(func() { printUpstreamQueryResult(result) })
 		cmd := exec.Command("/bin/sh", "-c", pipeCmd)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

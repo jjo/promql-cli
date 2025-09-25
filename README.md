@@ -60,6 +60,7 @@ promql-cli query -q 'up' -o json ./example.prom
 | `-c, --command "cmds"` | Run commands before REPL/query | `-c ".scrape http://localhost:9100/metrics"` |
 | `-s, --silent` | Suppress startup output | `-s -c ".load data.prom"` |
 | `--repl {prompt\|readline}` | Choose REPL backend | `--repl readline` |
+| `--ai "key=value,..."` | Configure AI settings in one flag | `--ai "provider=claude,model=opus,answers=5"` |
 
 ### 🤖 REPL Commands
 
@@ -122,14 +123,82 @@ sum by (<Tab>                    # → suggests relevant grouping labels
 
 ### 🤖 AI Configuration
 
-| Provider | Environment Variables | Default Model |
-|----------|----------------------|---------------|
-| **OpenAI** | `OPENAI_API_KEY` | gpt-4o-mini |
-| **Claude** | `ANTHROPIC_API_KEY` | claude-3-5-sonnet-20240620 |
-| **Grok** | `XAI_API_KEY` | grok-2 |
-| **Ollama** | `PROMQL_CLI_OLLAMA_HOST` | llama3.1 |
+#### Quick Setup
 
-Set provider: `export PROMQL_CLI_AI_PROVIDER=claude`
+```bash
+# Method 1: Use the composite --ai flag (recommended)
+promql-cli query --ai "provider=claude,model=opus,answers=5" ./metrics.prom
+
+# Method 2: Set environment variables
+export PROMQL_CLI_AI_PROVIDER=claude
+export ANTHROPIC_API_KEY=your_key_here
+promql-cli query ./metrics.prom
+
+# Method 3: Create a profile file ~/.config/promql-cli/ai.toml
+```
+
+#### Composite AI Flag
+
+The `--ai` flag lets you configure all AI settings in one place:
+
+```bash
+# Basic provider selection
+--ai "provider=claude"
+
+# Full configuration
+--ai "provider=openai,model=gpt-4,base=https://custom.api/v1,answers=3"
+
+# Multiple values (comma or space separated)
+--ai "provider=claude model=opus answers=5"
+--ai "provider=grok,model=grok-beta,answers=2"
+```
+
+**Supported keys:**
+- `provider` - AI provider (openai|claude|grok|ollama)
+- `model` - Model name to use
+- `base` - Custom API base URL
+- `answers` - Number of suggestions to generate
+- `profile` - Load settings from profile file
+
+#### Provider Details
+
+| Provider | API Key Variable | Default Model | Base URL |
+|----------|------------------|---------------|----------|
+| **OpenAI** | `OPENAI_API_KEY` | gpt-4o-mini | https://api.openai.com/v1 |
+| **Claude** | `ANTHROPIC_API_KEY` | claude-3-5-sonnet-20240620 | https://api.anthropic.com/v1 |
+| **Grok** | `XAI_API_KEY` | grok-2 | https://api.x.ai/v1 |
+| **Ollama** | (none - local) | llama3.1 | http://localhost:11434 |
+
+#### Configuration Priority
+
+Settings are applied in this order (later overrides earlier):
+1. Profile file (`~/.config/promql-cli/ai.toml`)
+2. Environment variables (`PROMQL_CLI_AI` or individual vars)
+3. Command line `--ai` flag
+
+#### Profile Files
+
+Create `~/.config/promql-cli/ai.toml` for persistent settings:
+
+```toml
+[profiles.default]
+provider = "claude"
+model = "claude-3-5-sonnet-20240620"
+answers = 3
+
+[profiles.work]
+provider = "openai"
+model = "gpt-4"
+base = "https://company-proxy.internal/v1"
+answers = 5
+
+[profiles.local]
+provider = "ollama"
+model = "llama3.1"
+host = "http://localhost:11434"
+```
+
+Use with: `--ai "profile=work"` or `export PROMQL_CLI_AI_PROFILE=work`
 
 ## 🎯 Use Cases
 

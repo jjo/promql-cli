@@ -228,7 +228,7 @@ func handleAdHocFunction(query string, storage *SimpleStorage) bool {
 			return true
 		}
 		// Prefer in-memory history when available (prompt backend)
-		entries := replHistory
+		entries := getInMemoryHistory()
 		if len(entries) == 0 {
 			// Fallback to file
 			path := getHistoryFilePath()
