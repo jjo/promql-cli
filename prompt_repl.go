@@ -42,74 +42,25 @@ var (
 func promptCompleter(d prompt.Document) []prompt.Suggest {
 	text := d.TextBeforeCursor()
 	trimmedText := strings.TrimSpace(text)
+	emptySuggestions := []prompt.Suggest{}
 
 	// Reset history navigation if the text has changed from what's in filtered history
-	if historyIndex > 0 && len(filteredHistory) > 0 {
-		currentFullText := d.Text
-		// Check if current text matches any history entry we've navigated to
-		isHistoryEntry := false
-		for i := 0; i < historyIndex && i < len(filteredHistory); i++ {
-			if currentFullText == filteredHistory[i] {
-				isHistoryEntry = true
-				break
-			}
-		}
-		// If user has typed something different, reset history navigation
-		if !isHistoryEntry && currentFullText != historyPrefix {
-			historyIndex = 0
-			historyPrefix = ""
-			filteredHistory = nil
-		}
-	}
-
-	// Early return for empty suggestions to avoid panic
-	emptySuggestions := []prompt.Suggest{}
+	resetHistoryNavigationIfNeeded(d.Text, historyPrefix)
 
 	// If we are in AI selection mode, present the AI suggestions menu regardless of typing
 	if aiSelectionActive {
 		return getAISuggestionMenu()
 	}
 
-	// Suppress suggestions immediately after closing delimiters ) ] }
-	trimRight := strings.TrimRight(text, " \t")
-	if trimRight != "" {
-		last := trimRight[len(trimRight)-1]
-		if last == ')' || last == ']' || last == '}' {
-			return emptySuggestions
-		}
+	// Check if we should suppress completions based on context
+	if shouldSuppressCompletions(text, trimmedText) {
+		return emptySuggestions
 	}
 
-	// Check if we should be aggressive with completions (old behavior)
-	// Users can set PROMQL_CLI_EAGER_COMPLETION=true to get the old behavior
+	// Handle eager completion mode - show suggestions at start
 	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
-
-	if !eagerCompletion {
-		// Don't show suggestions at the start of a new line - wait for Tab or typing
-		if text == "" {
-			return emptySuggestions
-		}
-
-		// Don't show completions immediately after space unless it's an ad-hoc command
-		// or we're continuing to type something
-		if strings.HasSuffix(text, " ") {
-			// Check if we're in an ad-hoc command that expects completions after space
-			isAdHocWithCompletion := false
-			for _, cmd := range []string{".labels ", ".timestamps ", ".drop ", ".seed ", ".at ", ".pinat ", ".scrape ", ".load ", ".save "} {
-				if strings.Contains(text, cmd) {
-					isAdHocWithCompletion = true
-					break
-				}
-			}
-
-			if !isAdHocWithCompletion {
-				return emptySuggestions
-			}
-		}
-	} else {
-		// Old behavior - show suggestions at start
-		if text == "" {
-			return getMixedSuggests("")
-		}
+	if eagerCompletion && text == "" {
+		return getMixedSuggests("")
 	}
 
 	// Use go-prompt's word detection with our custom separators
@@ -117,13 +68,7 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 
 	// Check if we're in ANY ad-hoc command context first
 	// This prevents range duration suggestions from appearing in ad-hoc commands
-	isAdHocCommand := false
-	for _, cmd := range AdHocCommands {
-		if strings.HasPrefix(trimmedText, cmd.Command) {
-			isAdHocCommand = true
-			break
-		}
-	}
+	isAdHocCommand := isInAdHocCommandContext(trimmedText)
 
 	// Check if we're typing an ad-hoc command itself
 	if strings.HasPrefix(wordBefore, ".") && !strings.Contains(text, " ") {
@@ -1070,6 +1015,12 @@ func (r *promptREPL) Run() error {
 				doc := buf.Document()
 				buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
 				buf.Delete(len(doc.Text))
+				// Reset history navigation state when line is cleared
+				historyActive = false
+				historyIndex = 0
+				historyPrefix = ""
+				filteredHistory = nil
+				historyLastLine = ""
 			},
 		}),
 
@@ -1096,6 +1047,14 @@ func (r *promptREPL) Run() error {
 				// Kill line from cursor to end
 				x := []rune(buf.Document().CurrentLineAfterCursor())
 				buf.Delete(len(x))
+				// If we just cleared the entire line, reset history navigation
+				if buf.Text() == "" {
+					historyActive = false
+					historyIndex = 0
+					historyPrefix = ""
+					filteredHistory = nil
+					historyLastLine = ""
+				}
 			},
 		}),
 		// Alt-F: Forward one word (ESC+f)
@@ -1192,6 +1151,14 @@ func (r *promptREPL) Run() error {
 			Fn: func(buf *prompt.Buffer) {
 				x := []rune(buf.Document().CurrentLineBeforeCursor())
 				buf.DeleteBeforeCursor(len(x))
+				// If we just cleared the entire line, reset history navigation
+				if buf.Text() == "" {
+					historyActive = false
+					historyIndex = 0
+					historyPrefix = ""
+					filteredHistory = nil
+					historyLastLine = ""
+				}
 			},
 		}),
 		// Ctrl-D: Delete character under cursor (or exit if line is empty)
@@ -1943,4 +1910,74 @@ func extractLastArgument(cmd string) string {
 	}
 
 	return ""
+}
+
+// resetHistoryNavigationIfNeeded resets history navigation state if user has typed something different
+func resetHistoryNavigationIfNeeded(currentFullText, historyPrefix string) {
+	if historyIndex > 0 && len(filteredHistory) > 0 {
+		// Check if current text matches any history entry we've navigated to
+		isHistoryEntry := false
+		for i := 0; i < historyIndex && i < len(filteredHistory); i++ {
+			if currentFullText == filteredHistory[i] {
+				isHistoryEntry = true
+				break
+			}
+		}
+		// If user has typed something different, reset history navigation
+		if !isHistoryEntry && currentFullText != historyPrefix {
+			historyIndex = 0
+			historyPrefix = ""
+			filteredHistory = nil
+		}
+	}
+}
+
+// shouldSuppressCompletions determines if completions should be suppressed based on context
+func shouldSuppressCompletions(text, trimmedText string) bool {
+	// Suppress suggestions immediately after closing delimiters ) ] }
+	trimRight := strings.TrimRight(text, " \t")
+	if trimRight != "" {
+		last := trimRight[len(trimRight)-1]
+		if last == ')' || last == ']' || last == '}' {
+			return true
+		}
+	}
+
+	// Check eager completion setting
+	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
+
+	if !eagerCompletion {
+		// Don't show suggestions at the start of a new line - wait for Tab or typing
+		if text == "" {
+			return true
+		}
+
+		// Don't show completions immediately after space unless it's an ad-hoc command
+		if strings.HasSuffix(text, " ") {
+			// Check if we're in an ad-hoc command that expects completions after space
+			isAdHocWithCompletion := false
+			adHocCompletionCommands := []string{".labels ", ".timestamps ", ".drop ", ".seed ", ".at ", ".pinat ", ".scrape ", ".load ", ".save "}
+			for _, cmd := range adHocCompletionCommands {
+				if strings.Contains(text, cmd) {
+					isAdHocWithCompletion = true
+					break
+				}
+			}
+			if !isAdHocWithCompletion {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// isInAdHocCommandContext checks if we're currently typing within an ad-hoc command
+func isInAdHocCommandContext(trimmedText string) bool {
+	for _, cmd := range AdHocCommands {
+		if strings.HasPrefix(trimmedText, cmd.Command) {
+			return true
+		}
+	}
+	return false
 }
