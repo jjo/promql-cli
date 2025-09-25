@@ -28,10 +28,12 @@ var refreshMetricsCache func(*SimpleStorage)
 
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 // Returns true if the query was handled as an ad-hoc function, false otherwise
-var lastAISuggestions []string
-var lastAIExplanations []string
-var pendingAISuggestion string
-var aiClipboard string
+var (
+	lastAISuggestions   []string
+	lastAIExplanations  []string
+	pendingAISuggestion string
+	aiClipboard         string
+)
 
 // aiCancelRequest, when non-nil, cancels an in-flight AI request (e.g., on Ctrl-C)
 var aiCancelRequest func()
