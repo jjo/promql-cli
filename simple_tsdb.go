@@ -134,104 +134,70 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 							bucketLabels[k] = v
 						}
 						bucketLabels["le"] = fmt.Sprintf("%g", bucket.GetUpperBound())
-						bucketLabels["__name__"] = metricName + "_bucket"
-
-						bucketSample := MetricSample{
+						s.metrics[metricName+"_bucket"] = append(s.metrics[metricName+"_bucket"], MetricSample{
 							Labels:    bucketLabels,
 							Value:     float64(bucket.GetCumulativeCount()),
 							Timestamp: timestamp,
-						}
-						s.metrics[metricName+"_bucket"] = append(s.metrics[metricName+"_bucket"], bucketSample)
+						})
 					}
-
-					// Store histogram sum
-					sumLabels := make(map[string]string)
-					for k, v := range lbls {
-						sumLabels[k] = v
+					// Sum and Count
+					if metric.Histogram.SampleSum != nil {
+						s.metrics[metricName+"_sum"] = append(s.metrics[metricName+"_sum"], MetricSample{Labels: lbls, Value: metric.Histogram.GetSampleSum(), Timestamp: timestamp})
 					}
-					sumLabels["__name__"] = metricName + "_sum"
-					sumSample := MetricSample{
-						Labels:    sumLabels,
-						Value:     metric.Histogram.GetSampleSum(),
-						Timestamp: timestamp,
+					if metric.Histogram.SampleCount != nil {
+						s.metrics[metricName+"_count"] = append(s.metrics[metricName+"_count"], MetricSample{Labels: lbls, Value: float64(metric.Histogram.GetSampleCount()), Timestamp: timestamp})
 					}
-					s.metrics[metricName+"_sum"] = append(s.metrics[metricName+"_sum"], sumSample)
-
-					// Store histogram count
-					countLabels := make(map[string]string)
-					for k, v := range lbls {
-						countLabels[k] = v
-					}
-					countLabels["__name__"] = metricName + "_count"
-					countSample := MetricSample{
-						Labels:    countLabels,
-						Value:     float64(metric.Histogram.GetSampleCount()),
-						Timestamp: timestamp,
-					}
-					s.metrics[metricName+"_count"] = append(s.metrics[metricName+"_count"], countSample)
-					continue
 				}
+				// Histogram fully handled; proceed to next metric
+				continue
 			case dto.MetricType_SUMMARY:
 				if metric.Summary != nil {
-					// Store summary quantiles
-					for _, quantile := range metric.Summary.GetQuantile() {
-						quantileLabels := make(map[string]string)
+					for _, q := range metric.Summary.Quantile {
+						qLabels := make(map[string]string)
 						for k, v := range lbls {
-							quantileLabels[k] = v
+							qLabels[k] = v
 						}
-						quantileLabels["quantile"] = fmt.Sprintf("%g", quantile.GetQuantile())
-
-						quantileSample := MetricSample{
-							Labels:    quantileLabels,
-							Value:     quantile.GetValue(),
-							Timestamp: timestamp,
-						}
-						s.metrics[metricName] = append(s.metrics[metricName], quantileSample)
+						qLabels["quantile"] = fmt.Sprintf("%g", q.GetQuantile())
+						s.metrics[metricName] = append(s.metrics[metricName], MetricSample{Labels: qLabels, Value: q.GetValue(), Timestamp: timestamp})
 					}
-
-					// Store summary sum
-					sumLabels := make(map[string]string)
-					for k, v := range lbls {
-						sumLabels[k] = v
+					if metric.Summary.SampleSum != nil {
+						s.metrics[metricName+"_sum"] = append(s.metrics[metricName+"_sum"], MetricSample{Labels: lbls, Value: metric.Summary.GetSampleSum(), Timestamp: timestamp})
 					}
-					sumLabels["__name__"] = metricName + "_sum"
-					sumSample := MetricSample{
-						Labels:    sumLabels,
-						Value:     metric.Summary.GetSampleSum(),
-						Timestamp: timestamp,
+					if metric.Summary.SampleCount != nil {
+						s.metrics[metricName+"_count"] = append(s.metrics[metricName+"_count"], MetricSample{Labels: lbls, Value: float64(metric.Summary.GetSampleCount()), Timestamp: timestamp})
 					}
-					s.metrics[metricName+"_sum"] = append(s.metrics[metricName+"_sum"], sumSample)
-
-					// Store summary count
-					countLabels := make(map[string]string)
-					for k, v := range lbls {
-						countLabels[k] = v
-					}
-					countLabels["__name__"] = metricName + "_count"
-					countSample := MetricSample{
-						Labels:    countLabels,
-						Value:     float64(metric.Summary.GetSampleCount()),
-						Timestamp: timestamp,
-					}
-					s.metrics[metricName+"_count"] = append(s.metrics[metricName+"_count"], countSample)
-					continue
 				}
-			default:
+				// Summary fully handled; proceed to next metric
 				continue
+			default:
+				// Unknown types ignored for now
 			}
 
-			// Create and store the primary sample
-			sample := MetricSample{
-				Labels:    lbls,
-				Value:     value,
-				Timestamp: timestamp,
-			}
-
-			s.metrics[metricName] = append(s.metrics[metricName], sample)
+			// For counter/gauge/untyped: append the primary sample
+			s.metrics[metricName] = append(s.metrics[metricName], MetricSample{Labels: lbls, Value: value, Timestamp: timestamp})
 		}
 	}
 
 	return nil
+}
+
+// AddSample appends a single sample to the in-memory store.
+func (s *SimpleStorage) AddSample(labels map[string]string, value float64, timestampMillis int64) {
+	if s.metrics == nil {
+		s.metrics = make(map[string][]MetricSample)
+	}
+	name := labels["__name__"]
+	if name == "" {
+		name = "query_result"
+	}
+	// Copy labels to avoid external mutation
+	lbls := make(map[string]string, len(labels))
+	for k, v := range labels {
+		lbls[k] = v
+	}
+	// Ensure __name__ is present
+	lbls["__name__"] = name
+	s.metrics[name] = append(s.metrics[name], MetricSample{Labels: lbls, Value: value, Timestamp: timestampMillis})
 }
 
 // SaveToWriter writes the store content in Prometheus text exposition (line) format.

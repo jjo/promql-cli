@@ -75,6 +75,24 @@ var AdHocCommands = []AdHocCommand{
 		},
 	},
 	{
+		Command:     ".prom_scrape",
+		Description: "Query a remote Prometheus API and import the results",
+		Usage:       ".prom_scrape <PROM_API_URI> 'query' [count] [delay]",
+		Examples: []string{
+			".prom_scrape http://localhost:9090/api/v1 'up'",
+			".prom_scrape http://localhost:9090 'rate(http_requests_total[5m])' 3 10s",
+		},
+	},
+	{
+		Command:     ".prom_scrape_range",
+		Description: "Query a remote Prometheus API over a time range and import the results",
+		Usage:       ".prom_scrape_range <PROM_API_URI> 'query' <start> <end> <step> [count] [delay]",
+		Examples: []string{
+			".prom_scrape_range http://localhost:9090 'up' now-15m now 30s",
+			".prom_scrape_range http://localhost:9090 'rate(http_requests_total[5m])' 2025-09-27T00:00:00Z 2025-09-27T00:30:00Z 15s",
+		},
+	},
+	{
 		Command:     ".drop",
 		Description: "Remove a metric from the in-memory store",
 		Usage:       ".drop <metric>",

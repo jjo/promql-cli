@@ -156,8 +156,8 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			return filtered
 		}
 
-		// Handle .scrape URL completions FIRST (before checking for other commands with metric completion)
-		if strings.HasPrefix(trimmedText, ".scrape") {
+		// Handle .scrape, .prom_scrape and .prom_scrape_range URL completions FIRST
+		if strings.HasPrefix(trimmedText, ".scrape") || strings.HasPrefix(trimmedText, ".prom_scrape") || strings.HasPrefix(trimmedText, ".prom_scrape_range") {
 			if strings.Contains(text, ".scrape ") {
 				cmdEnd := strings.Index(text, ".scrape ") + 8
 				afterCmd := strings.TrimSpace(text[cmdEnd:])
