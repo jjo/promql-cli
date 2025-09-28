@@ -1,12 +1,14 @@
-package main
+package repl
 
 import (
 	"fmt"
 	"strings"
 	"time"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
-func handleAdhocPinAt(query string, storage *SimpleStorage) bool {
+func handleAdhocPinAt(query string, storage *sstorage.SimpleStorage) bool {
 	arg := strings.TrimSpace(strings.TrimPrefix(query, ".pinat"))
 	arg = strings.Trim(arg, " \"'")
 	if arg == "" {

@@ -1,6 +1,6 @@
 //go:build prompt
 
-package main
+package repl
 
 import (
 	"bufio"
@@ -22,6 +22,8 @@ import (
 	"github.com/c-bata/go-prompt"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/prometheus/promql/parser"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
 const suggestionLimit = 100
@@ -949,34 +951,34 @@ func (r *promptREPL) Run() error {
 				if historyActive && buf.Text() != historyLastLine {
 					resetHistoryState()
 				}
-		// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
-		if dropdownActive {
-			if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
-				return
-			}
-			// dropdown was likely closed (no suggestions now)
-			dropdownActive = false
-		}
-		// Activate if not active
-		if !historyActive {
-			historyActive = true
-			historySeed = buf.Text()
-			historyPrefix = buf.Document().TextBeforeCursor()
-			// Build filtered history based on captured prefix
-			filteredHistory = []string{}
-			seen := make(map[string]bool)
-			for i := len(replHistory) - 1; i >= 0; i-- {
-				entry := replHistory[i]
-				if seen[entry] {
-					continue
+				// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
+				if dropdownActive {
+					if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
+						return
+					}
+					// dropdown was likely closed (no suggestions now)
+					dropdownActive = false
 				}
-				if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
-					filteredHistory = append(filteredHistory, entry)
-					seen[entry] = true
+				// Activate if not active
+				if !historyActive {
+					historyActive = true
+					historySeed = buf.Text()
+					historyPrefix = buf.Document().TextBeforeCursor()
+					// Build filtered history based on captured prefix
+					filteredHistory = []string{}
+					seen := make(map[string]bool)
+					for i := len(replHistory) - 1; i >= 0; i-- {
+						entry := replHistory[i]
+						if seen[entry] {
+							continue
+						}
+						if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
+							filteredHistory = append(filteredHistory, entry)
+							seen[entry] = true
+						}
+					}
+					historyIndex = 0
 				}
-			}
-			historyIndex = 0
-		}
 				if len(filteredHistory) == 0 {
 					return
 				}
@@ -995,17 +997,17 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.Down,
 			Fn: func(buf *prompt.Buffer) {
-		// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
-		if dropdownActive {
-			if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
-				return
-			}
-			// dropdown was likely closed
-			dropdownActive = false
-		}
-		if !historyActive || len(filteredHistory) == 0 {
-			return
-		}
+				// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
+				if dropdownActive {
+					if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
+						return
+					}
+					// dropdown was likely closed
+					dropdownActive = false
+				}
+				if !historyActive || len(filteredHistory) == 0 {
+					return
+				}
 				if historyIndex > 1 {
 					historyIndex--
 					buf.DeleteBeforeCursor(len([]rune(buf.Document().CurrentLineBeforeCursor())))
@@ -1452,10 +1454,10 @@ func (r *promptREPL) Close() error {
 func fetchMetrics() {
 	// Try to get metrics from globalStorage if available
 	if globalStorage != nil {
-		if storage, ok := globalStorage.(*SimpleStorage); ok && storage != nil {
-			metrics = make([]string, 0, len(storage.metrics))
-			metricsHelp = storage.metricsHelp // Use the help text from storage
-			for name := range storage.metrics {
+		if storage, ok := globalStorage.(*sstorage.SimpleStorage); ok && storage != nil {
+			metrics = make([]string, 0, len(storage.Metrics))
+			metricsHelp = storage.MetricsHelp // Use the help text from storage
+			for name := range storage.Metrics {
 				metrics = append(metrics, name)
 			}
 			return
@@ -1636,14 +1638,14 @@ func getLabelNameSuggests(prefix string, metricName string) []prompt.Suggest {
 		return []prompt.Suggest{}
 	}
 
-	storage, ok := globalStorage.(*SimpleStorage)
+	storage, ok := globalStorage.(*sstorage.SimpleStorage)
 	if !ok || storage == nil {
 		return []prompt.Suggest{}
 	}
 
 	// Collect unique label names from the metric
 	labelNames := make(map[string]bool)
-	if samples, exists := storage.metrics[metricName]; exists {
+	if samples, exists := storage.Metrics[metricName]; exists {
 		for _, sample := range samples {
 			for labelName := range sample.Labels {
 				if labelName != "__name__" {
@@ -1676,14 +1678,14 @@ func getLabelValueSuggests(prefix string, metricName string, labelName string) [
 		return []prompt.Suggest{}
 	}
 
-	storage, ok := globalStorage.(*SimpleStorage)
+	storage, ok := globalStorage.(*sstorage.SimpleStorage)
 	if !ok || storage == nil {
 		return []prompt.Suggest{}
 	}
 
 	// Collect unique label values
 	labelValues := make(map[string]bool)
-	if samples, exists := storage.metrics[metricName]; exists {
+	if samples, exists := storage.Metrics[metricName]; exists {
 		for _, sample := range samples {
 			if value, hasLabel := sample.Labels[labelName]; hasLabel {
 				labelValues[value] = true

@@ -1,4 +1,4 @@
-package main
+package ai
 
 //go:generate go run ./tools/genmodels -o ai_models_generated.go
 

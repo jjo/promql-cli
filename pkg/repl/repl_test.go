@@ -1,4 +1,4 @@
-package main
+package repl
 
 import (
 	"strings"
@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/prometheus/prometheus/promql"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
-func newTestStore(t *testing.T) *SimpleStorage {
+func newTestStore(t *testing.T) *sstorage.SimpleStorage {
 	t.Helper()
-	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	store := sstorage.NewSimpleStorage()
+	if err := store.LoadFromReader(strings.NewReader(sstorage.SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 	return store
@@ -32,7 +34,7 @@ func newTestEngine() *promql.Engine {
 
 // Ensure that queries with PromQL @ modifier using milliseconds are normalized and do not error.
 func TestExecuteOne_AtModifierWithMillis_Works(t *testing.T) {
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	content := "cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 1 1700000000000\n" +
 		"cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 2 1700000010000\n"
 	if err := store.LoadFromReader(strings.NewReader(content)); err != nil {
@@ -60,7 +62,7 @@ func TestExecuteOne_AtModifierWithMillis_Works(t *testing.T) {
 }
 
 func TestBangExec_Echo(t *testing.T) {
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	engine := newTestEngine()
 	out := captureStdout(t, func() {
 		executeOne(engine, store, "!echo HELLO")

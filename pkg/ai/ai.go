@@ -1,4 +1,4 @@
-package main
+package ai
 
 import (
 	"bytes"
@@ -13,9 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
-// aiSuggestQueries produces PromQL query suggestions for a free-text intent using a selected AI provider.
+// AISuggestQueries produces PromQL query suggestions for a free-text intent using a selected AI provider.
 // Provider selection via env PROMQL_CLI_AI_PROVIDER: ollama|openai|claude|grok (default: ollama)
 // Models and endpoints via envs: see per-provider functions below.
 // Global AI configuration (flags override env).
@@ -44,12 +46,12 @@ func ConfigureAIFromFlags(provider string, openaiModel, openaiBase, claudeModel,
 	aiOllamaHostFlag = strings.TrimSpace(ollamaHost)
 }
 
-func aiSuggestQueries(storage *SimpleStorage, intent string) ([]AISuggestion, error) {
-	return aiSuggestQueriesCtx(context.Background(), storage, intent)
+func AISuggestQueries(storage *sstorage.SimpleStorage, intent string) ([]AISuggestion, error) {
+	return AISuggestQueriesCtx(context.Background(), storage, intent)
 }
 
-// aiSuggestQueriesCtx is like aiSuggestQueries but allows cancellation via context.
-func aiSuggestQueriesCtx(ctx context.Context, storage *SimpleStorage, intent string) ([]AISuggestion, error) {
+// AISuggestQueriesCtx is like AISuggestQueries but allows cancellation via context.
+func AISuggestQueriesCtx(ctx context.Context, storage *sstorage.SimpleStorage, intent string) ([]AISuggestion, error) {
 	provider := aiProviderFlag
 	if provider == "" {
 		provider = strings.ToLower(strings.TrimSpace(os.Getenv("PROMQL_CLI_AI_PROVIDER")))
@@ -90,11 +92,11 @@ type metricInfo struct {
 	Labels []string
 }
 
-func buildAIPromptContext(storage *SimpleStorage) promptContext {
+func buildAIPromptContext(storage *sstorage.SimpleStorage) promptContext {
 	// desired number of answers
 	num := aiDesiredNum()
 	var metrics []metricInfo
-	for name, samples := range storage.metrics {
+	for name, samples := range storage.Metrics {
 		// Collect label names (excluding __name__)
 		labelSet := map[string]bool{}
 		for _, s := range samples {
@@ -110,8 +112,8 @@ func buildAIPromptContext(storage *SimpleStorage) promptContext {
 		}
 		sort.Strings(labels)
 		help := ""
-		if storage.metricsHelp != nil {
-			help = storage.metricsHelp[name]
+		if storage.MetricsHelp != nil {
+			help = storage.MetricsHelp[name]
 		}
 		metrics = append(metrics, metricInfo{Name: name, Help: help, Labels: labels})
 	}
@@ -406,7 +408,7 @@ func parseAISuggestions(s string) []AISuggestion {
 	if json.Unmarshal([]byte(s), &a) == nil && len(a.Answers) > 0 {
 		out := make([]AISuggestion, 0, len(a.Answers))
 		for _, ans := range a.Answers {
-			q := cleanCandidate(ans.Query)
+			q := CleanCandidate(ans.Query)
 			if q != "" {
 				out = append(out, AISuggestion{Query: q, Explain: strings.TrimSpace(ans.Explain)})
 			}
@@ -423,7 +425,7 @@ func parseAISuggestions(s string) []AISuggestion {
 	if json.Unmarshal([]byte(s), &j) == nil && len(j.Queries) > 0 {
 		out := make([]AISuggestion, 0, len(j.Queries))
 		for _, q := range j.Queries {
-			if t := cleanCandidate(q); t != "" {
+			if t := CleanCandidate(q); t != "" {
 				out = append(out, AISuggestion{Query: t})
 			}
 		}
@@ -442,7 +444,7 @@ func parseAISuggestions(s string) []AISuggestion {
 			if json.Unmarshal([]byte(candidate), &a3) == nil && len(a3.Answers) > 0 {
 				out := make([]AISuggestion, 0, len(a3.Answers))
 				for _, ans := range a3.Answers {
-					q := cleanCandidate(ans.Query)
+					q := CleanCandidate(ans.Query)
 					if q != "" {
 						out = append(out, AISuggestion{Query: q, Explain: strings.TrimSpace(ans.Explain)})
 					}
@@ -457,7 +459,7 @@ func parseAISuggestions(s string) []AISuggestion {
 			if json.Unmarshal([]byte(candidate), &j3) == nil && len(j3.Queries) > 0 {
 				out := make([]AISuggestion, 0, len(j3.Queries))
 				for _, q := range j3.Queries {
-					if t := cleanCandidate(q); t != "" {
+					if t := CleanCandidate(q); t != "" {
 						out = append(out, AISuggestion{Query: t})
 					}
 				}
@@ -488,7 +490,7 @@ func parseAISuggestions(s string) []AISuggestion {
 		if json.Unmarshal([]byte(trimmed), &a2) == nil && len(a2.Answers) > 0 {
 			out := make([]AISuggestion, 0, len(a2.Answers))
 			for _, ans := range a2.Answers {
-				q := cleanCandidate(ans.Query)
+				q := CleanCandidate(ans.Query)
 				if q != "" {
 					out = append(out, AISuggestion{Query: q, Explain: strings.TrimSpace(ans.Explain)})
 				}
@@ -503,7 +505,7 @@ func parseAISuggestions(s string) []AISuggestion {
 		if json.Unmarshal([]byte(trimmed), &j2) == nil && len(j2.Queries) > 0 {
 			out := make([]AISuggestion, 0, len(j2.Queries))
 			for _, q := range j2.Queries {
-				if t := cleanCandidate(q); t != "" {
+				if t := CleanCandidate(q); t != "" {
 					out = append(out, AISuggestion{Query: t})
 				}
 			}
@@ -528,12 +530,12 @@ func parseAISuggestions(s string) []AISuggestion {
 		lines = strings.Split(s, "\n")
 	}
 	for _, line := range lines {
-		if t := cleanCandidate(line); t != "" && looksLikePromQL(t) {
+		if t := CleanCandidate(line); t != "" && looksLikePromQL(t) {
 			out = append(out, AISuggestion{Query: t})
 		}
 	}
 	if len(out) == 0 {
-		if t := cleanCandidate(s); t != "" {
+		if t := CleanCandidate(s); t != "" {
 			out = append(out, AISuggestion{Query: t})
 		}
 	}
@@ -554,8 +556,8 @@ func aiDesiredNum() int {
 	return 3
 }
 
-// cleanCandidate removes surrounding quotes/backticks/fences and trims spaces.
-func cleanCandidate(in string) string {
+// CleanCandidate removes surrounding quotes/backticks/fences and trims spaces.
+func CleanCandidate(in string) string {
 	s := strings.TrimSpace(in)
 	if s == "" {
 		return ""
