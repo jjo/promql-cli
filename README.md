@@ -1,5 +1,10 @@
 # promql-cli
 
+[![Tests](https://github.com/jjo/promql-cli/actions/workflows/test.yml/badge.svg)](https://github.com/jjo/promql-cli/actions/workflows/test.yml)
+[![Docker build and publish](https://github.com/jjo/promql-cli/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/jjo/promql-cli/actions/workflows/docker-publish.yml)
+[![Docker Hub](https://img.shields.io/docker/pulls/xjjo/promql-cli?logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/xjjo/promql-cli)
+[![Docker Image Size](https://img.shields.io/docker/image-size/xjjo/promql-cli/latest?logo=docker)](https://hub.docker.com/r/xjjo/promql-cli/tags)
+
 > **A lightweight PromQL playground and REPL for rapid Prometheus metric exploration**
 
 Load Prometheus text-format metrics, query them with the upstream Prometheus engine, and iterate quickly with intelligent autocompletion and AI assistance. Perfect for developing exporters, debugging metrics, and learning PromQL.
