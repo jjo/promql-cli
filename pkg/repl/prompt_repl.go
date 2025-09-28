@@ -1826,7 +1826,7 @@ func saveHistory() {
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(histPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return // Silently fail if we can't create directory
 	}
 
@@ -1856,12 +1856,12 @@ func appendToHistoryFile(cmd string) {
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(histPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return // Silently fail
 	}
 
 	// Append to file
-	file, err := os.OpenFile(histPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(histPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return // Silently fail
 	}

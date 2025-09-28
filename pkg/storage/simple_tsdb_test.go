@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/prometheus/prometheus/promql"
-
 )
 
 func TestSimpleStorage_LoadFromReader_ParsesMetrics(t *testing.T) {

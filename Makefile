@@ -22,7 +22,7 @@ LDFLAGS := -s -w \
 	-X main.commit=$(GIT_COMMIT) \
 	-X main.date=$(BUILD_DATE)
 
-.PHONY: all build build-binary build-no-prompt run test fmt vet tidy clean docker-build docker-run docker-push version help
+.PHONY: all build build-binary build-no-prompt run test fmt vet tidy clean docker-build docker-run docker-push version help gofumpt
 
 all: build
 
@@ -79,6 +79,9 @@ docker-run:
 
 docker-push:
 	docker push $(IMAGE)
+
+gofumpt:
+	find . -name '*.go' -not -path "./vendor/*" | xargs gofumpt -w
 
 # Show computed version info
 version:

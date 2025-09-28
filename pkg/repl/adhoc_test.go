@@ -111,7 +111,7 @@ func TestTimestamps_WithExplicitTimestamps(t *testing.T) {
 	// Two samples with explicit unix_ms
 	content := "cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 1 1700000000000\n" +
 		"cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour{location=\"eastus\"} 2 1700000010000\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -372,7 +372,7 @@ func TestAdhoc_Save_WithTimestamp_ParsesPathAndArgs(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected file %s to be created: %v", path, err)
 	}
-	if _, err := os.Stat(path+" timestamp=remove"); err == nil {
+	if _, err := os.Stat(path + " timestamp=remove"); err == nil {
 		t.Fatalf("unexpected file created with args in name: %s", path+" timestamp=remove")
 	}
 }
