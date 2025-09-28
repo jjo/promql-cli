@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,10 @@ import (
 	"strings"
 	"testing"
 )
+
+func basicAuth(user, pass string) string {
+	return base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+}
 
 // captureStdout captures stdout during the execution of fn and returns the captured output.
 func captureStdout(t *testing.T, fn func()) string {
@@ -202,6 +207,99 @@ foo_total{code="500"} 1
 	}
 }
 
+func TestAdhoc_PromScrape_ImportsVector(t *testing.T) {
+	// Minimal Prometheus-like API server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/query" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","job":"test"},"value":[1738000000,"1"]}]}}`
+		_, _ = io.WriteString(w, resp)
+	}))
+	defer ts.Close()
+
+	store := NewSimpleStorage()
+	out := captureStdout(t, func() { _ = handleAdHocFunction(".prom_scrape "+ts.URL+" 'up'", store) })
+	if !strings.Contains(out, "Imported") {
+		t.Fatalf("expected Imported output, got: %s", out)
+	}
+	if _, ok := store.metrics["up"]; !ok {
+		t.Fatalf("expected 'up' metric imported")
+	}
+}
+
+func TestAdhoc_PromScrape_BasicAuth(t *testing.T) {
+	user := "alice"
+	pass := "secret"
+	expected := "Basic " + basicAuth(user, pass)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != expected {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	}))
+	defer ts.Close()
+	store := NewSimpleStorage()
+	out := captureStdout(t, func() {
+		_ = handleAdHocFunction(".prom_scrape "+ts.URL+" 'up' auth=basic user="+user+" pass="+pass, store)
+	})
+	if strings.Contains(strings.ToLower(out), "error") {
+		t.Fatalf("unexpected error output: %s", out)
+	}
+}
+
+func TestAdhoc_PromScrape_MimirAuth(t *testing.T) {
+	orgID := "12345"
+	apiKey := "API_KEY_XYZ"
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Scope-OrgID") != orgID {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+apiKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	}))
+	defer ts.Close()
+	store := NewSimpleStorage()
+	out := captureStdout(t, func() {
+		_ = handleAdHocFunction(".prom_scrape "+ts.URL+" 'up' auth=mimir org_id="+orgID+" api_key="+apiKey, store)
+	})
+	if strings.Contains(strings.ToLower(out), "error") {
+		t.Fatalf("unexpected error output: %s", out)
+	}
+}
+
+func TestAdhoc_PromScrapeRange_ImportsMatrix(t *testing.T) {
+	// Minimal Prometheus-like API server for query_range
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/query_range" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"foo_total","job":"test"},"values":[[1738000000,"5"],[1738000015,"7"]]}]}}`
+		_, _ = io.WriteString(w, resp)
+	}))
+	defer ts.Close()
+
+	store := NewSimpleStorage()
+	out := captureStdout(t, func() { _ = handleAdHocFunction(".prom_scrape_range "+ts.URL+" 'foo_total' now-30m now 15s", store) })
+	if !strings.Contains(out, "Imported range") {
+		t.Fatalf("expected Imported range output, got: %s", out)
+	}
+	if samples := store.metrics["foo_total"]; len(samples) < 2 {
+		t.Fatalf("expected at least 2 samples imported, got %d", len(samples))
+	}
+}
+
 func TestAdhoc_Help_PrintsAndReturnsTrue(t *testing.T) {
 	store := NewSimpleStorage()
 	out := captureStdout(t, func() {
@@ -242,7 +340,7 @@ func TestAdhoc_Labels_ExistingMissingAndUsage(t *testing.T) {
 	// Usage when missing metric name (requires trailing space to match handler)
 	usage := captureStdout(t, func() { _ = handleAdHocFunction(".labels ", store) })
 	if !strings.Contains(usage, "Usage: .labels <metric_name>") {
-		t.Fatalf("expected usage text for .labels with no args, got: %s", usage)
+		t.Fatalf("expected usage text for .labels with no args, got: %q", usage)
 	}
 
 	// Existing metric

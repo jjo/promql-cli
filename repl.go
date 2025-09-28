@@ -459,8 +459,8 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 			}
 			return pac.getFilePathCompletions(pathSoFar, currentWord)
 		}
-		// If after ".scrape ", offer URL examples
-		if strings.HasPrefix(trimmed, ".scrape ") {
+		// If after ".scrape ", ".prom_scrape ", or ".prom_scrape_range ", offer URL examples
+		if strings.HasPrefix(trimmed, ".scrape ") || strings.HasPrefix(trimmed, ".prom_scrape ") || strings.HasPrefix(trimmed, ".prom_scrape_range ") {
 			after := trimmed[len(".scrape "):]
 			// Only offer suggestions if no space yet (still typing URL)
 			if !strings.Contains(after, " ") {
