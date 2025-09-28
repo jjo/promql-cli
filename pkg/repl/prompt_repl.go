@@ -759,6 +759,12 @@ func pasteAISuggestionN(buf *prompt.Buffer, n int) {
 	if s == "" {
 		return
 	}
+	// Append helper text if available
+	if n-1 < len(lastAIExplanations) {
+		if ex := strings.TrimSpace(lastAIExplanations[n-1]); ex != "" {
+			s = s + " # " + ex
+		}
+	}
 	// Replace entire line with the chosen suggestion
 	doc := buf.Document()
 	buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
@@ -1279,11 +1285,25 @@ func (r *promptREPL) Run() error {
 						return
 					}
 				}
-				// Replace entire line with clipboard content
+				// Replace entire line with clipboard content, appending helper text when available
 				doc := buf.Document()
 				buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
 				buf.Delete(len(doc.Text))
-				buf.InsertText(aiClipboard, false, true)
+				text := aiClipboard
+				// Try to find matching explanation
+				idx := -1
+				for i, q := range lastAISuggestions {
+					if strings.TrimSpace(q) == strings.TrimSpace(aiClipboard) {
+						idx = i
+						break
+					}
+				}
+				if idx >= 0 && idx < len(lastAIExplanations) {
+					if ex := strings.TrimSpace(lastAIExplanations[idx]); ex != "" {
+						text = text + " # " + ex
+					}
+				}
+				buf.InsertText(text, false, true)
 			},
 		}),
 		// Alt-1..Alt-9: Paste corresponding AI suggestion directly

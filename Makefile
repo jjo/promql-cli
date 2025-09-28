@@ -33,7 +33,7 @@ build: $(BIN) build-binary
 
 # Build a single binary at repo root (./promql-cli)
 build-binary:
-	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/cli/...
+	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o bin/$(APP) ./cmd/cli/...
 	@echo "Built $(BIN)/$(APP) (version=$(GIT_VERSION), commit=$(GIT_COMMIT), tags=$(BUILD_TAGS))"
 
 # Build without prompt support (minimal binary)
@@ -70,6 +70,7 @@ docker-build:
 		--build-arg VERSION=$(GIT_VERSION) \
 		--build-arg COMMIT=$(shell git rev-parse HEAD 2>/dev/null || echo unknown) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg BUILD_TAGS=$(BUILD_TAGS) \
 		-t $(IMAGE) .
 
 # Example: make docker-run ARGS="query /data/metrics.prom"

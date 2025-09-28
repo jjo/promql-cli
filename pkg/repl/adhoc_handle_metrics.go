@@ -10,6 +10,22 @@ import (
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
+// storeTotals returns (#metrics, #samples) for the current store
+func storeTotals(storage *sstorage.SimpleStorage) (int, int) {
+	totalMetrics := len(storage.Metrics)
+	totalSamples := 0
+	for _, ss := range storage.Metrics {
+		totalSamples += len(ss)
+	}
+	return totalMetrics, totalSamples
+}
+
+func handleAdhocStats(_ string, storage *sstorage.SimpleStorage) bool {
+	tm, ts := storeTotals(storage)
+	fmt.Printf("Total: %d metrics, %d samples\n", tm, ts)
+	return true
+}
+
 func handleAdhocMetrics(query string, storage *sstorage.SimpleStorage) bool {
 	if len(storage.Metrics) == 0 {
 		fmt.Println("No metrics loaded")
@@ -233,11 +249,7 @@ func handleAdhocDrop(query string, storage *sstorage.SimpleStorage) bool {
 	removed := len(samples)
 	delete(storage.Metrics, metric)
 	// Report new totals
-	totalMetrics := len(storage.Metrics)
-	totalSamples := 0
-	for _, ss := range storage.Metrics {
-		totalSamples += len(ss)
-	}
+	totalMetrics, totalSamples := storeTotals(storage)
 	fmt.Printf("Dropped '%s': -%d samples (now: %d metrics, %d samples)\n", metric, removed, totalMetrics, totalSamples)
 
 	// Refresh metrics cache for autocompletion if using prompt backend

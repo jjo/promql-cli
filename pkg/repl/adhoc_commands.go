@@ -43,16 +43,32 @@ var AdHocCommands = []AdHocCommand{
 		Examples:    []string{".timestamps http_requests_total"},
 	},
 	{
+		Command:     ".stats",
+		Description: "Show current store totals (metrics and samples)",
+		Usage:       ".stats",
+	},
+{
 		Command:     ".load",
 		Description: "Load metrics from a Prometheus text-format file",
-		Usage:       ".load <file.prom>",
-		Examples:    []string{".load metrics.prom"},
+		Usage:       ".load <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
+		Examples: []string{
+			".load metrics.prom",
+			".load metrics.prom timestamp=now",
+			".load metrics.prom timestamp=2025-09-28T12:00:00Z",
+			".load metrics.prom timestamp=remove",
+			".load metrics.prom regex='^up\\{.*\\}$'",
+		},
 	},
-	{
+{
 		Command:     ".save",
 		Description: "Save current store to a Prometheus text-format file",
-		Usage:       ".save <file.prom>",
-		Examples:    []string{".save snapshot.prom"},
+		Usage:       ".save <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
+		Examples: []string{
+			".save snapshot.prom",
+			".save snapshot.prom timestamp=now",
+			".save snapshot.prom timestamp=remove",
+			".save snapshot.prom regex='http_requests_total\\{.*code=\"5..\".*\\}'",
+		},
 	},
 	{
 		Command:     ".seed",
