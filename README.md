@@ -250,7 +250,7 @@ Both `.save` and `.load` accept an optional timestamp argument to control timest
 
 Examples:
 ```bash
-.save snapshot.prom timestamp=remove                 # write without timestamps
+.save snapshot.prom timestamp=remove                # write without timestamps
 .save snapshot.prom timestamp=now-10m               # write with a fixed timestamp
 .load metrics.prom timestamp=now                    # force a fixed timestamp on newly loaded samples
 .load "metrics with spaces.prom" timestamp=2025-10-01T12:00:00Z
