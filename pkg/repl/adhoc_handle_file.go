@@ -149,7 +149,7 @@ func applyTimestampOverride(storage *sstorage.SimpleStorage, beforeCounts map[st
 		}
 		for i := start; i < len(samples); i++ {
 			if mode == "remove" {
-				// simulate missing timestamps by using a single current time
+				// set a uniform timestamp (current time) for all samples when 'remove' mode is used
 				storage.Metrics[name][i].Timestamp = time.Now().UnixMilli()
 			} else if mode == "set" {
 				storage.Metrics[name][i].Timestamp = fixed
