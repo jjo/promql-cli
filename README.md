@@ -67,14 +67,14 @@ promql-cli query -q 'up' -o json ./example.prom
 Commands you can use inside the interactive session:
 
 #### **Data Management**
-|| Command | Purpose | Example |
-||---------|---------|---------|
-|| `.load <file> [timestamp={now|remove|<timespec>}] [regex='<series regex>']` | Load metrics (override ts and/or filter by series) | `.load metrics.prom timestamp=now regex='^up\{.*\}$'` |
-|| `.save <file> [timestamp={now|remove|<timespec>}] [regex='<series regex>']` | Save metrics (override ts and/or filter by series) | `.save snapshot.prom timestamp=remove regex='http_requests_total\{.*code="5..".*\}'` |
-|| `.scrape <url> [regex] [count] [delay]` | Fetch live metrics (text exposition) | `.scrape http://localhost:9100/metrics` |
-|| `.prom_scrape <api> 'query' [count] [delay] [auth=...]` | Import from Prometheus API (instant) | `.prom_scrape http://prom:9090 'up'` |
-|| `.prom_scrape_range <api> 'query' <start> <end> <step> [count] [delay] [auth=...]` | Import from Prometheus API (range) | `.prom_scrape_range http://prom:9090 'rate(http_requests_total[5m])' now-1h now 30s` |
-|| `.drop <metric>` | Remove metric from memory | `.drop http_requests_total` |
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `.load <file> [timestamp={now|remove|<timespec>}] [regex='<series regex>']` | Load metrics (override ts and/or filter by series) | `.load metrics.prom timestamp=now regex='^up\{.*\}$'` |
+| `.save <file> [timestamp={now|remove|<timespec>}] [regex='<series regex>']` | Save metrics (override ts and/or filter by series) | `.save snapshot.prom timestamp=remove regex='http_requests_total\{.*code="5..".*\}'` |
+| `.scrape <url> [regex] [count] [delay]` | Fetch live metrics (text exposition) | `.scrape http://localhost:9100/metrics` |
+| `.prom_scrape <api> 'query' [count] [delay] [auth=...]` | Import from Prometheus API (instant) | `.prom_scrape http://prom:9090 'up'` |
+| `.prom_scrape_range <api> 'query' <start> <end> <step> [count] [delay] [auth=...]` | Import from Prometheus API (range) | `.prom_scrape_range http://prom:9090 'rate(http_requests_total[5m])' now-1h now 30s` |
+| `.drop <metric>` | Remove metric from memory | `.drop http_requests_total` |
 
 #### **Exploration**
 | Command | Purpose | Example |
