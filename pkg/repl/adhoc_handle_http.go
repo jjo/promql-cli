@@ -112,9 +112,9 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 			}
 		}()
 
-	afterMetrics, afterSamples := storeTotals(storage)
-	fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
-		uri, i+1, count, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+		afterMetrics, afterSamples := storeTotals(storage)
+		fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
+			uri, i+1, count, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
 
 		if i < count-1 && delay > 0 {
 			time.Sleep(delay)
@@ -341,7 +341,7 @@ func parsePromTimestampMillis(x any) (int64, bool) {
 // buildPromQueryEndpoint tries to construct a /api/v1/query endpoint from a base URI.
 func buildPromQueryEndpoint(base string) string {
 	b := strings.TrimRight(base, "/")
-	//return b + "query"
+	// return b + "query"
 	if strings.HasSuffix(b, "/query") {
 		return b
 	}

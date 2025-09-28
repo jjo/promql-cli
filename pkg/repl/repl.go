@@ -1340,6 +1340,7 @@ func RunInitCommands(engine *promql.Engine, storage *sstorage.SimpleStorage, com
 		executeOne(engine, storage, cmd)
 	}
 }
+
 func handleAdhocHistory(query string, storage *sstorage.SimpleStorage) bool {
 	fields := strings.Fields(query)
 	var n int = -1

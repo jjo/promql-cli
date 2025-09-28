@@ -13,14 +13,15 @@ import (
 
 func handleAdhocSave(query string, storage *sstorage.SimpleStorage) bool {
 	rest := strings.TrimSpace(strings.TrimPrefix(query, ".save"))
+	usage := GetAdHocCommandByName(".save").Usage
 	if rest == "" {
-fmt.Println("Usage: .save <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']")
+		fmt.Println(usage)
 		return true
 	}
 	// Parse path (quoted or unquoted) and optional key=value tokens
 	path, args := parsePathAndArgs(rest)
 	if path == "" {
-fmt.Println("Usage: .save <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']")
+		fmt.Println(usage)
 		return true
 	}
 	// Parse optional timestamp and regex
@@ -186,13 +187,14 @@ func seriesSignature(name string, lbls map[string]string) string {
 
 func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 	rest := strings.TrimSpace(strings.TrimPrefix(query, ".load"))
+	usage := GetAdHocCommandByName(".load").Usage
 	if rest == "" {
-fmt.Println("Usage: .load <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']")
+		fmt.Println(usage)
 		return true
 	}
 	path, args := parsePathAndArgs(rest)
 	if path == "" {
-fmt.Println("Usage: .load <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']")
+		fmt.Println(usage)
 		return true
 	}
 	// capture per-metric counts to adjust only newly loaded samples when overriding timestamps

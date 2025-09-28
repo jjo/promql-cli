@@ -47,7 +47,7 @@ var AdHocCommands = []AdHocCommand{
 		Description: "Show current store totals (metrics and samples)",
 		Usage:       ".stats",
 	},
-{
+	{
 		Command:     ".load",
 		Description: "Load metrics from a Prometheus text-format file",
 		Usage:       ".load <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
@@ -59,7 +59,7 @@ var AdHocCommands = []AdHocCommand{
 			".load metrics.prom regex='^up\\{.*\\}$'",
 		},
 	},
-{
+	{
 		Command:     ".save",
 		Description: "Save current store to a Prometheus text-format file",
 		Usage:       ".save <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
