@@ -67,12 +67,14 @@ promql-cli query -q 'up' -o json ./example.prom
 Commands you can use inside the interactive session:
 
 #### **Data Management**
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `.load <file>` | Load metrics from file | `.load metrics.prom` |
-| `.save <file>` | Save current metrics | `.save snapshot.prom` |
-| `.scrape <url> [regex] [count] [delay]` | Fetch live metrics | `.scrape http://localhost:9100/metrics` |
-| `.drop <metric>` | Remove metric from memory | `.drop http_requests_total` |
+|| Command | Purpose | Example |
+||---------|---------|---------|
+|| `.load <file> [timestamp={now|remove|<timespec>}] [regex='<series regex>']` | Load metrics (override ts and/or filter by series) | `.load metrics.prom timestamp=now regex='^up\{.*\}$'` |
+|| `.save <file> [timestamp={now|remove|<timespec>}] [regex='<series regex>']` | Save metrics (override ts and/or filter by series) | `.save snapshot.prom timestamp=remove regex='http_requests_total\{.*code="5..".*\}'` |
+|| `.scrape <url> [regex] [count] [delay]` | Fetch live metrics (text exposition) | `.scrape http://localhost:9100/metrics` |
+|| `.prom_scrape <api> 'query' [count] [delay] [auth=...]` | Import from Prometheus API (instant) | `.prom_scrape http://prom:9090 'up'` |
+|| `.prom_scrape_range <api> 'query' <start> <end> <step> [count] [delay] [auth=...]` | Import from Prometheus API (range) | `.prom_scrape_range http://prom:9090 'rate(http_requests_total[5m])' now-1h now 30s` |
+|| `.drop <metric>` | Remove metric from memory | `.drop http_requests_total` |
 
 #### **Exploration**
 | Command | Purpose | Example |
@@ -199,6 +201,83 @@ host = "http://localhost:11434"
 ```
 
 Use with: `--ai "profile=work"` or `export PROMQL_CLI_AI_PROFILE=work`
+
+### 🌐 Remote Prometheus API Import (.prom_scrape / .prom_scrape_range)
+
+Import series from a remote Prometheus-compatible API directly into the in-memory store.
+
+- Instant import (vector/matrix/scalar via /api/v1/query):
+
+```bash
+.prom_scrape <PROM_API_URI> 'query' [count] [delay] [auth=basic|mimir] [user=...] [pass=...] [org_id=...] [api_key=...]
+```
+
+- Range import (matrix via /api/v1/query_range):
+
+```bash
+.prom_scrape_range <PROM_API_URI> 'query' <start> <end> <step> [count] [delay] [auth=basic|mimir] [user=...] [pass=...] [org_id=...] [api_key=...]
+```
+
+Notes:
+- PROM_API_URI can be the root (http://host:9090), the API root (…/api/v1), or full endpoint (…/api/v1/query[_range]).
+- count repeats the import N times; delay waits between repeats (e.g., 10s).
+- If auth is omitted, it will be inferred from provided credentials (user/pass => basic, org_id/api_key => mimir).
+
+Auth options:
+- Basic auth: sets Authorization: Basic base64(user:pass)
+
+```bash
+.prom_scrape http://prom:9090 'up' auth=basic user=alice pass=s3cr3t
+```
+
+- Grafana Mimir/Tenant headers: sets X-Scope-OrgID and Authorization: Bearer <api_key>
+
+```bash
+.prom_scrape_range http://mimir.example 'rate(http_requests_total[5m])' now-1h now 30s auth=mimir org_id=acme api_key=$MY_API_KEY
+```
+
+After importing, use `.metrics`, `.labels <metric>`, and run PromQL normally on the imported data.
+
+### 🕒 Timestamp and regex options for .save and .load
+
+Both `.save` and `.load` accept an optional timestamp argument to control timestamps:
+
+- Syntax: `timestamp={now|remove|<timespec>}`
+- `<timespec>` supports the same formats as `.pinat`/`.at`:
+  - `now`, `now±<duration>` (e.g., `now-5m`, `now+1h`)
+  - RFC3339 (e.g., `2025-10-01T12:00:00Z`)
+  - Unix seconds or milliseconds
+
+Examples:
+```bash
+.save snapshot.prom timestamp=remove                 # write without timestamps
+.save snapshot.prom timestamp=now-10m               # write with a fixed timestamp
+.load metrics.prom timestamp=now                    # force a fixed timestamp on newly loaded samples
+.load "metrics with spaces.prom" timestamp=2025-10-01T12:00:00Z
+```
+
+Notes:
+- For `.load`, the timestamp override applies only to the samples loaded by that command; existing samples are unchanged.
+- For `.save`, the timestamp override affects how timestamps are written to the output file; it does not modify in-memory data.
+
+#### Series regex filter
+
+Both `.save` and `.load` accept an optional `regex='<series regex>'` that filters time series by their identity string:
+
+- Matching is performed against the canonical series signature: `name{labels}`, where labels are sorted alphabetically and values are quoted/escaped (e.g., `http_requests_total{code="200",method="GET"}`)
+- Quote your regex if it contains spaces, braces, or shell metacharacters
+- Examples:
+
+```bash
+# Save only 5xx http series, without timestamps
+.save snapshot.prom timestamp=remove regex='http_requests_total\{.*code="5..".*\}'
+
+# Load only 'up{...}' series and stamp them to a fixed time
+.load metrics.prom timestamp=2025-10-01T12:00:00Z regex='^up\{.*\}$'
+
+# Load node_cpu_seconds_total with mode="idle" and set timestamps to now-5m
+.load node.prom regex='node_cpu_seconds_total\{.*mode="idle".*\}' timestamp=now-5m
+```
 
 ## 🎯 Use Cases
 

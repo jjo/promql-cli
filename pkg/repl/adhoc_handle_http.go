@@ -112,13 +112,9 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 			}
 		}()
 
-		afterMetrics := len(storage.Metrics)
-		afterSamples := 0
-		for _, ss := range storage.Metrics {
-			afterSamples += len(ss)
-		}
-		fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
-			uri, i+1, count, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+	afterMetrics, afterSamples := storeTotals(storage)
+	fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
+		uri, i+1, count, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
 
 		if i < count-1 && delay > 0 {
 			time.Sleep(delay)
@@ -201,11 +197,7 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 			}
 			// Import results
 			added := importPromResultIntoStorage(storage, &pr)
-			afterMetrics := len(storage.Metrics)
-			afterSamples := 0
-			for _, ss := range storage.Metrics {
-				afterSamples += len(ss)
-			}
+			afterMetrics, afterSamples := storeTotals(storage)
 			fmt.Printf("Imported from %s (%d/%d): +%d samples (total: %d metrics, %d samples)\n",
 				u.Scheme+"://"+u.Host, i+1, count, added, afterMetrics, afterSamples)
 		}()
@@ -563,11 +555,7 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 				return
 			}
 			added := importPromResultIntoStorage(storage, &pr)
-			afterMetrics := len(storage.Metrics)
-			afterSamples := 0
-			for _, ss := range storage.Metrics {
-				afterSamples += len(ss)
-			}
+			afterMetrics, afterSamples := storeTotals(storage)
 			fmt.Printf("Imported range from %s (%d/%d): +%d samples (total: %d metrics, %d samples)\n",
 				u.Scheme+"://"+u.Host, i+1, count, added, afterMetrics, afterSamples)
 		}()

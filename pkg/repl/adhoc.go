@@ -46,6 +46,13 @@ func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
 		}
 	}
 
+	// .stats: show totals
+	if trimmed == ".stats" {
+		if handled := handleAdhocStats(trimmed, storage); handled {
+			return true
+		}
+	}
+
 	// Handle .labels <metric>
 	if strings.HasPrefix(trimmed, ".labels") {
 		if handled := handleAdhocLabels(trimmed, storage); handled {

@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROOT := $(shell pwd)
 BIN := $(ROOT)/bin
-APP := promql-cli
+APP := bin/promql-cli
 PKG := github.com/jjo/promql-cli
 
 TAG ?= latest

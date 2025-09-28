@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -211,9 +212,24 @@ func (s *SimpleStorage) AddSample(labels map[string]string, value float64, times
 	s.Metrics[name] = append(s.Metrics[name], MetricSample{Labels: lbls, Value: value, Timestamp: timestampMillis})
 }
 
+// SaveOptions controls optional behaviors for SaveToWriter
+type SaveOptions struct {
+	// TimestampMode controls how timestamps are written: "keep" (default), "remove", or "set" (use FixedTimestamp)
+	TimestampMode string
+	// FixedTimestamp is used when TimestampMode=="set" (milliseconds since epoch)
+	FixedTimestamp int64
+	// SeriesRegex filters which time series to write. It matches against "name{labels}" (labels sorted, quoted), excluding value/timestamp.
+	SeriesRegex *regexp.Regexp
+}
+
 // SaveToWriter writes the store content in Prometheus text exposition (line) format.
 // For determinism, metrics and samples are sorted.
 func (s *SimpleStorage) SaveToWriter(w io.Writer) error {
+	return s.SaveToWriterWithOptions(w, SaveOptions{TimestampMode: "keep"})
+}
+
+// SaveToWriterWithOptions writes the store content with additional formatting options.
+func (s *SimpleStorage) SaveToWriterWithOptions(w io.Writer, opts SaveOptions) error {
 	// Collect metric names
 	names := make([]string, 0, len(s.Metrics))
 	for name := range s.Metrics {
@@ -260,15 +276,42 @@ func (s *SimpleStorage) SaveToWriter(w io.Writer) error {
 		})
 
 		for _, r := range rows {
-			// Write line: name{labels} value timestamp
+			// Write line: name{labels} value [timestamp?]
 			labelStr := formatLabelsForLine(r.labels)
+			// Optional series filtering
+			if opts.SeriesRegex != nil {
+				seriesSig := name
+				if ls := labelStr; ls != "" {
+					seriesSig = fmt.Sprintf("%s{%s}", name, ls)
+				}
+				if !opts.SeriesRegex.MatchString(seriesSig) {
+					continue
+				}
+			}
+			writeTimestamp := opts.TimestampMode != "remove"
+			outTs := r.ts
+			if opts.TimestampMode == "set" {
+				outTs = opts.FixedTimestamp
+			}
 			if labelStr != "" {
-				if _, err := io.WriteString(w, fmt.Sprintf("%s{%s} %v %d\n", name, labelStr, r.value, r.ts)); err != nil {
-					return err
+				if writeTimestamp {
+					if _, err := io.WriteString(w, fmt.Sprintf("%s{%s} %v %d\n", name, labelStr, r.value, outTs)); err != nil {
+						return err
+					}
+				} else {
+					if _, err := io.WriteString(w, fmt.Sprintf("%s{%s} %v\n", name, labelStr, r.value)); err != nil {
+						return err
+					}
 				}
 			} else {
-				if _, err := io.WriteString(w, fmt.Sprintf("%s %v %d\n", name, r.value, r.ts)); err != nil {
-					return err
+				if writeTimestamp {
+					if _, err := io.WriteString(w, fmt.Sprintf("%s %v %d\n", name, r.value, outTs)); err != nil {
+						return err
+					}
+				} else {
+					if _, err := io.WriteString(w, fmt.Sprintf("%s %v\n", name, r.value)); err != nil {
+						return err
+					}
 				}
 			}
 		}

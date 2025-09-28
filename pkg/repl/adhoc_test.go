@@ -361,6 +361,22 @@ func TestAdhoc_Labels_ExistingMissingAndUsage(t *testing.T) {
 	}
 }
 
+func TestAdhoc_Save_WithTimestamp_ParsesPathAndArgs(t *testing.T) {
+	dir := t.TempDir()
+	store := sstorage.NewSimpleStorage()
+	path := filepath.Join(dir, "foo.prom")
+	out := captureStdout(t, func() { _ = handleAdhocSave(".save "+path+" timestamp=remove", store) })
+	if !strings.Contains(out, "Saved store to "+path) {
+		t.Fatalf("expected saved message with path only, got: %s", out)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected file %s to be created: %v", path, err)
+	}
+	if _, err := os.Stat(path+" timestamp=remove"); err == nil {
+		t.Fatalf("unexpected file created with args in name: %s", path+" timestamp=remove")
+	}
+}
+
 func TestAdhoc_Seed_KVAndPositional(t *testing.T) {
 	store := sstorage.NewSimpleStorage()
 	if err := store.LoadFromReader(strings.NewReader(sstorage.SampleMetrics)); err != nil {
