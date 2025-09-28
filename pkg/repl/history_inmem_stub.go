@@ -1,6 +1,6 @@
 //go:build !prompt
 
-package main
+package repl
 
 // getInMemoryHistory returns nil when the prompt backend is not built.
 func getInMemoryHistory() []string { return nil }

@@ -1,4 +1,4 @@
-package main
+package simple_storage
 
 import (
 	"context"
@@ -7,27 +7,17 @@ import (
 	"time"
 
 	"github.com/prometheus/prometheus/promql"
-)
 
-// sampleMetrics provides a small Prometheus exposition set with a counter and a gauge.
-const sampleMetrics = `
-# HELP http_requests_total Total number of HTTP requests
-# TYPE http_requests_total counter
-http_requests_total{method="get",code="200"} 1027
-http_requests_total{method="get",code="404"} 3
-# HELP temperature Temperature in Celsius
-# TYPE temperature gauge
-temperature{room="server"} 27.3
-`
+)
 
 func TestSimpleStorage_LoadFromReader_ParsesMetrics(t *testing.T) {
 	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	if err := store.LoadFromReader(strings.NewReader(SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 
 	// Expect keys for http_requests_total and temperature
-	httpSamples, ok := store.metrics["http_requests_total"]
+	httpSamples, ok := store.Metrics["http_requests_total"]
 	if !ok {
 		t.Fatalf("expected metric family 'http_requests_total' to be present")
 	}
@@ -47,7 +37,7 @@ func TestSimpleStorage_LoadFromReader_ParsesMetrics(t *testing.T) {
 		}
 	}
 
-	tempSamples, ok := store.metrics["temperature"]
+	tempSamples, ok := store.Metrics["temperature"]
 	if !ok {
 		t.Fatalf("expected metric family 'temperature' to be present")
 	}
@@ -61,7 +51,7 @@ func TestSimpleStorage_LoadFromReader_ParsesMetrics(t *testing.T) {
 
 func TestPromQL_SumByCode(t *testing.T) {
 	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	if err := store.LoadFromReader(strings.NewReader(SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 
@@ -110,7 +100,7 @@ func TestPromQL_SumByCode(t *testing.T) {
 
 func TestPromQL_SumByMethod(t *testing.T) {
 	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	if err := store.LoadFromReader(strings.NewReader(SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 
@@ -152,7 +142,7 @@ func TestPromQL_SumByMethod(t *testing.T) {
 
 func TestPromQL_SelectorByLabel(t *testing.T) {
 	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	if err := store.LoadFromReader(strings.NewReader(SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 

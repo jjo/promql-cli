@@ -30,12 +30,12 @@ $(BIN):
 	@mkdir -p $(BIN)
 
 build: $(BIN)
-	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o $(BIN)/$(APP) ./
+	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o $(BIN)/$(APP) ./cmd/cli/...
 	@echo "Built $(BIN)/$(APP) (version=$(GIT_VERSION), commit=$(GIT_COMMIT), tags=$(BUILD_TAGS))"
 
 # Build a single binary at repo root (./promql-cli)
 build-binary:
-	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o $(APP) ./
+	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o $(APP) ./cmd/cli/...
 	@echo "Built ./$(APP) (version=$(GIT_VERSION), commit=$(GIT_COMMIT), tags=$(BUILD_TAGS))"
 
 # Build without prompt support (minimal binary)
@@ -114,4 +114,3 @@ help:
 	@echo "  make build                  # Build with prompt support"
 	@echo "  make build-no-prompt        # Build without prompt support"
 	@echo "  BUILD_TAGS=\"\" make build   # Build without prompt support"
-

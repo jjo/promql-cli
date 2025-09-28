@@ -1,38 +1,23 @@
-package main
+package repl
 
 import (
 	"fmt"
 	"strings"
 	"time"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
 // pinnedEvalTime, when set, forces future query evaluation to use this timestamp.
 // It is used by the REPL and can be controlled via the .pinat ad-hoc command.
 var pinnedEvalTime *time.Time
 
-// When true, the go-prompt completer will present an AI selection menu
-var aiSelectionActive bool
-
 // refreshMetricsCache is a function pointer to refresh the metrics cache for autocompletion
 // It's set by the prompt backend when active
-var refreshMetricsCache func(*SimpleStorage)
+var refreshMetricsCache func(*sstorage.SimpleStorage)
 
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
-// Returns true if the query was handled as an ad-hoc function, false otherwise
-var (
-	lastAISuggestions   []string
-	lastAIExplanations  []string
-	pendingAISuggestion string
-	aiClipboard         string
-)
-
-// aiCancelRequest, when non-nil, cancels an in-flight AI request (e.g., on Ctrl-C)
-var aiCancelRequest func()
-
-// aiInProgress indicates an AI request is running asynchronously.
-var aiInProgress bool
-
-func handleAdHocFunction(query string, storage *SimpleStorage) bool {
+func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
 	trimmed := strings.TrimSpace(query)
 	// .help: show ad-hoc commands usage
 	if strings.HasPrefix(trimmed, ".help") {

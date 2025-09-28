@@ -1,4 +1,4 @@
-package main
+package repl
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
 func basicAuth(user, pass string) string {
@@ -38,8 +40,8 @@ func captureStdout(t *testing.T, fn func()) string {
 }
 
 func TestAdhoc_Timestamps_Summary(t *testing.T) {
-	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	store := sstorage.NewSimpleStorage()
+	if err := store.LoadFromReader(strings.NewReader(sstorage.SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 
@@ -69,7 +71,7 @@ func TestAdhoc_Pinat_ShowSetRemove(t *testing.T) {
 	pinnedEvalTime = nil
 	defer func() { pinnedEvalTime = nil }()
 
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 
 	// Show when none
 	out := captureStdout(t, func() { _ = handleAdHocFunction(".pinat", store) })
@@ -113,7 +115,7 @@ func TestTimestamps_WithExplicitTimestamps(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	// Use the .load handler to exercise the same code path
 	out := captureStdout(t, func() { _ = handleAdHocFunction(".load "+path, store) })
 	if !strings.Contains(out, "Loaded ") {
@@ -136,18 +138,18 @@ func TestTimestamps_WithExplicitTimestamps(t *testing.T) {
 }
 
 func TestAdhoc_Drop_RemovesMetricAndReports(t *testing.T) {
-	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	store := sstorage.NewSimpleStorage()
+	if err := store.LoadFromReader(strings.NewReader(sstorage.SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
-	if _, ok := store.metrics["http_requests_total"]; !ok {
+	if _, ok := store.Metrics["http_requests_total"]; !ok {
 		t.Fatalf("expected metric present before drop")
 	}
 
 	out := captureStdout(t, func() {
 		_ = handleAdHocFunction(".drop http_requests_total", store)
 	})
-	if _, ok := store.metrics["http_requests_total"]; ok {
+	if _, ok := store.Metrics["http_requests_total"]; ok {
 		t.Fatalf("expected metric removed")
 	}
 	if !strings.Contains(out, "Dropped 'http_requests_total'") {
@@ -187,9 +189,9 @@ foo_total{code="500"} 1
 	}))
 	defer ts.Close()
 
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	// Ensure store empty before
-	if len(store.metrics) != 0 {
+	if len(store.Metrics) != 0 {
 		t.Fatalf("expected empty store initially")
 	}
 
@@ -199,10 +201,10 @@ foo_total{code="500"} 1
 	if !strings.Contains(out, "Scraped ") {
 		t.Fatalf("expected scrape output, got: %s", out)
 	}
-	if _, ok := store.metrics["up"]; !ok {
+	if _, ok := store.Metrics["up"]; !ok {
 		t.Fatalf("expected 'up' metric to be loaded")
 	}
-	if samples := store.metrics["foo_total"]; len(samples) < 2 {
+	if samples := store.Metrics["foo_total"]; len(samples) < 2 {
 		t.Fatalf("expected counter samples loaded, got %d", len(samples))
 	}
 }
@@ -220,12 +222,12 @@ func TestAdhoc_PromScrape_ImportsVector(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	out := captureStdout(t, func() { _ = handleAdHocFunction(".prom_scrape "+ts.URL+" 'up'", store) })
 	if !strings.Contains(out, "Imported") {
 		t.Fatalf("expected Imported output, got: %s", out)
 	}
-	if _, ok := store.metrics["up"]; !ok {
+	if _, ok := store.Metrics["up"]; !ok {
 		t.Fatalf("expected 'up' metric imported")
 	}
 }
@@ -243,7 +245,7 @@ func TestAdhoc_PromScrape_BasicAuth(t *testing.T) {
 		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 	}))
 	defer ts.Close()
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	out := captureStdout(t, func() {
 		_ = handleAdHocFunction(".prom_scrape "+ts.URL+" 'up' auth=basic user="+user+" pass="+pass, store)
 	})
@@ -268,7 +270,7 @@ func TestAdhoc_PromScrape_MimirAuth(t *testing.T) {
 		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 	}))
 	defer ts.Close()
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	out := captureStdout(t, func() {
 		_ = handleAdHocFunction(".prom_scrape "+ts.URL+" 'up' auth=mimir org_id="+orgID+" api_key="+apiKey, store)
 	})
@@ -290,18 +292,18 @@ func TestAdhoc_PromScrapeRange_ImportsMatrix(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	out := captureStdout(t, func() { _ = handleAdHocFunction(".prom_scrape_range "+ts.URL+" 'foo_total' now-30m now 15s", store) })
 	if !strings.Contains(out, "Imported range") {
 		t.Fatalf("expected Imported range output, got: %s", out)
 	}
-	if samples := store.metrics["foo_total"]; len(samples) < 2 {
+	if samples := store.Metrics["foo_total"]; len(samples) < 2 {
 		t.Fatalf("expected at least 2 samples imported, got %d", len(samples))
 	}
 }
 
 func TestAdhoc_Help_PrintsAndReturnsTrue(t *testing.T) {
-	store := NewSimpleStorage()
+	store := sstorage.NewSimpleStorage()
 	out := captureStdout(t, func() {
 		if !handleAdHocFunction(".help", store) {
 			t.Fatalf("expected .help to be handled")
@@ -314,15 +316,15 @@ func TestAdhoc_Help_PrintsAndReturnsTrue(t *testing.T) {
 
 func TestAdhoc_Metrics_EmptyAndNonEmpty(t *testing.T) {
 	// Empty store
-	empty := NewSimpleStorage()
+	empty := sstorage.NewSimpleStorage()
 	out := captureStdout(t, func() { _ = handleAdHocFunction(".metrics", empty) })
 	if !strings.Contains(out, "No metrics loaded") {
 		t.Fatalf("expected 'No metrics loaded' on empty store, got: %s", out)
 	}
 
 	// Non-empty store
-	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	store := sstorage.NewSimpleStorage()
+	if err := store.LoadFromReader(strings.NewReader(sstorage.SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 	out = captureStdout(t, func() { _ = handleAdHocFunction(".metrics", store) })
@@ -332,8 +334,8 @@ func TestAdhoc_Metrics_EmptyAndNonEmpty(t *testing.T) {
 }
 
 func TestAdhoc_Labels_ExistingMissingAndUsage(t *testing.T) {
-	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	store := sstorage.NewSimpleStorage()
+	if err := store.LoadFromReader(strings.NewReader(sstorage.SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 
@@ -360,12 +362,12 @@ func TestAdhoc_Labels_ExistingMissingAndUsage(t *testing.T) {
 }
 
 func TestAdhoc_Seed_KVAndPositional(t *testing.T) {
-	store := NewSimpleStorage()
-	if err := store.LoadFromReader(strings.NewReader(sampleMetrics)); err != nil {
+	store := sstorage.NewSimpleStorage()
+	if err := store.LoadFromReader(strings.NewReader(sstorage.SampleMetrics)); err != nil {
 		t.Fatalf("LoadFromReader failed: %v", err)
 	}
 	metric := "http_requests_total"
-	orig := len(store.metrics[metric])
+	orig := len(store.Metrics[metric])
 	if orig == 0 {
 		t.Fatalf("expected samples for %s", metric)
 	}
@@ -375,7 +377,7 @@ func TestAdhoc_Seed_KVAndPositional(t *testing.T) {
 	if !strings.Contains(out, "Seeded 2 historical points (step 30s) for metric") {
 		t.Fatalf("unexpected .seed KV output: %s", out)
 	}
-	kvCount := len(store.metrics[metric])
+	kvCount := len(store.Metrics[metric])
 	if kvCount < orig+2*2 { // two series, 2 steps each
 		t.Fatalf("expected at least %d samples after KV seeding, got %d", orig+4, kvCount)
 	}
@@ -385,7 +387,7 @@ func TestAdhoc_Seed_KVAndPositional(t *testing.T) {
 	if !strings.Contains(out, "Seeded 1 historical points (step 1m0s) for metric") {
 		t.Fatalf("unexpected .seed positional output: %s", out)
 	}
-	posCount := len(store.metrics[metric])
+	posCount := len(store.Metrics[metric])
 	if posCount < kvCount+2*1 { // two series, 1 additional step each
 		t.Fatalf("expected at least %d samples after positional seeding, got %d", kvCount+2, posCount)
 	}

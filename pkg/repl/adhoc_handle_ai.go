@@ -1,4 +1,4 @@
-package main
+package repl
 
 import (
 	"context"
@@ -9,9 +9,29 @@ import (
 	"strings"
 
 	promparser "github.com/prometheus/prometheus/promql/parser"
+
+	ai "github.com/jjo/promql-cli/pkg/ai"
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
-func handleAdhocAI(query string, storage *SimpleStorage) bool {
+// When true, the go-prompt completer will present an AI selection menu
+var aiSelectionActive bool
+
+// aiInProgress indicates an AI request is running asynchronously.
+var aiInProgress bool
+
+// aiCancelRequest, when non-nil, cancels an in-flight AI request (e.g., on Ctrl-C)
+var aiCancelRequest func()
+
+var (
+	lastAISuggestions   []string
+	lastAIExplanations  []string
+	pendingAISuggestion string
+	aiClipboard         string
+)
+
+// Returns true if the query was handled as an ad-hoc function, false otherwise
+func handleAdhocAI(query string, storage *sstorage.SimpleStorage) bool {
 	args := strings.TrimSpace(strings.TrimPrefix(query, ".ai"))
 	if args == "" || args == "help" { // help
 		fmt.Println("Usage: .ai <intent> | .ai ask <intent> | .ai show | .ai <N> | .ai run <N> | .ai edit <N>")
@@ -115,7 +135,7 @@ func handleAdhocAI(query string, storage *SimpleStorage) bool {
 			aiCancelRequest = nil
 			cancel()
 		}()
-		suggestions, err := aiSuggestQueriesCtx(ctx, storage, intent)
+		suggestions, err := ai.AISuggestQueriesCtx(ctx, storage, intent)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || strings.Contains(strings.ToLower(err.Error()), "context canceled") || strings.Contains(strings.ToLower(err.Error()), "request canceled") {
 				fmt.Println("AI request canceled")
@@ -131,7 +151,7 @@ func handleAdhocAI(query string, storage *SimpleStorage) bool {
 			if q == "" {
 				continue
 			}
-			q = cleanCandidate(q)
+			q = ai.CleanCandidate(q)
 			if q == "" {
 				continue
 			}

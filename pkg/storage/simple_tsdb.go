@@ -1,4 +1,4 @@
-package main
+package simple_storage
 
 import (
 	"context"
@@ -20,8 +20,8 @@ import (
 
 // SimpleStorage holds metrics in a simple format for querying
 type SimpleStorage struct {
-	metrics     map[string][]MetricSample
-	metricsHelp map[string]string // metric name -> help text
+	Metrics     map[string][]MetricSample
+	MetricsHelp map[string]string // metric name -> help text
 }
 
 // MetricSample represents a single metric sample
@@ -34,10 +34,21 @@ type MetricSample struct {
 // NewSimpleStorage creates a new simple storage
 func NewSimpleStorage() *SimpleStorage {
 	return &SimpleStorage{
-		metrics:     make(map[string][]MetricSample),
-		metricsHelp: make(map[string]string),
+		Metrics:     make(map[string][]MetricSample),
+		MetricsHelp: make(map[string]string),
 	}
 }
+
+// SampleMetrics provides a small Prometheus exposition set with a counter and a gauge.
+const SampleMetrics = `
+# HELP http_requests_total Total number of HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{method="get",code="200"} 1027
+http_requests_total{method="get",code="404"} 3
+# HELP temperature Temperature in Celsius
+# TYPE temperature gauge
+temperature{room="server"} 27.3
+`
 
 // LoadFromReader loads Prometheus exposition format data using the official Prometheus parser
 func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
@@ -87,8 +98,8 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 			helpText := strings.ReplaceAll(*mf.Help, "\n", " ")
 			helpText = strings.TrimSpace(helpText)
 			// Only update if help text is new or changed
-			if existing, ok := s.metricsHelp[metricName]; !ok || existing != helpText {
-				s.metricsHelp[metricName] = helpText
+			if existing, ok := s.MetricsHelp[metricName]; !ok || existing != helpText {
+				s.MetricsHelp[metricName] = helpText
 			}
 		}
 
@@ -134,7 +145,7 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 							bucketLabels[k] = v
 						}
 						bucketLabels["le"] = fmt.Sprintf("%g", bucket.GetUpperBound())
-						s.metrics[metricName+"_bucket"] = append(s.metrics[metricName+"_bucket"], MetricSample{
+						s.Metrics[metricName+"_bucket"] = append(s.Metrics[metricName+"_bucket"], MetricSample{
 							Labels:    bucketLabels,
 							Value:     float64(bucket.GetCumulativeCount()),
 							Timestamp: timestamp,
@@ -142,10 +153,10 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 					}
 					// Sum and Count
 					if metric.Histogram.SampleSum != nil {
-						s.metrics[metricName+"_sum"] = append(s.metrics[metricName+"_sum"], MetricSample{Labels: lbls, Value: metric.Histogram.GetSampleSum(), Timestamp: timestamp})
+						s.Metrics[metricName+"_sum"] = append(s.Metrics[metricName+"_sum"], MetricSample{Labels: lbls, Value: metric.Histogram.GetSampleSum(), Timestamp: timestamp})
 					}
 					if metric.Histogram.SampleCount != nil {
-						s.metrics[metricName+"_count"] = append(s.metrics[metricName+"_count"], MetricSample{Labels: lbls, Value: float64(metric.Histogram.GetSampleCount()), Timestamp: timestamp})
+						s.Metrics[metricName+"_count"] = append(s.Metrics[metricName+"_count"], MetricSample{Labels: lbls, Value: float64(metric.Histogram.GetSampleCount()), Timestamp: timestamp})
 					}
 				}
 				// Histogram fully handled; proceed to next metric
@@ -158,13 +169,13 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 							qLabels[k] = v
 						}
 						qLabels["quantile"] = fmt.Sprintf("%g", q.GetQuantile())
-						s.metrics[metricName] = append(s.metrics[metricName], MetricSample{Labels: qLabels, Value: q.GetValue(), Timestamp: timestamp})
+						s.Metrics[metricName] = append(s.Metrics[metricName], MetricSample{Labels: qLabels, Value: q.GetValue(), Timestamp: timestamp})
 					}
 					if metric.Summary.SampleSum != nil {
-						s.metrics[metricName+"_sum"] = append(s.metrics[metricName+"_sum"], MetricSample{Labels: lbls, Value: metric.Summary.GetSampleSum(), Timestamp: timestamp})
+						s.Metrics[metricName+"_sum"] = append(s.Metrics[metricName+"_sum"], MetricSample{Labels: lbls, Value: metric.Summary.GetSampleSum(), Timestamp: timestamp})
 					}
 					if metric.Summary.SampleCount != nil {
-						s.metrics[metricName+"_count"] = append(s.metrics[metricName+"_count"], MetricSample{Labels: lbls, Value: float64(metric.Summary.GetSampleCount()), Timestamp: timestamp})
+						s.Metrics[metricName+"_count"] = append(s.Metrics[metricName+"_count"], MetricSample{Labels: lbls, Value: float64(metric.Summary.GetSampleCount()), Timestamp: timestamp})
 					}
 				}
 				// Summary fully handled; proceed to next metric
@@ -174,7 +185,7 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 			}
 
 			// For counter/gauge/untyped: append the primary sample
-			s.metrics[metricName] = append(s.metrics[metricName], MetricSample{Labels: lbls, Value: value, Timestamp: timestamp})
+			s.Metrics[metricName] = append(s.Metrics[metricName], MetricSample{Labels: lbls, Value: value, Timestamp: timestamp})
 		}
 	}
 
@@ -183,8 +194,8 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 
 // AddSample appends a single sample to the in-memory store.
 func (s *SimpleStorage) AddSample(labels map[string]string, value float64, timestampMillis int64) {
-	if s.metrics == nil {
-		s.metrics = make(map[string][]MetricSample)
+	if s.Metrics == nil {
+		s.Metrics = make(map[string][]MetricSample)
 	}
 	name := labels["__name__"]
 	if name == "" {
@@ -197,21 +208,21 @@ func (s *SimpleStorage) AddSample(labels map[string]string, value float64, times
 	}
 	// Ensure __name__ is present
 	lbls["__name__"] = name
-	s.metrics[name] = append(s.metrics[name], MetricSample{Labels: lbls, Value: value, Timestamp: timestampMillis})
+	s.Metrics[name] = append(s.Metrics[name], MetricSample{Labels: lbls, Value: value, Timestamp: timestampMillis})
 }
 
 // SaveToWriter writes the store content in Prometheus text exposition (line) format.
 // For determinism, metrics and samples are sorted.
 func (s *SimpleStorage) SaveToWriter(w io.Writer) error {
 	// Collect metric names
-	names := make([]string, 0, len(s.metrics))
-	for name := range s.metrics {
+	names := make([]string, 0, len(s.Metrics))
+	for name := range s.Metrics {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
 	for _, name := range names {
-		samples := s.metrics[name]
+		samples := s.Metrics[name]
 		// Build sortable representations: by labelset (excluding __name__) then timestamp
 		type row struct {
 			labels map[string]string
@@ -308,7 +319,7 @@ func (q *SimpleQuerier) Select(ctx context.Context, sortSeries bool, hints *stor
 	var series []storage.Series
 
 	// Find matching metrics
-	for _, samples := range q.storage.metrics {
+	for _, samples := range q.storage.Metrics {
 		// Check if any samples match the matchers and time range
 		var matchingSamples []MetricSample
 		for _, sample := range samples {
@@ -347,7 +358,7 @@ func (q *SimpleQuerier) Select(ctx context.Context, sortSeries bool, hints *stor
 
 func (q *SimpleQuerier) LabelValues(ctx context.Context, name string, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
 	values := make(map[string]struct{})
-	for _, samples := range q.storage.metrics {
+	for _, samples := range q.storage.Metrics {
 		for _, sample := range samples {
 			if q.matchesLabelMatchers(sample.Labels, matchers) {
 				if value, ok := sample.Labels[name]; ok {
@@ -366,7 +377,7 @@ func (q *SimpleQuerier) LabelValues(ctx context.Context, name string, hints *sto
 
 func (q *SimpleQuerier) LabelNames(ctx context.Context, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
 	names := make(map[string]struct{})
-	for _, samples := range q.storage.metrics {
+	for _, samples := range q.storage.Metrics {
 		for _, sample := range samples {
 			if q.matchesLabelMatchers(sample.Labels, matchers) {
 				for name := range sample.Labels {

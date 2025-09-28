@@ -1,4 +1,4 @@
-package main
+package ai
 
 import (
 	"bufio"
@@ -9,12 +9,12 @@ import (
 	"strings"
 )
 
-// aiKV implements flag.Value to parse key=value pairs for --ai.
+// AIConfig implements flag.Value to parse key=value pairs for --ai.
 // Example: --ai "provider=claude model=opus base=https://... answers=3 profile=work"
 // Multiple --ai flags merge; values later override earlier ones.
-type aiKV map[string]string
+type AIConfig map[string]string
 
-func (a *aiKV) String() string {
+func (a *AIConfig) String() string {
 	if a == nil || *a == nil {
 		return ""
 	}
@@ -25,7 +25,7 @@ func (a *aiKV) String() string {
 	return strings.Join(parts, " ")
 }
 
-func (a *aiKV) Set(s string) error {
+func (a *AIConfig) Set(s string) error {
 	if *a == nil {
 		*a = make(map[string]string)
 	}

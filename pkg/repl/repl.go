@@ -1,4 +1,4 @@
-package main
+package repl
 
 import (
 	"bytes"
@@ -17,11 +17,13 @@ import (
 	"github.com/chzyer/readline"
 	"github.com/prometheus/prometheus/promql"
 	promparser "github.com/prometheus/prometheus/promql/parser"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
-func runInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent bool) {
+func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
 	if !silent {
 		fmt.Println("Enter PromQL queries (or 'quit' to exit):")
 		fmt.Println()
@@ -205,7 +207,7 @@ type AutoCompleteOptions struct {
 }
 
 type PrometheusAutoCompleter struct {
-	storage *SimpleStorage
+	storage *sstorage.SimpleStorage
 	opts    AutoCompleteOptions
 }
 
@@ -247,7 +249,7 @@ func (pac *PrometheusAutoCompleter) getFilePathCompletions(pathSoFar, currentWor
 }
 
 // NewPrometheusAutoCompleter creates a new auto-completer with access to metric data.
-func NewPrometheusAutoCompleter(storage *SimpleStorage) *PrometheusAutoCompleter {
+func NewPrometheusAutoCompleter(storage *sstorage.SimpleStorage) *PrometheusAutoCompleter {
 	return &PrometheusAutoCompleter{storage: storage, opts: loadAutoCompleteOptions()}
 }
 
@@ -657,7 +659,7 @@ func (pac *PrometheusAutoCompleter) extractMetricName(text string) string {
 func (pac *PrometheusAutoCompleter) getMetricNameCompletions(prefix string) []string {
 	var completions []string
 
-	for metricName := range pac.storage.metrics {
+	for metricName := range pac.storage.Metrics {
 		if strings.HasPrefix(strings.ToLower(metricName), strings.ToLower(prefix)) {
 			completions = append(completions, metricName)
 		}
@@ -672,11 +674,11 @@ func (pac *PrometheusAutoCompleter) getLabelNameCompletions(metricName, prefix s
 	labelNames := make(map[string]bool)
 
 	// If no specific metric, get labels from all metrics
-	metricsToCheck := make(map[string][]MetricSample)
-	if metricName != "" && pac.storage.metrics[metricName] != nil {
-		metricsToCheck[metricName] = pac.storage.metrics[metricName]
+	metricsToCheck := make(map[string][]sstorage.MetricSample)
+	if metricName != "" && pac.storage.Metrics[metricName] != nil {
+		metricsToCheck[metricName] = pac.storage.Metrics[metricName]
 	} else {
-		metricsToCheck = pac.storage.metrics
+		metricsToCheck = pac.storage.Metrics
 	}
 
 	for _, samples := range metricsToCheck {
@@ -703,11 +705,11 @@ func (pac *PrometheusAutoCompleter) getLabelValueCompletions(metricName, labelNa
 	labelValues := make(map[string]bool)
 
 	// If no specific metric, get values from all metrics
-	metricsToCheck := make(map[string][]MetricSample)
-	if metricName != "" && pac.storage.metrics[metricName] != nil {
-		metricsToCheck[metricName] = pac.storage.metrics[metricName]
+	metricsToCheck := make(map[string][]sstorage.MetricSample)
+	if metricName != "" && pac.storage.Metrics[metricName] != nil {
+		metricsToCheck[metricName] = pac.storage.Metrics[metricName]
 	} else {
-		metricsToCheck = pac.storage.metrics
+		metricsToCheck = pac.storage.Metrics
 	}
 
 	for _, samples := range metricsToCheck {
@@ -976,8 +978,8 @@ func parseEvalTime(tok string) (time.Time, error) {
 }
 
 // seedHistory synthesizes historical samples for a metric to enable rate() queries.
-func seedHistory(storage *SimpleStorage, metric string, steps int, step time.Duration) {
-	samples, ok := storage.metrics[metric]
+func seedHistory(storage *sstorage.SimpleStorage, metric string, steps int, step time.Duration) {
+	samples, ok := storage.Metrics[metric]
 	if !ok || len(samples) == 0 {
 		fmt.Printf("Metric '%s' not found or has no samples\n", metric)
 		return
@@ -1006,7 +1008,7 @@ func seedHistory(storage *SimpleStorage, metric string, steps int, step time.Dur
 				newVal = base.Value * (1 - 0.001*float64(i))
 			}
 			// Avoid appending duplicate timestamp points for the same labelset
-			existing := storage.metrics[metric]
+			existing := storage.Metrics[metric]
 			dup := false
 			for _, s := range existing {
 				if s.Timestamp == newTs && qEqualLabels(s.Labels, copyLabels) {
@@ -1017,7 +1019,7 @@ func seedHistory(storage *SimpleStorage, metric string, steps int, step time.Dur
 			if dup {
 				continue
 			}
-			storage.metrics[metric] = append(storage.metrics[metric], MetricSample{
+			storage.Metrics[metric] = append(storage.Metrics[metric], sstorage.MetricSample{
 				Labels:    copyLabels,
 				Value:     newVal,
 				Timestamp: newTs,
@@ -1092,12 +1094,12 @@ func (pac *PrometheusAutoCompleter) getMixedCompletions(prefix string) []string 
 
 // createAutoCompleter creates the enhanced auto-completer with metric awareness.
 // This provides a Prometheus UI-like experience with dynamic completions.
-func createAutoCompleter(storage *SimpleStorage) readline.AutoCompleter {
+func createAutoCompleter(storage *sstorage.SimpleStorage) readline.AutoCompleter {
 	return NewPrometheusAutoCompleter(storage)
 }
 
 // runBasicInteractiveQueries provides a fallback when readline is unavailable
-func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, silent bool) {
+func runBasicInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
 	if !silent {
 		fmt.Println("Using basic input mode (readline unavailable)")
 	}
@@ -1127,7 +1129,7 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *SimpleStorage, s
 }
 
 // executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
-func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
+func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line string) {
 	orig := strings.TrimSpace(line)
 	if orig == "" {
 		return
@@ -1235,7 +1237,7 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 
 	if hasPipe {
 		// Capture the normal printed output and feed it to the pipe command
-		captured, _ := captureOutput(func() { printUpstreamQueryResult(result) })
+		captured, _ := captureOutput(func() { PrintUpstreamQueryResult(result) })
 		cmd := exec.Command("/bin/sh", "-c", pipeCmd)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -1257,7 +1259,7 @@ func executeOne(engine *promql.Engine, storage *SimpleStorage, line string) {
 		return
 	}
 
-	printUpstreamQueryResult(result)
+	PrintUpstreamQueryResult(result)
 }
 
 // captureOutput captures stdout produced by fn and returns it as a string.
@@ -1302,9 +1304,9 @@ func getHistoryFilePath() string {
 	return ".promql-cli_history"
 }
 
-// runInitCommands executes semicolon-separated commands before interactive session or one-off query.
+// RunInitCommands executes semicolon-separated commands before interactive session or one-off query.
 // When silent is true, outputs produced by these commands are suppressed.
-func runInitCommands(engine *promql.Engine, storage *SimpleStorage, commands string, silent bool) {
+func RunInitCommands(engine *promql.Engine, storage *sstorage.SimpleStorage, commands string, silent bool) {
 	if strings.TrimSpace(commands) == "" {
 		return
 	}
@@ -1337,4 +1339,38 @@ func runInitCommands(engine *promql.Engine, storage *SimpleStorage, commands str
 		}
 		executeOne(engine, storage, cmd)
 	}
+}
+func handleAdhocHistory(query string, storage *sstorage.SimpleStorage) bool {
+	fields := strings.Fields(query)
+	var n int = -1
+	if len(fields) == 2 {
+		if v, err := strconv.Atoi(fields[1]); err == nil && v > 0 {
+			n = v
+		} else {
+			fmt.Println("Usage: .history [N]")
+			return true
+		}
+	} else if len(fields) > 2 {
+		fmt.Println("Usage: .history [N]")
+		return true
+	}
+	// Prefer in-memory history when available (prompt backend)
+	entries := getInMemoryHistory()
+	if len(entries) == 0 {
+		// Fallback to file
+		path := getHistoryFilePath()
+		entries = loadHistoryFromFile(path)
+	}
+	if len(entries) == 0 {
+		fmt.Println("No history available")
+		return true
+	}
+	start := 0
+	if n > 0 && n < len(entries) {
+		start = len(entries) - n
+	}
+	for i := start; i < len(entries); i++ {
+		fmt.Println(entries[i])
+	}
+	return true
 }

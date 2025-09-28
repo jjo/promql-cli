@@ -1,4 +1,4 @@
-package main
+package repl
 
 import (
 	"encoding/json"
@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
 // promAPIResponse is a minimal struct to parse Prometheus HTTP API responses (vector/matrix/scalar)
@@ -29,7 +31,7 @@ type promAPISeries struct {
 	Values [][2]any          `json:"values"` // matrix
 }
 
-func handleAdhocScrape(query string, storage *SimpleStorage) bool {
+func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 	args := strings.Fields(query)
 	if len(args) < 2 {
 		fmt.Println("Usage: .scrape <URI> [metrics_regex] [count] [delay]")
@@ -80,9 +82,9 @@ func handleAdhocScrape(query string, storage *SimpleStorage) bool {
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	for i := 0; i < count; i++ {
-		beforeMetrics := len(storage.metrics)
+		beforeMetrics := len(storage.Metrics)
 		beforeSamples := 0
-		for _, ss := range storage.metrics {
+		for _, ss := range storage.Metrics {
 			beforeSamples += len(ss)
 		}
 
@@ -110,9 +112,9 @@ func handleAdhocScrape(query string, storage *SimpleStorage) bool {
 			}
 		}()
 
-		afterMetrics := len(storage.metrics)
+		afterMetrics := len(storage.Metrics)
 		afterSamples := 0
-		for _, ss := range storage.metrics {
+		for _, ss := range storage.Metrics {
 			afterSamples += len(ss)
 		}
 		fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
@@ -133,7 +135,7 @@ func handleAdhocScrape(query string, storage *SimpleStorage) bool {
 
 // handleAdhocPromScrapeCommand parses and executes .prom_scrape, importing results from a remote Prometheus API.
 // Syntax: .prom_scrape <PROM_API_URI> 'query' [count] [delay]
-func handleAdhocPromScrapeCommand(input string, storage *SimpleStorage) bool {
+func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage) bool {
 	trim := strings.TrimSpace(input)
 	if !strings.HasPrefix(trim, ".prom_scrape") {
 		return false
@@ -199,9 +201,9 @@ func handleAdhocPromScrapeCommand(input string, storage *SimpleStorage) bool {
 			}
 			// Import results
 			added := importPromResultIntoStorage(storage, &pr)
-			afterMetrics := len(storage.metrics)
+			afterMetrics := len(storage.Metrics)
 			afterSamples := 0
-			for _, ss := range storage.metrics {
+			for _, ss := range storage.Metrics {
 				afterSamples += len(ss)
 			}
 			fmt.Printf("Imported from %s (%d/%d): +%d samples (total: %d metrics, %d samples)\n",
@@ -251,7 +253,7 @@ func applyPromAuth(req *http.Request, authMode, user, pass, orgID, apiKey string
 
 // importPromResultIntoStorage converts the API response into samples and appends them to storage.
 // Returns number of samples added.
-func importPromResultIntoStorage(storage *SimpleStorage, pr *promAPIResponse) int {
+func importPromResultIntoStorage(storage *sstorage.SimpleStorage, pr *promAPIResponse) int {
 	added := 0
 	typeLower := strings.ToLower(pr.Data.ResultType)
 	switch typeLower {
@@ -497,7 +499,7 @@ func parsePromScrapeArgs(rest string) (uri string, query string, count int, dela
 
 // handleAdhocPromScrapeRangeCommand parses and executes .prom_scrape_range, importing results via query_range.
 // Syntax: .prom_scrape_range <PROM_API_URI> 'query' <start> <end> <step> [count] [delay]
-func handleAdhocPromScrapeRangeCommand(input string, storage *SimpleStorage) bool {
+func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleStorage) bool {
 	trim := strings.TrimSpace(input)
 	if !strings.HasPrefix(trim, ".prom_scrape_range") {
 		return false
@@ -561,9 +563,9 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *SimpleStorage) boo
 				return
 			}
 			added := importPromResultIntoStorage(storage, &pr)
-			afterMetrics := len(storage.metrics)
+			afterMetrics := len(storage.Metrics)
 			afterSamples := 0
-			for _, ss := range storage.metrics {
+			for _, ss := range storage.Metrics {
 				afterSamples += len(ss)
 			}
 			fmt.Printf("Imported range from %s (%d/%d): +%d samples (total: %d metrics, %d samples)\n",

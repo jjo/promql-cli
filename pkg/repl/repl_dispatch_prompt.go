@@ -1,16 +1,18 @@
 //go:build prompt
 // +build prompt
 
-package main
+package repl
 
 import (
 	"fmt"
 
 	"github.com/prometheus/prometheus/promql"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
-// runInteractiveQueriesDispatch determines which REPL backend to use
-func runInteractiveQueriesDispatch(engine *promql.Engine, storage *SimpleStorage, silent bool, replBackend string) {
+// RunInteractiveQueriesDispatch determines which REPL backend to use
+func RunInteractiveQueriesDispatch(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool, replBackend string) {
 	if replBackend == "readline" {
 		if !silent {
 			fmt.Println("Using readline backend (--repl=readline)")
@@ -26,7 +28,7 @@ func runInteractiveQueriesDispatch(engine *promql.Engine, storage *SimpleStorage
 }
 
 // runPromptREPL runs the go-prompt based REPL
-func runPromptREPL(engine *promql.Engine, storage *SimpleStorage, silent bool) {
+func runPromptREPL(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
 	if !silent {
 		fmt.Println("Enter PromQL queries (or 'quit' to exit):")
 		fmt.Println()
@@ -41,18 +43,18 @@ func runPromptREPL(engine *promql.Engine, storage *SimpleStorage, silent bool) {
 	globalStorage = storage
 
 	// Set up the refresh function for adhoc.go to call after loading metrics
-	refreshMetricsCache = func(s *SimpleStorage) {
+	refreshMetricsCache = func(s *sstorage.SimpleStorage) {
 		if s != nil {
 			// Update the global storage reference
 			globalStorage = s
 
 			// Rebuild metrics list
 			var metricNames []string
-			for name := range s.metrics {
+			for name := range s.Metrics {
 				metricNames = append(metricNames, name)
 			}
 			metrics = metricNames
-			metricsHelp = s.metricsHelp
+			metricsHelp = s.MetricsHelp
 
 			// Clear the cached metrics in fetchMetrics to force re-fetch
 			// This ensures the next completion request gets fresh data
@@ -65,11 +67,11 @@ func runPromptREPL(engine *promql.Engine, storage *SimpleStorage, silent bool) {
 	// Initialize metrics from storage for completions
 	if storage != nil {
 		var metricNames []string
-		for name := range storage.metrics {
+		for name := range storage.Metrics {
 			metricNames = append(metricNames, name)
 		}
 		metrics = metricNames
-		metricsHelp = storage.metricsHelp
+		metricsHelp = storage.MetricsHelp
 	}
 
 	// Create and run the prompt REPL

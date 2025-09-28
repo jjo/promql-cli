@@ -1,4 +1,4 @@
-package main
+package repl
 
 // AdHocCommand represents an ad-hoc command with its description
 type AdHocCommand struct {

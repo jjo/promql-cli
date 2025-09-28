@@ -1,4 +1,4 @@
-package main
+package repl
 
 import (
 	"fmt"
@@ -6,15 +6,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
-func handleAdhocMetrics(query string, storage *SimpleStorage) bool {
-	if len(storage.metrics) == 0 {
+func handleAdhocMetrics(query string, storage *sstorage.SimpleStorage) bool {
+	if len(storage.Metrics) == 0 {
 		fmt.Println("No metrics loaded")
 		return true
 	}
 	var names []string
-	for name := range storage.metrics {
+	for name := range storage.Metrics {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -25,7 +27,7 @@ func handleAdhocMetrics(query string, storage *SimpleStorage) bool {
 	return true
 }
 
-func handleAdhocLabels(query string, storage *SimpleStorage) bool {
+func handleAdhocLabels(query string, storage *sstorage.SimpleStorage) bool {
 	var metricName string
 	if strings.HasPrefix(query, ".labels ") {
 		metricName = strings.TrimSpace(strings.TrimPrefix(query, ".labels "))
@@ -39,14 +41,14 @@ func handleAdhocLabels(query string, storage *SimpleStorage) bool {
 	}
 
 	// Check if metric exists
-	samples, exists := storage.metrics[metricName]
+	samples, exists := storage.Metrics[metricName]
 	if !exists {
 		fmt.Printf("Metric '%s' not found\n", metricName)
 		fmt.Println("Available metrics:")
 		count := 0
-		for name := range storage.metrics {
+		for name := range storage.Metrics {
 			if count >= 5 {
-				fmt.Printf("... and %d more\n", len(storage.metrics)-5)
+				fmt.Printf("... and %d more\n", len(storage.Metrics)-5)
 				break
 			}
 			fmt.Printf("  - %s\n", name)
@@ -126,7 +128,7 @@ func handleAdhocLabels(query string, storage *SimpleStorage) bool {
 	return true
 }
 
-func handleAdhocTimestamps(query string, storage *SimpleStorage) bool {
+func handleAdhocTimestamps(query string, storage *sstorage.SimpleStorage) bool {
 	metric := strings.TrimSpace(strings.TrimPrefix(query, ".timestamps"))
 	metric = strings.Trim(metric, " \"'")
 	if metric == "" {
@@ -134,7 +136,7 @@ func handleAdhocTimestamps(query string, storage *SimpleStorage) bool {
 		fmt.Println("Example: .timestamps http_requests_total")
 		return true
 	}
-	samples, exists := storage.metrics[metric]
+	samples, exists := storage.Metrics[metric]
 	if !exists || len(samples) == 0 {
 		fmt.Printf("Metric '%s' not found or has no samples\n", metric)
 		return true
@@ -214,7 +216,7 @@ func handleAdhocTimestamps(query string, storage *SimpleStorage) bool {
 	return true
 }
 
-func handleAdhocDrop(query string, storage *SimpleStorage) bool {
+func handleAdhocDrop(query string, storage *sstorage.SimpleStorage) bool {
 	metric := strings.TrimSpace(strings.TrimPrefix(query, ".drop"))
 	metric = strings.TrimSpace(metric)
 	if metric == "" {
@@ -223,17 +225,17 @@ func handleAdhocDrop(query string, storage *SimpleStorage) bool {
 		return true
 	}
 	// Check existence
-	samples, exists := storage.metrics[metric]
+	samples, exists := storage.Metrics[metric]
 	if !exists {
 		fmt.Printf("Metric '%s' not found\n", metric)
 		return true
 	}
 	removed := len(samples)
-	delete(storage.metrics, metric)
+	delete(storage.Metrics, metric)
 	// Report new totals
-	totalMetrics := len(storage.metrics)
+	totalMetrics := len(storage.Metrics)
 	totalSamples := 0
-	for _, ss := range storage.metrics {
+	for _, ss := range storage.Metrics {
 		totalSamples += len(ss)
 	}
 	fmt.Printf("Dropped '%s': -%d samples (now: %d metrics, %d samples)\n", metric, removed, totalMetrics, totalSamples)
@@ -246,7 +248,7 @@ func handleAdhocDrop(query string, storage *SimpleStorage) bool {
 	return true
 }
 
-func handleAdhocSeed(query string, storage *SimpleStorage) bool {
+func handleAdhocSeed(query string, storage *sstorage.SimpleStorage) bool {
 	args := strings.Fields(query)
 	if len(args) < 2 {
 		fmt.Println("Usage: .seed <metric> [steps=N] [step=1m]")
