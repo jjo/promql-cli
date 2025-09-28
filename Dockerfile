@@ -12,14 +12,18 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Copy source
 COPY . .
 
-# Build static binary (no CGO)
+# Build static binary (no CGO) using Makefile target to keep flags in sync
 ENV CGO_ENABLED=0
 ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
+ARG BUILD_TAGS=prompt
+# Ensure make is available (usually present, but install if missing)
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -tags prompt -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" -o /out/promql-cli ./cmd/cli/...
+    bash -c 'command -v make >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends make && rm -rf /var/lib/apt/lists/*); \
+             make GIT_VERSION=${VERSION} GIT_COMMIT=${COMMIT} BUILD_DATE=${BUILD_DATE} BUILD_TAGS=${BUILD_TAGS} build-binary && \
+             install -D -m 0755 bin/promql-cli /out/promql-cli'
 
 # --- runtime stage ---
 FROM gcr.io/distroless/static:nonroot
