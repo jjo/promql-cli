@@ -12,6 +12,8 @@ Load Prometheus text-format metrics, query them with the upstream Prometheus eng
 ## ✨ Key Features
 
 - 🚀 **Interactive REPL** with rich PromQL-aware autocompletion
+- 📊 **Querying** with the upstream Prometheus engine
+- 🚨 **Rules support** with alerting and recording rules
 - 🤖 **AI assistance** for query suggestions (OpenAI, Claude, Grok, Ollama)
 - 📊 **Live metric scraping** from HTTP endpoints with filtering
 - 🕒 **Time manipulation** with pinned evaluation times
@@ -64,6 +66,7 @@ promql-cli query -q 'up' -o json ./example.prom
 | `-o, --output json` | Output JSON format (with `-q`) | `-q 'up' -o json` |
 | `-c, --command "cmds"` | Run commands before REPL/query | `-c ".scrape http://localhost:9100/metrics"` |
 | `-s, --silent` | Suppress startup output | `-s -c ".load data.prom"` |
+| `--rules {dir/,fileglob.yml}` | Load alerting/recording rules file | `--rules example-rules.yml` |
 | `--repl {prompt\|readline}` | Choose REPL backend | `--repl readline` |
 | `--ai "key=value,..."` | Configure AI settings in one flag | `--ai "provider=claude,model=opus,answers=5"` |
 
