@@ -10,7 +10,7 @@ import (
 )
 
 func TestFlattenEditorText(t *testing.T) {
-	cases := []struct{
+	cases := []struct {
 		in   string
 		out  string
 		name string

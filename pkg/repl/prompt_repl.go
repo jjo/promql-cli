@@ -1193,7 +1193,7 @@ func (r *promptREPL) Run() error {
 			Key: prompt.ControlE,
 			Fn: func(buf *prompt.Buffer) {
 				// If recently pressed Ctrl-X, treat this as Ctrl-X Ctrl-E chord
-if ctrlXCtrlETriggered(lastCtrlX, time.Now(), 1500*time.Millisecond) {
+				if ctrlXCtrlETriggered(lastCtrlX, time.Now(), 1500*time.Millisecond) {
 					lastCtrlX = time.Time{}
 					launchExternalEditor(buf)
 					return
