@@ -2,6 +2,7 @@ package repl
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -233,33 +234,81 @@ func handleAdhocTimestamps(query string, storage *sstorage.SimpleStorage) bool {
 }
 
 func handleAdhocDrop(query string, storage *sstorage.SimpleStorage) bool {
-	metric := strings.TrimSpace(strings.TrimPrefix(query, ".drop"))
-	metric = strings.TrimSpace(metric)
-	if metric == "" {
-		fmt.Println("Usage: .drop <metric>")
-		fmt.Println("Example: .drop http_requests_total")
+	arg := strings.TrimSpace(strings.TrimPrefix(query, ".drop"))
+	arg = strings.Trim(arg, " \"'")
+	if arg == "" {
+		fmt.Println("Usage: .drop <series regex>")
+		fmt.Println("Example: .drop '^up\\{.*instance=\"db-.*\".*\\}$'")
 		return true
 	}
-	// Check existence
-	samples, exists := storage.Metrics[metric]
-	if !exists {
-		fmt.Printf("Metric '%s' not found\n", metric)
+	re, err := regexp.Compile(arg)
+	if err != nil {
+		fmt.Printf("Invalid regex: %v\n", err)
 		return true
 	}
-	removed := len(samples)
-	delete(storage.Metrics, metric)
+	removed := 0
+	for name, samples := range storage.Metrics {
+		kept := samples[:0]
+		for _, s := range samples {
+			if re.MatchString(seriesSignature(name, s.Labels)) {
+				removed++
+				continue
+			}
+			kept = append(kept, s)
+		}
+		if len(kept) == 0 {
+			delete(storage.Metrics, name)
+		} else {
+			storage.Metrics[name] = kept
+		}
+	}
 	// Report new totals
 	totalMetrics, totalSamples := storeTotals(storage)
-	fmt.Printf("Dropped '%s': -%d samples (now: %d metrics, %d samples)\n", metric, removed, totalMetrics, totalSamples)
-
-	// Refresh metrics cache for autocompletion if using prompt backend
+	fmt.Printf("Dropped %d samples (now: %d metrics, %d samples)\n", removed, totalMetrics, totalSamples)
 	if refreshMetricsCache != nil {
 		refreshMetricsCache(storage)
 	}
-
 	return true
 }
 
+func handleAdhocKeep(query string, storage *sstorage.SimpleStorage) bool {
+	arg := strings.TrimSpace(strings.TrimPrefix(query, ".keep"))
+	arg = strings.Trim(arg, " \"'")
+	if arg == "" {
+		fmt.Println("Usage: .keep <series regex>")
+		fmt.Println("Example: .keep 'node_cpu_seconds_total\\{.*mode=\"idle\".*\\}'")
+		return true
+	}
+	re, err := regexp.Compile(arg)
+	if err != nil {
+		fmt.Printf("Invalid regex: %v\n", err)
+		return true
+	}
+	removed := 0
+	for name, samples := range storage.Metrics {
+		kept := samples[:0]
+		for _, s := range samples {
+			if re.MatchString(seriesSignature(name, s.Labels)) {
+				kept = append(kept, s)
+			} else {
+				removed++
+			}
+		}
+		if len(kept) == 0 {
+			delete(storage.Metrics, name)
+		} else {
+			storage.Metrics[name] = kept
+		}
+	}
+	totalMetrics, totalSamples := storeTotals(storage)
+	fmt.Printf("Kept regex %q (removed %d samples; now: %d metrics, %d samples)\n", arg, removed, totalMetrics, totalSamples)
+	if refreshMetricsCache != nil {
+		refreshMetricsCache(storage)
+	}
+	return true
+}
+
+// Seed historical samples for a metric
 func handleAdhocSeed(query string, storage *sstorage.SimpleStorage) bool {
 	args := strings.Fields(query)
 	if len(args) < 2 {
@@ -301,10 +350,8 @@ func handleAdhocSeed(query string, storage *sstorage.SimpleStorage) bool {
 	seedHistory(storage, metric, steps, step)
 	fmt.Printf("Seeded %d historical points (step %s) for metric '%s'\n", steps, step, metric)
 
-	// Refresh metrics cache for autocompletion if using prompt backend
 	if refreshMetricsCache != nil {
 		refreshMetricsCache(storage)
 	}
-
 	return true
 }

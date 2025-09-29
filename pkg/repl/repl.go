@@ -1105,7 +1105,11 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleS
 	}
 
 	for {
-		fmt.Print("> ")
+		if pinnedEvalTime != nil {
+			fmt.Print("PromQL(pinat)> ")
+		} else {
+			fmt.Print("PromQL> ")
+		}
 		var query string
 		_, err := fmt.Scanln(&query)
 		if err != nil {

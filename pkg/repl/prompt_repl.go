@@ -932,6 +932,9 @@ func (r *promptREPL) Run() error {
 			if inMultiLine {
 				return "      > ", true // Continuation prompt
 			}
+			if pinnedEvalTime != nil {
+				return "PromQL(pinat)> ", true
+			}
 			return "PromQL> ", true
 		}),
 		prompt.OptionPreviewSuggestionTextColor(prompt.DarkGray),
@@ -965,24 +968,17 @@ func (r *promptREPL) Run() error {
 					// dropdown was likely closed (no suggestions now)
 					dropdownActive = false
 				}
+				// If we previously activated but found no matches, allow reactivation to rebuild
+				if historyActive && len(filteredHistory) == 0 {
+					historyActive = false
+				}
 				// Activate if not active
 				if !historyActive {
 					historyActive = true
 					historySeed = buf.Text()
 					historyPrefix = buf.Document().TextBeforeCursor()
-					// Build filtered history based on captured prefix
-					filteredHistory = []string{}
-					seen := make(map[string]bool)
-					for i := len(replHistory) - 1; i >= 0; i-- {
-						entry := replHistory[i]
-						if seen[entry] {
-							continue
-						}
-						if historyPrefix == "" || strings.HasPrefix(entry, historyPrefix) {
-							filteredHistory = append(filteredHistory, entry)
-							seen[entry] = true
-						}
-					}
+					// Build filtered history based on captured prefix (keep duplicates for 1-1 navigation)
+					filteredHistory = BuildFilteredHistory(historyPrefix, replHistory)
 					historyIndex = 0
 				}
 				if len(filteredHistory) == 0 {

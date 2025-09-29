@@ -110,9 +110,21 @@ var AdHocCommands = []AdHocCommand{
 	},
 	{
 		Command:     ".drop",
-		Description: "Remove a metric from the in-memory store",
-		Usage:       ".drop <metric>",
-		Examples:    []string{".drop http_requests_total"},
+		Description: "Drop all series matching a regex (by series signature name{labels})",
+		Usage:       ".drop <series regex>",
+		Examples: []string{
+			".drop '^up\\{.*instance=\"db-.*\".*\\}$'",
+			".drop 'http_requests_total\\{.*code=\"5..\".*\\}'",
+		},
+	},
+	{
+		Command:     ".keep",
+		Description: "Keep only series matching a regex (drop the rest)",
+		Usage:       ".keep <series regex>",
+		Examples: []string{
+			".keep '^up\\{.*job=\"node-exporter\".*\\}$'",
+			".keep 'node_cpu_seconds_total\\{.*mode=\"idle\".*\\}'",
+		},
 	},
 	{
 		Command:     ".at",
