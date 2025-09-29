@@ -30,10 +30,10 @@ const suggestionLimit = 100
 
 // Global variables needed for prompt completions
 var (
-	client            v1.API
-	ctx               = context.Background()
-	metrics           []string
-	metricsHelp       map[string]string // metric name -> help text
+	client      v1.API
+	ctx         = context.Background()
+	metrics     []string
+	metricsHelp map[string]string // metric name -> help text
 	// recordingRuleSet marks names that come from recording rules so we can label them
 	recordingRuleSet  map[string]bool
 	replHistory       []string
