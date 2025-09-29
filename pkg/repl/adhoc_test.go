@@ -146,29 +146,30 @@ func TestAdhoc_Drop_RemovesMetricAndReports(t *testing.T) {
 		t.Fatalf("expected metric present before drop")
 	}
 
+	// Drop by series-signature regex matching all series of http_requests_total
 	out := captureStdout(t, func() {
-		_ = handleAdHocFunction(".drop http_requests_total", store)
+		_ = handleAdHocFunction(".drop ^http_requests_total\\{", store)
 	})
 	if _, ok := store.Metrics["http_requests_total"]; ok {
 		t.Fatalf("expected metric removed")
 	}
-	if !strings.Contains(out, "Dropped 'http_requests_total'") {
+	if !strings.Contains(out, "Dropped 2 samples") {
 		t.Fatalf("unexpected .drop output: %s", out)
 	}
 
-	// Dropping non-existent metric
+	// Dropping with a regex that matches nothing
 	out = captureStdout(t, func() {
-		_ = handleAdHocFunction(".drop not_a_metric", store)
+		_ = handleAdHocFunction(".drop ^not_a_metric\\{", store)
 	})
-	if !strings.Contains(out, "Metric 'not_a_metric' not found") {
-		t.Fatalf("expected not found message, got: %s", out)
+	if !strings.Contains(out, "Dropped 0 samples") {
+		t.Fatalf("expected zero-dropped message, got: %s", out)
 	}
 
-	// Usage without metric name
+	// Usage without argument
 	out = captureStdout(t, func() {
 		_ = handleAdHocFunction(".drop", store)
 	})
-	if !strings.Contains(out, "Usage: .drop <metric>") {
+	if !strings.Contains(out, "Usage: .drop <series regex>") {
 		t.Fatalf("expected usage message, got: %s", out)
 	}
 }

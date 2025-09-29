@@ -67,9 +67,16 @@ func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
 		}
 	}
 
-	// Handle .drop <metric>
+	// Handle .drop <series regex>
 	if strings.HasPrefix(trimmed, ".drop ") || trimmed == ".drop" {
 		if handled := handleAdhocDrop(trimmed, storage); handled {
+			return true
+		}
+	}
+
+	// Handle .keep <series regex>
+	if strings.HasPrefix(trimmed, ".keep ") || trimmed == ".keep" {
+		if handled := handleAdhocKeep(trimmed, storage); handled {
 			return true
 		}
 	}
