@@ -32,12 +32,12 @@ func TestEvaluateRulesOnStorage_RecordingRule(t *testing.T) {
 	// Create a temp rules file
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rules.yaml")
-	yaml := "" +
-		"groups:\n" +
-		"- name: test\n" +
-		"  rules:\n" +
-		"  - record: http_requests_total_copy\n" +
-		"    expr: sum by (code) (http_requests_total)\n"
+	yaml := `groups:
+- name: test
+  rules:
+  - record: http_requests_total_copy
+    expr: sum by (code) (http_requests_total)
+`
 	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

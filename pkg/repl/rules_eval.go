@@ -3,6 +3,7 @@ package repl
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,7 +193,7 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 	switch v := res.Value.(type) {
 	case promql.Vector:
 		for _, smpl := range v {
-			if smpl.F == 0 || isNaN(smpl.F) {
+			if smpl.F == 0 || math.IsNaN(smpl.F) {
 				continue
 			}
 			fires++
@@ -209,7 +210,7 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 			}
 		}
 	case promql.Scalar:
-		if v.V != 0 && !isNaN(v.V) {
+		if v.V != 0 && !math.IsNaN(v.V) {
 			fires++
 			if printFn != nil {
 				printFn(fmt.Sprintf("ALERT %s firing (scalar) value=%v", r.Alert, v.V))
@@ -218,6 +219,3 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 	}
 	return fires, nil
 }
-
-// isNaN checks for NaN without importing math to keep deps small in this file.
-func isNaN(f float64) bool { return f != f }
