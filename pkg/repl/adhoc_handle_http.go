@@ -116,6 +116,13 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 		fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
 			uri, i+1, count, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
 
+		// Evaluate active rules after each scrape update
+		if added, alerts, err := EvaluateActiveRules(storage); err != nil {
+			fmt.Printf("Rules evaluation failed: %v\n", err)
+		} else if added > 0 || alerts > 0 {
+			fmt.Printf("Rules: added %d samples; %d alerts\n", added, alerts)
+		}
+
 		if i < count-1 && delay > 0 {
 			time.Sleep(delay)
 		}
@@ -200,6 +207,12 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 			afterMetrics, afterSamples := storeTotals(storage)
 			fmt.Printf("Imported from %s (%d/%d): +%d samples (total: %d metrics, %d samples)\n",
 				u.Scheme+"://"+u.Host, i+1, count, added, afterMetrics, afterSamples)
+			// Evaluate active rules after import
+			if rAdded, rAlerts, rErr := EvaluateActiveRules(storage); rErr != nil {
+				fmt.Printf("Rules evaluation failed: %v\n", rErr)
+			} else if rAdded > 0 || rAlerts > 0 {
+				fmt.Printf("Rules: added %d samples; %d alerts\n", rAdded, rAlerts)
+			}
 		}()
 
 		if i < count-1 && delay > 0 {
@@ -558,6 +571,12 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 			afterMetrics, afterSamples := storeTotals(storage)
 			fmt.Printf("Imported range from %s (%d/%d): +%d samples (total: %d metrics, %d samples)\n",
 				u.Scheme+"://"+u.Host, i+1, count, added, afterMetrics, afterSamples)
+			// Evaluate active rules after each range import
+			if rAdded, rAlerts, rErr := EvaluateActiveRules(storage); rErr != nil {
+				fmt.Printf("Rules evaluation failed: %v\n", rErr)
+			} else if rAdded > 0 || rAlerts > 0 {
+				fmt.Printf("Rules: added %d samples; %d alerts\n", rAdded, rAlerts)
+			}
 		}()
 
 		if i < count-1 && delay > 0 {

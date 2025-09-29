@@ -112,6 +112,7 @@ func main() {
 	queryFlags := flag.NewFlagSet("query", flag.ContinueOnError)
 	oneOffQuery := queryFlags.String("query", "", "one-off query expr; exit")
 	queryFlags.StringVar(oneOffQuery, "q", "", "shorthand for --query")
+	rulesSpec := queryFlags.String("rules", "", "Prometheus rules: directory of .yml/.yaml or a glob (e.g., /path/*.yaml)")
 	output := queryFlags.String("output", "", "output format for -q (json)")
 	initCommands := queryFlags.String("command", "", "semicolon-separated pre-commands")
 	queryFlags.StringVar(initCommands, "c", "", "shorthand for --command")
@@ -142,6 +143,40 @@ func main() {
 
 			if *initCommands != "" {
 				repl.RunInitCommands(engine, storage, *initCommands, *silent)
+			}
+
+			// Load and evaluate rules if provided
+			if *rulesSpec != "" {
+				files, err := repl.ResolveRuleSpec(*rulesSpec)
+				if err != nil {
+					return fmt.Errorf("rules: %w", err)
+				}
+				if len(files) == 0 {
+					if !*silent {
+						fmt.Printf("No rule files matched %q\n", *rulesSpec)
+					}
+				} else {
+					if !*silent {
+						fmt.Printf("Evaluating %d rule file(s)\n", len(files))
+					}
+					now := time.Now()
+					// Store active rules for REPL auto-evaluation on updates
+					repl.SetActiveRules(files, *rulesSpec)
+					added, alerts, err := repl.EvaluateRulesOnStorage(engine, storage, files, now, func(s string) { fmt.Println(s) })
+					if err != nil {
+						return fmt.Errorf("rules evaluation failed: %w", err)
+					}
+					if !*silent {
+						fmt.Printf("Rules evaluated at %s: added %d samples; %d alerts\n", now.UTC().Format(time.RFC3339), added, alerts)
+						// Show store totals
+						tm := len(storage.Metrics)
+						ts := 0
+						for _, ss := range storage.Metrics {
+							ts += len(ss)
+						}
+						fmt.Printf("Total: %d metrics, %d samples\n\n", tm, ts)
+					}
+				}
 			}
 
 			if *oneOffQuery != "" {

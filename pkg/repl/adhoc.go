@@ -53,6 +53,13 @@ func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
 		}
 	}
 
+	// Handle .rules [spec]
+	if strings.HasPrefix(trimmed, ".rules") {
+		if handled := handleAdhocRules(trimmed, storage); handled {
+			return true
+		}
+	}
+
 	// Handle .labels <metric>
 	if strings.HasPrefix(trimmed, ".labels") {
 		if handled := handleAdhocLabels(trimmed, storage); handled {

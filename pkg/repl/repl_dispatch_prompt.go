@@ -24,6 +24,7 @@ func RunInteractiveQueriesDispatch(engine *promql.Engine, storage *sstorage.Simp
 	if !silent {
 		fmt.Println("Using go-prompt backend (default)")
 	}
+	SetEvalEngine(engine)
 	runPromptREPL(engine, storage, silent)
 }
 
@@ -48,12 +49,25 @@ func runPromptREPL(engine *promql.Engine, storage *sstorage.SimpleStorage, silen
 			// Update the global storage reference
 			globalStorage = s
 
-			// Rebuild metrics list
+			// Rebuild metrics list (de-duplicated) and track recording rule names
+			seen := make(map[string]bool)
 			var metricNames []string
 			for name := range s.Metrics {
-				metricNames = append(metricNames, name)
+				if !seen[name] {
+					metricNames = append(metricNames, name)
+					seen[name] = true
+				}
 			}
 			metrics = metricNames
+			// Add recording rule names for completion even if not present yet (without duplicates)
+			recordingRuleSet = make(map[string]bool)
+			for _, rn := range GetRecordingRuleNames() {
+				recordingRuleSet[rn] = true
+				if !seen[rn] {
+					metrics = append(metrics, rn)
+					seen[rn] = true
+				}
+			}
 			metricsHelp = s.MetricsHelp
 
 			// Clear the cached metrics in fetchMetrics to force re-fetch
@@ -66,12 +80,25 @@ func runPromptREPL(engine *promql.Engine, storage *sstorage.SimpleStorage, silen
 
 	// Initialize metrics from storage for completions
 	if storage != nil {
+		seen := make(map[string]bool)
 		var metricNames []string
 		for name := range storage.Metrics {
-			metricNames = append(metricNames, name)
+			if !seen[name] {
+				metricNames = append(metricNames, name)
+				seen[name] = true
+			}
 		}
 		metrics = metricNames
 		metricsHelp = storage.MetricsHelp
+		// Seed recording rule set and append rule names (without duplicates)
+		recordingRuleSet = make(map[string]bool)
+		for _, rn := range GetRecordingRuleNames() {
+			recordingRuleSet[rn] = true
+			if !seen[rn] {
+				metrics = append(metrics, rn)
+				seen[rn] = true
+			}
+		}
 	}
 
 	// Create and run the prompt REPL
