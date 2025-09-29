@@ -259,7 +259,14 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 	afterMetrics, afterSamples := storeTotals(storage)
 	fmt.Printf("Loaded %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n", path, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
 
-	// Refresh metrics cache for autocompletion if using prompt backend
+	// Evaluate active rules after TSDB update
+	if added, alerts, err := EvaluateActiveRules(storage); err != nil {
+		fmt.Printf("Rules evaluation failed: %v\n", err)
+	} else if added > 0 || alerts > 0 {
+		fmt.Printf("Rules: added %d samples; %d alerts\n", added, alerts)
+	}
+
+	// Refresh metrics cache for autocompletion if using prompt backend (again, to include recorded series)
 	if refreshMetricsCache != nil {
 		refreshMetricsCache(storage)
 	}

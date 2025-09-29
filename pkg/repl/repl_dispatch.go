@@ -22,5 +22,6 @@ func RunInteractiveQueriesDispatch(engine *promql.Engine, storage *sstorage.Simp
 	}
 
 	// Default to readline
+	SetEvalEngine(engine)
 	runInteractiveQueries(engine, storage, silent)
 }

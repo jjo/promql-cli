@@ -308,6 +308,50 @@ func handleAdhocKeep(query string, storage *sstorage.SimpleStorage) bool {
 	return true
 }
 
+// .rules command: shows or sets active rules (directory, glob, or single file)
+func handleAdhocRules(query string, storage *sstorage.SimpleStorage) bool {
+	trim := strings.TrimSpace(query)
+	args := strings.Fields(trim)
+	if len(args) == 1 { // show
+		spec, files := GetActiveRules()
+		if len(files) == 0 {
+			fmt.Println("Rules: none")
+			return true
+		}
+		fmt.Printf("Rules (%d): spec=%q\n", len(files), spec)
+		for _, f := range files {
+			fmt.Printf("  - %s\n", f)
+		}
+		// List recording rule names
+		recs := GetRecordingRuleNames()
+		if len(recs) > 0 {
+			fmt.Printf("Recording rules (%d):\n", len(recs))
+			sort.Strings(recs)
+			for _, n := range recs {
+				fmt.Printf("  - %s\n", n)
+			}
+		}
+		return true
+	}
+	// set
+	spec := strings.TrimSpace(strings.Trim(args[1], "\"'"))
+	files, err := ResolveRuleSpec(spec)
+	if err != nil {
+		fmt.Printf(".rules: %v\n", err)
+		return true
+	}
+	SetActiveRules(files, spec)
+	fmt.Printf("Rules set: %d file(s) from %q\n", len(files), spec)
+	// Optionally evaluate immediately to populate store with recordings
+	if added, alerts, err := EvaluateActiveRules(storage); err == nil && (added > 0 || alerts > 0) {
+		fmt.Printf("Rules: added %d samples; %d alerts\n", added, alerts)
+		if refreshMetricsCache != nil {
+			refreshMetricsCache(storage)
+		}
+	}
+	return true
+}
+
 // Seed historical samples for a metric
 func handleAdhocSeed(query string, storage *sstorage.SimpleStorage) bool {
 	args := strings.Fields(query)

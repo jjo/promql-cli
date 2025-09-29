@@ -37,6 +37,17 @@ var AdHocCommands = []AdHocCommand{
 		Usage:       ".metrics",
 	},
 	{
+		Command:     ".rules",
+		Description: "Show or set active Prometheus rule files (dir, glob, or file)",
+		Usage:       ".rules [<dir|glob|file>]",
+		Examples: []string{
+			".rules",
+			".rules ./example-rules.yaml",
+			".rules ./rules/",
+			".rules 'rules/*.yaml'",
+		},
+	},
+	{
 		Command:     ".timestamps",
 		Description: "Summarize timestamps for a metric",
 		Usage:       ".timestamps <metric>",

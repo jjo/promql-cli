@@ -34,6 +34,8 @@ var (
 	ctx               = context.Background()
 	metrics           []string
 	metricsHelp       map[string]string // metric name -> help text
+	// recordingRuleSet marks names that come from recording rules so we can label them
+	recordingRuleSet  map[string]bool
 	replHistory       []string
 	executeOneFunc    func(string) // Function pointer to executeOne
 	globalStorage     interface{}  // Storage for accessing metrics metadata
@@ -549,7 +551,12 @@ func getMetricSuggests(prefix string) []prompt.Suggest {
 					}
 				}
 				if description == "" {
-					description = "(metric)"
+					// Default label depends on whether this name is a recording rule
+					if recordingRuleSet != nil && recordingRuleSet[m] {
+						description = "(rule)"
+					} else {
+						description = "(metric)"
+					}
 				}
 			}
 
@@ -1471,10 +1478,24 @@ func fetchMetrics() {
 	// Try to get metrics from globalStorage if available
 	if globalStorage != nil {
 		if storage, ok := globalStorage.(*sstorage.SimpleStorage); ok && storage != nil {
+			// Build a de-duplicated metrics list and track recording rule names
+			seen := make(map[string]bool)
 			metrics = make([]string, 0, len(storage.Metrics))
 			metricsHelp = storage.MetricsHelp // Use the help text from storage
+			recordingRuleSet = make(map[string]bool)
 			for name := range storage.Metrics {
-				metrics = append(metrics, name)
+				if !seen[name] {
+					metrics = append(metrics, name)
+					seen[name] = true
+				}
+			}
+			// Include configured recording rule names as suggestions (without duplicates)
+			for _, rn := range GetRecordingRuleNames() {
+				recordingRuleSet[rn] = true
+				if !seen[rn] {
+					metrics = append(metrics, rn)
+					seen[rn] = true
+				}
 			}
 			return
 		}
