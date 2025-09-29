@@ -22,6 +22,7 @@ import (
 	"github.com/c-bata/go-prompt"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/prometheus/promql/parser"
+	"golang.org/x/sys/unix"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
@@ -41,6 +42,7 @@ var (
 	globalStorage     interface{}  // Storage for accessing metrics metadata
 	inGoPromptSession bool         // true while running go-prompt REPL
 	dropdownActive    bool         // true if user opened completion with Tab
+	lastCtrlX         time.Time    // timestamp of last Ctrl-X to detect Ctrl-X Ctrl-E chord
 )
 
 // promptCompleter provides completions for go-prompt
@@ -715,6 +717,111 @@ func createPromptREPL() *promptREPL {
 	return &promptREPL{}
 }
 
+// launchExternalEditor opens the current buffer in the user's editor and replaces the buffer
+// content with the edited text when the editor exits. The temp file uses a .promql extension
+// to enable syntax highlighting in many editors.
+func launchExternalEditor(buf *prompt.Buffer) {
+	// Prepare temp file with .promql extension
+	tf, err := os.CreateTemp("", "promql-*.promql")
+	if err != nil {
+		fmt.Printf("Failed to create temp file: %v\n", err)
+		return
+	}
+	path := tf.Name()
+	defer os.Remove(path)
+	// Write current buffer text
+	if _, err := tf.WriteString(buf.Text()); err != nil {
+		_ = tf.Close()
+		fmt.Printf("Failed to write temp file: %v\n", err)
+		return
+	}
+	_ = tf.Close()
+
+	// Pick editor: PROMQL_EDITOR > VISUAL > EDITOR > nano
+	editor := os.Getenv("PROMQL_EDITOR")
+	if strings.TrimSpace(editor) == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if strings.TrimSpace(editor) == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if strings.TrimSpace(editor) == "" {
+		editor = "nano"
+	}
+
+	// Quote the file path for the shell
+	shQuote := func(s string) string {
+		// Safest POSIX single-quote escaping: ' -> '\''
+		return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+	}
+
+	// Temporarily restore terminal to cooked mode for the editor
+	rawState := saveTerminalState()
+	restoreTerminalState(globalOriginalState)
+
+	cmdStr := fmt.Sprintf("%s %s", editor, shQuote(path))
+	cmd := exec.Command("/bin/sh", "-c", cmdStr)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run() // Even if non-zero, try to read the file afterwards
+
+	// Return terminal to raw mode used by go-prompt
+	restoreTerminalState(rawState)
+
+	// Drain any pending terminal response bytes (e.g., CPR/DSR) so they don't enter the buffer
+	drainStdin()
+
+	// Read edited content
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Printf("Failed to read edited file: %v\n", err)
+		return
+	}
+	text := strings.TrimRight(string(data), "\r\n")
+	// Option 2: convert multi-line text from editor back to single line for REPL buffer
+	if text != "" {
+		// Normalize line endings and whitespace: CRLF/CR -> LF, then replace LF and tabs with spaces
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+		text = strings.ReplaceAll(text, "\r", "\n")
+		text = strings.ReplaceAll(text, "\t", " ")
+		text = strings.ReplaceAll(text, "\n", " ")
+		text = strings.TrimSpace(text)
+	}
+
+	// Replace entire buffer with edited content
+	doc := buf.Document()
+	buf.CursorLeft(len([]rune(doc.TextBeforeCursor())))
+	buf.Delete(len([]rune(doc.Text)))
+	if text != "" {
+		buf.InsertText(text, false, true)
+	}
+}
+
+// drainStdin discards any immediately available bytes from STDIN (non-blocking).
+// This helps remove stray escape sequences (like cursor position reports) emitted
+// when toggling terminal modes around external editor execution.
+func drainStdin() {
+	fd := int(os.Stdin.Fd())
+	// Set non-blocking; ignore errors on platforms where this may fail
+	_ = unix.SetNonblock(fd, true)
+	defer func() { _ = unix.SetNonblock(fd, false) }()
+	buf := make([]byte, 8192)
+	for {
+		n, err := unix.Read(fd, buf)
+		if n <= 0 {
+			if err == nil || err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				break
+			}
+			break
+		}
+		// Continue reading until no more data is immediately available
+		if n < len(buf) {
+			// Quick next read will likely hit EAGAIN; loop continues
+		}
+	}
+}
+
 // getAISuggestionMenu builds the dropdown items for AI selection (edit first, then run)
 func getAISuggestionMenu() []prompt.Suggest {
 	var items []prompt.Suggest
@@ -1053,6 +1160,13 @@ func (r *promptREPL) Run() error {
 		}),
 
 		// Emacs-style key bindings
+		// Ctrl-X: start chord timer for Ctrl-X Ctrl-E to open external editor
+		prompt.OptionAddKeyBind(prompt.KeyBind{
+			Key: prompt.ControlX,
+			Fn: func(buf *prompt.Buffer) {
+				lastCtrlX = time.Now()
+			},
+		}),
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlA,
 			Fn: func(buf *prompt.Buffer) {
@@ -1064,7 +1178,13 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlE,
 			Fn: func(buf *prompt.Buffer) {
-				// Move to end of line
+				// If recently pressed Ctrl-X, treat this as Ctrl-X Ctrl-E chord
+				if !lastCtrlX.IsZero() && time.Since(lastCtrlX) <= 1500*time.Millisecond {
+					lastCtrlX = time.Time{}
+					launchExternalEditor(buf)
+					return
+				}
+				// Otherwise: Move to end of line
 				x := []rune(buf.Document().CurrentLineAfterCursor())
 				buf.CursorRight(len(x))
 			},
