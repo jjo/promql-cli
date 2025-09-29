@@ -129,7 +129,7 @@ func evalRecordingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r
 	if _, err := promparser.ParseExpr(expr); err != nil {
 		return 0, fmt.Errorf("recording rule %q: parse error: %w", r.Record, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), replTimeout)
 	defer cancel()
 	q, err := engine.NewInstantQuery(ctx, storage, nil, expr, t)
 	if err != nil {
@@ -179,7 +179,7 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 	if _, err := promparser.ParseExpr(expr); err != nil {
 		return 0, fmt.Errorf("alerting rule %q: parse error: %w", r.Alert, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), replTimeout)
 	defer cancel()
 	q, err := engine.NewInstantQuery(ctx, storage, nil, expr, t)
 	if err != nil {

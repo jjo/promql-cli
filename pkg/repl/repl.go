@@ -21,6 +21,8 @@ import (
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
+var replTimeout = 60 * time.Second
+
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
 func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
@@ -1224,7 +1226,7 @@ func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line str
 	// Normalize @<unix_ms> to seconds with decimals for PromQL @ modifier
 	query = normalizeAtModifierTimestamps(query)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), replTimeout)
 	defer cancel()
 
 	q, err := engine.NewInstantQuery(ctx, storage, nil, query, evalTime)
