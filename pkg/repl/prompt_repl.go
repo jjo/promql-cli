@@ -717,6 +717,21 @@ func createPromptREPL() *promptREPL {
 	return &promptREPL{}
 }
 
+// flattenEditorText converts multi-line editor content to a single line suitable for the REPL buffer.
+// It normalizes CRLF/CR to LF, replaces newlines and tabs with spaces, and trims spaces.
+func flattenEditorText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
+}
+
+// ctrlXCtrlETriggered reports whether a Ctrl-E press should be considered part of a recent Ctrl-X Ctrl-E chord.
+func ctrlXCtrlETriggered(last time.Time, now time.Time, threshold time.Duration) bool {
+	return !last.IsZero() && now.Sub(last) <= threshold
+}
+
 // launchExternalEditor opens the current buffer in the user's editor and replaces the buffer
 // content with the edited text when the editor exits. The temp file uses a .promql extension
 // to enable syntax highlighting in many editors.
@@ -779,14 +794,9 @@ func launchExternalEditor(buf *prompt.Buffer) {
 		return
 	}
 	text := strings.TrimRight(string(data), "\r\n")
-	// Option 2: convert multi-line text from editor back to single line for REPL buffer
+	// Convert multi-line text from editor back to single line for REPL buffer
 	if text != "" {
-		// Normalize line endings and whitespace: CRLF/CR -> LF, then replace LF and tabs with spaces
-		text = strings.ReplaceAll(text, "\r\n", "\n")
-		text = strings.ReplaceAll(text, "\r", "\n")
-		text = strings.ReplaceAll(text, "\t", " ")
-		text = strings.ReplaceAll(text, "\n", " ")
-		text = strings.TrimSpace(text)
+		text = flattenEditorText(text)
 	}
 
 	// Replace entire buffer with edited content
@@ -802,8 +812,12 @@ func launchExternalEditor(buf *prompt.Buffer) {
 // This helps remove stray escape sequences (like cursor position reports) emitted
 // when toggling terminal modes around external editor execution.
 func drainStdin() {
-	fd := int(os.Stdin.Fd())
-	// Set non-blocking; ignore errors on platforms where this may fail
+	drainFD(int(os.Stdin.Fd()))
+}
+
+// drainFD drains any immediately available bytes from the given file descriptor in non-blocking mode.
+func drainFD(fd int) {
+	// Set non-blocking; ignore errors where unsupported
 	_ = unix.SetNonblock(fd, true)
 	defer func() { _ = unix.SetNonblock(fd, false) }()
 	buf := make([]byte, 8192)
@@ -1179,7 +1193,7 @@ func (r *promptREPL) Run() error {
 			Key: prompt.ControlE,
 			Fn: func(buf *prompt.Buffer) {
 				// If recently pressed Ctrl-X, treat this as Ctrl-X Ctrl-E chord
-				if !lastCtrlX.IsZero() && time.Since(lastCtrlX) <= 1500*time.Millisecond {
+if ctrlXCtrlETriggered(lastCtrlX, time.Now(), 1500*time.Millisecond) {
 					lastCtrlX = time.Time{}
 					launchExternalEditor(buf)
 					return
