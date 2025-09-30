@@ -12,9 +12,9 @@ GIT_VERSION := $(shell git describe --tags --dirty --always 2>/dev/null || echo 
 GIT_COMMIT  := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
 BUILD_DATE  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Build tags - include prompt support by default
-# Can be overridden with: make BUILD_TAGS="" build
-BUILD_TAGS ?= prompt
+# Build tags - prompt is included by default; use 'noprompt' to disable
+# Can be overridden with: make BUILD_TAGS="noprompt" build
+BUILD_TAGS ?=
 
 GOFLAGS :=
 LDFLAGS := -s -w \
@@ -33,12 +33,12 @@ build: $(BIN) build-binary
 
 # Build a single binary at repo root (./promql-cli)
 build-binary:
-	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o bin/$(APP) ./cmd/cli/...
+	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o bin/$(APP) ./cmd/promql-cli/...
 	@echo "Built $(BIN)/$(APP) (version=$(GIT_VERSION), commit=$(GIT_COMMIT), tags=$(BUILD_TAGS))"
 
 # Build without prompt support (minimal binary)
 build-no-prompt:
-	BUILD_TAGS="" $(MAKE) build-binary
+	BUILD_TAGS="noprompt" $(MAKE) build-binary
 	@echo "Built minimal binary without go-prompt support"
 
 run: build
@@ -109,8 +109,8 @@ help:
 	@echo "  help            - Show this help"
 	@echo ""
 	@echo "Build options:"
-	@echo "  BUILD_TAGS      - Build tags (default: prompt)"
-	@echo "                    Use BUILD_TAGS=\"\" for minimal build"
+	@echo "  BUILD_TAGS      - Build tags (default: none)"
+	@echo "                    Use BUILD_TAGS=\"noprompt\" to disable go-prompt"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build                  # Build with prompt support"
