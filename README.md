@@ -454,5 +454,5 @@ make test
 ```
 
 **Build options:**
-- `prompt` tag: Advanced REPL with autocompletion (default)
-- No tags: Basic readline interface for minimal deployments
+- Default: Advanced REPL with autocompletion (go-prompt)
+- `noprompt` tag: Basic readline interface for minimal deployments

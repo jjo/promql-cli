@@ -1,4 +1,4 @@
-//go:build prompt
+//go:build !noprompt
 
 package repl
 
@@ -724,7 +724,9 @@ func flattenEditorText(s string) string {
 	s = strings.ReplaceAll(s, "\r", "\n")
 	s = strings.ReplaceAll(s, "\t", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
-	return strings.TrimSpace(s)
+	// Collapse multiple spaces and trim
+	parts := strings.Fields(s)
+	return strings.Join(parts, " ")
 }
 
 // ctrlXCtrlETriggered reports whether a Ctrl-E press should be considered part of a recent Ctrl-X Ctrl-E chord.

@@ -1,4 +1,4 @@
-//go:build prompt
+//go:build !noprompt
 
 package repl
 
@@ -62,7 +62,8 @@ func TestDrainFD(t *testing.T) {
 	}
 	// Drain it
 	drainFD(r)
-	// After draining, a non-blocking read should return 0 (EOF) or EAGAIN
+	// After draining, re-enable non-blocking (drainFD resets it) and a read should return 0 or EAGAIN
+	_ = unix.SetNonblock(r, true)
 	buf := make([]byte, 16)
 	n, err := unix.Read(r, buf)
 	if n > 0 {

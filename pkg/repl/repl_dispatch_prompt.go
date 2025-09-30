@@ -1,5 +1,5 @@
-//go:build prompt
-// +build prompt
+//go:build !noprompt
+// +build !noprompt
 
 package repl
 

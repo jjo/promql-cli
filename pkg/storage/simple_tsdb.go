@@ -51,13 +51,80 @@ http_requests_total{method="get",code="404"} 3
 temperature{room="server"} 27.3
 `
 
+// sanitizeDirectives removes duplicate "# HELP <name> ..." and "# TYPE <name> ..." lines,
+// keeping only the last occurrence for each metric name. This makes the input compatible with
+// the Prometheus parser, which otherwise errors on duplicate directives within a file.
+// Later directives override earlier ones; sample lines are untouched.
+func sanitizeDirectives(data []byte) []byte {
+	lines := strings.Split(string(data), "\n")
+	include := make([]bool, len(lines))
+	for i := range include {
+		include[i] = true
+	}
+	seenHelp := make(map[string]bool)
+	seenType := make(map[string]bool)
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "# HELP ") {
+			rest := strings.TrimSpace(line[len("# HELP "):])
+			fields := strings.Fields(rest)
+			if len(fields) == 0 {
+				continue
+			}
+			name := fields[0]
+			if seenHelp[name] {
+				include[i] = false
+			} else {
+				seenHelp[name] = true
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "# TYPE ") {
+			rest := strings.TrimSpace(line[len("# TYPE "):])
+			fields := strings.Fields(rest)
+			if len(fields) == 0 {
+				continue
+			}
+			name := fields[0]
+			if seenType[name] {
+				include[i] = false
+			} else {
+				seenType[name] = true
+			}
+			continue
+		}
+	}
+	// Reassemble preserving original order
+	var b strings.Builder
+	for i, inc := range include {
+		if !inc {
+			continue
+		}
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(lines[i])
+	}
+	return []byte(b.String())
+}
+
 // LoadFromReader loads Prometheus exposition format data using the official Prometheus parser
 func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
+	// Read all to allow pre-sanitization of HELP directives (be tolerant of duplicates)
+	data, rerr := io.ReadAll(reader)
+	if rerr != nil {
+		return fmt.Errorf("failed to read metrics: %w", rerr)
+	}
+	data = sanitizeDirectives(data)
+
 	// Use the standard Prometheus exposition format parser
 	parser := expfmt.NewTextParser(model.UTF8Validation)
-	metricFamilies, err := parser.TextToMetricFamilies(reader)
+	metricFamilies, err := parser.TextToMetricFamilies(strings.NewReader(string(data)))
 	if err != nil {
-		return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
+		// Best-effort: if we parsed some families, proceed and ignore the error
+		if len(metricFamilies) == 0 {
+			return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
+		}
 	}
 
 	// Process the parsed metric families
@@ -67,10 +134,19 @@ func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
 // LoadFromReaderWithFilter loads metrics and applies a metric-name filter function.
 // Only metric families for which filter(name) returns true are loaded.
 func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(name string) bool) error {
+	data, rerr := io.ReadAll(reader)
+	if rerr != nil {
+		return fmt.Errorf("failed to read metrics: %w", rerr)
+	}
+	data = sanitizeDirectives(data)
+
 	parser := expfmt.NewTextParser(model.UTF8Validation)
-	metricFamilies, err := parser.TextToMetricFamilies(reader)
+	metricFamilies, err := parser.TextToMetricFamilies(strings.NewReader(string(data)))
 	if err != nil {
-		return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
+		// Best-effort: if we parsed some families, proceed and ignore the error
+		if len(metricFamilies) == 0 {
+			return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
+		}
 	}
 	if filter == nil {
 		return s.processMetricFamilies(metricFamilies)
