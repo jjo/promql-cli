@@ -17,11 +17,15 @@ import (
 	"github.com/chzyer/readline"
 	"github.com/prometheus/prometheus/promql"
 	promparser "github.com/prometheus/prometheus/promql/parser"
+	"golang.org/x/sys/unix"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
 var replTimeout = 60 * time.Second
+
+// lastExecutedCommand is shared across REPL backends to enable features like Alt+.
+var lastExecutedCommand string
 
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
@@ -39,12 +43,28 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 	// State for prefix-based history navigation
 	type histState struct {
-		lastPrefix string // prefix captured before Up/Down
+		lastPrefix string // prefix captured at activation (stable during nav)
 		seedLine   []rune // editing line before entering navigation for lastPrefix
 		matches    []int  // indices into userHistory (most recent first)
 		idx        int    // current selection index in matches; len(matches) means seedLine
+		active     bool   // true while navigating with Up/Down
 	}
-	state := &histState{idx: 0}
+	state := &histState{idx: 0, active: false}
+
+	// State for chords and ESC sequences
+	var lastCtrlX time.Time
+	var escPending bool
+	var escAt time.Time
+
+	// Optional custom Alt+. rune codepoint (for terminals that send non-ESC meta)
+	var altDotRune rune
+	if v := strings.TrimSpace(os.Getenv("PROMQL_CLI_ALT_DOT_KEY")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			altDotRune = rune(n)
+		} else if r := []rune(v); len(r) == 1 {
+			altDotRune = r[0]
+		}
+	}
 
 	// Build matches for a given prefix, ordered from most recent to oldest
 	buildMatches := func(prefix string) {
@@ -63,31 +83,50 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		state.idx = len(state.matches) // start from seed position (no selection yet)
 	}
 
+	// PromQL-aware previous-word deletion for Ctrl-W
+	deletePrevWord := func(line []rune, pos int) ([]rune, int) {
+		// Skip any separators immediately before the cursor
+		i := pos
+		for i > 0 {
+			c := byte(line[i-1])
+			if isWordBoundary(c) {
+				i--
+				continue
+			}
+			break
+		}
+		// Then delete the previous word
+		for i > 0 {
+			c := byte(line[i-1])
+			if isWordBoundary(c) {
+				break
+			}
+			i--
+		}
+		newLine := append([]rune(nil), line[:i]...)
+		newLine = append(newLine, line[pos:]...)
+		return newLine, i
+	}
+
 	listener := func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
+		// Optional key debug
+		if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
+			fmt.Printf("\n[key=%#U code=%d]\n", key, key)
+		}
+
 		const (
 			keyDown  = rune(14) // readline CharNext (Ctrl-N)
 			keyUp    = rune(16) // readline CharPrev (Ctrl-P)
 			keyCtrlY = rune(25) // Ctrl-Y (Yank/paste AI clipboard)
+			keyCtrlW = rune(23) // Ctrl-W (delete previous word with PromQL boundaries)
+			keyCtrlX = rune(24) // Ctrl-X (start chord Ctrl-X Ctrl-E)
+			keyCtrlE = rune(5)  // Ctrl-E (end-of-line or chord with Ctrl-X)
+			keyESC   = rune(27) // ESC (start of Alt- bindings)
 		)
-
-		// Helper to ensure matches for current prefix are ready
-		recompute := func(prefix string, currentLine []rune) {
-			if state.lastPrefix != prefix {
-				state.lastPrefix = prefix
-				state.seedLine = append(state.seedLine[:0], currentLine...)
-				buildMatches(prefix)
-			}
-		}
-
-		// Always recompute based on current content left of cursor
-		prefix := string(line[:pos])
-		recompute(prefix, line)
 
 		// Ctrl-Y: paste AI clipboard (from .ai edit N)
 		if key == keyCtrlY {
-			// Prefer AI clipboard over readline kill-ring. If empty, swallow Ctrl-Y to avoid pasting stale kill-ring content.
 			if strings.TrimSpace(aiClipboard) == "" {
-				// Keep current line unchanged and consume the key
 				cur := append([]rune(nil), line...)
 				return cur, pos, true
 			}
@@ -95,14 +134,131 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			return newLine, len(newLine), true
 		}
 
+		// Ctrl-W: PromQL-aware delete previous word
+		if key == keyCtrlW {
+			nl, np := deletePrevWord(line, pos)
+			return nl, np, true
+		}
+
+		// Ctrl-X: begin chord (for Ctrl-X Ctrl-E external editor)
+		if key == keyCtrlX {
+			lastCtrlX = time.Now()
+			return nil, 0, false
+		}
+		// Ctrl-E: if recently after Ctrl-X, launch external editor
+		if key == keyCtrlE {
+			if !lastCtrlX.IsZero() && time.Since(lastCtrlX) <= 1500*time.Millisecond {
+				lastCtrlX = time.Time{}
+				edited := rlLaunchExternalEditorForReadline(string(line))
+				if edited != "" {
+					new := []rune(edited)
+					return new, len(new), true
+				}
+				// If editor failed or empty, keep current line and consume
+				cur := append([]rune(nil), line...)
+				return cur, pos, true
+			}
+			// otherwise let default Ctrl-E behavior (move to end) proceed
+			return nil, 0, false
+		}
+
+		// Simple support for Alt-F / Alt-B via ESC sequences
+		// Some terminals may deliver ESC as NUL (0). Treat both as Meta prefix.
+		if key == keyESC || key == rune(0) {
+			escPending = true
+			escAt = time.Now()
+			// Do not consume ESC completely; let readline carry on so the next key arrives normally.
+			// We'll intercept the following key if it comes within the window.
+			return nil, 0, false
+		}
+		if escPending {
+			within := time.Since(escAt) <= 1500*time.Millisecond
+			escPending = false
+			// Only handle the next key as part of ESC- sequence if within window
+			if within {
+				if key == 'f' {
+					// move forward to start of next word
+					i := pos
+					// skip current word
+					for i < len(line) && !isWordBoundary(byte(line[i])) {
+						i++
+					}
+					// skip separators
+					for i < len(line) && isWordBoundary(byte(line[i])) {
+						i++
+					}
+					return append([]rune(nil), line...), i, true
+				}
+				if key == 'b' {
+					// move backward to start of previous word
+					i := pos
+					// skip separators
+					for i > 0 && isWordBoundary(byte(line[i-1])) {
+						i--
+					}
+					// skip word
+					for i > 0 && !isWordBoundary(byte(line[i-1])) {
+						i--
+					}
+					return append([]rune(nil), line...), i, true
+				}
+				if key == '.' || key == '>' || key == ',' || (altDotRune != 0 && key == altDotRune) {
+					// Alt+. (or Alt+> / Alt+, fallbacks): insert last argument from previous command
+					lastArg := rlExtractLastArgument(lastExecutedCommand)
+					if lastArg == "" {
+						return append([]rune(nil), line...), pos, true
+					}
+					ins := []rune(lastArg)
+					newLine := make([]rune, 0, len(line)+len(ins))
+					newLine = append(newLine, line[:pos]...)
+					newLine = append(newLine, ins...)
+					newLine = append(newLine, line[pos:]...)
+					return newLine, pos + len(ins), true
+				}
+			}
+			// Not a recognized ESC sequence; treat this key normally (do not consume)
+			// Keep escPending false so we don't chain indefinitely.
+		}
+
+		// Ctrl-X followed by '.' chord: insert last argument (fallback for terminals without Meta)
+		if !lastCtrlX.IsZero() && time.Since(lastCtrlX) <= 1500*time.Millisecond && key == '.' {
+			lastCtrlX = time.Time{}
+			lastArg := rlExtractLastArgument(lastExecutedCommand)
+			if lastArg != "" {
+				ins := []rune(lastArg)
+				newLine := make([]rune, 0, len(line)+len(ins))
+				newLine = append(newLine, line[:pos]...)
+				newLine = append(newLine, ins...)
+				newLine = append(newLine, line[pos:]...)
+				return newLine, pos + len(ins), true
+			}
+		}
+
+		// Helper to start or refresh a navigation session for the given prefix
+		startOrRefresh := func(prefix string, currentLine []rune) {
+			if !state.active || prefix != state.lastPrefix {
+				state.active = true
+				state.lastPrefix = prefix
+				state.seedLine = append(state.seedLine[:0], currentLine...)
+				buildMatches(prefix)
+				state.idx = len(state.matches) // start from seed position (no selection yet)
+			}
+		}
+
 		// Up: previous matching history (older)
 		if key == keyUp {
-			if state.lastPrefix == "" {
-				// No active prefix-search context; do not override default behavior
+			prefix := string(line[:pos])
+			// If no prefix, allow default readline history behavior
+			if strings.TrimSpace(prefix) == "" {
+				state.active = false
+				state.lastPrefix = ""
 				return nil, 0, false
 			}
-			// Keep using last known seed/prefix; matches already computed when prefix changed
+			startOrRefresh(prefix, line)
 			if len(state.matches) == 0 {
+				// No matches; end session and fall back to default behavior
+				state.active = false
+				state.lastPrefix = ""
 				return nil, 0, false
 			}
 			if state.idx > 0 && state.idx <= len(state.matches) {
@@ -117,7 +273,12 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		}
 		// Down: next matching history (newer), eventually back to seedLine
 		if key == keyDown {
-			if state.lastPrefix == "" || len(state.matches) == 0 {
+			if !state.active {
+				return nil, 0, false
+			}
+			if len(state.matches) == 0 {
+				state.active = false
+				state.lastPrefix = ""
 				return nil, 0, false
 			}
 			if state.idx < len(state.matches)-1 {
@@ -126,13 +287,34 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				candidate := []rune(userHistory[idx])
 				return candidate, len(candidate), true
 			}
-			// Move beyond the newest match back to the original editing seed line
+			// Move beyond the newest match back to the original editing seed line and exit nav
 			state.idx = len(state.matches)
 			seed := append([]rune(nil), state.seedLine...)
+			state.active = false
+			state.lastPrefix = ""
 			return seed, len(seed), true
 		}
 
-		// Any other key: no special handling; let readline proceed
+		// Any other key: end any active navigation and let readline proceed
+		if state.active {
+			state.active = false
+			state.lastPrefix = ""
+		}
+
+		// Fallback key: Ctrl-] inserts last argument (portable), or custom altDotRune if supplied
+		if key == rune(29) || (altDotRune != 0 && key == altDotRune) {
+			lastArg := rlExtractLastArgument(lastExecutedCommand)
+			if lastArg == "" {
+				return append([]rune(nil), line...), pos, true
+			}
+			ins := []rune(lastArg)
+			newLine := make([]rune, 0, len(line)+len(ins))
+			newLine = append(newLine, line[:pos]...)
+			newLine = append(newLine, ins...)
+			newLine = append(newLine, line[pos:]...)
+			return newLine, pos + len(ins), true
+		}
+
 		return nil, 0, false
 	}
 
@@ -151,10 +333,33 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	}
 	defer rl.Close()
 
+	// Multi-line continuation state (using backslash at EOL)
+	var mlActive bool
+	var mlParts []string
+
+	getPrompt := func() string {
+		if aiInProgress {
+			return "AI...> "
+		}
+		if mlActive {
+			return "      > "
+		}
+		if pinnedEvalTime != nil {
+			return "PromQL(pinat)> "
+		}
+		return "PromQL> "
+	}
+
 	for {
+		// Update prompt dynamically
+		rl.SetPrompt(getPrompt())
+
 		line, err := rl.Readline()
 		if err != nil {
 			if err == readline.ErrInterrupt {
+				// On Ctrl-C during multi-line, cancel accumulation
+				mlActive = false
+				mlParts = nil
 				continue
 			} else if err == io.EOF {
 				break
@@ -163,19 +368,47 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			break
 		}
 
+		// Multi-line continuation if line ends with a single backslash
+		trimmedRight := strings.TrimRight(line, " \t")
+		if strings.HasSuffix(trimmedRight, "\\") && !strings.HasSuffix(trimmedRight, "\\\\") {
+			part := strings.TrimSuffix(trimmedRight, "\\")
+			part = strings.TrimSpace(part)
+			if part != "" {
+				mlParts = append(mlParts, part)
+			}
+			mlActive = true
+			// Continue reading next line with continuation prompt
+			continue
+		}
+
 		// Keep our in-memory history in sync (readline persists to file separately)
 		if trimmed := strings.TrimSpace(line); trimmed != "" {
 			userHistory = append(userHistory, trimmed)
 		}
 
 		query := strings.TrimSpace(line)
-		if query == "" {
+		if query == "" && !mlActive {
 			continue
+		}
+
+		if mlActive {
+			if s := strings.TrimSpace(query); s != "" {
+				mlParts = append(mlParts, s)
+			}
+			query = strings.TrimSpace(strings.Join(mlParts, " "))
+			mlActive = false
+			mlParts = nil
+			if query == "" {
+				continue
+			}
 		}
 
 		if query == "quit" || query == ".quit" {
 			break
 		}
+
+		// Track last executed command for Alt+.
+		lastExecutedCommand = query
 
 		// Delegate full-line execution (ad-hoc, !cmd, query, pipes) to executeOne
 		executeOne(engine, storage, query)
@@ -925,6 +1158,174 @@ func longestCommonPrefix(strs []string) string {
 // runeLen returns the rune length of a string (readline uses rune positions)
 func runeLen(s string) int {
 	return len([]rune(s))
+}
+
+// --- Readline helpers: external editor and terminal state ---
+
+// rlFlattenEditorText converts multi-line editor content to a single line suitable for the REPL buffer.
+// It normalizes CRLF/CR to LF, replaces newlines and tabs with spaces, and trims spaces.
+func rlFlattenEditorText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	// Collapse multiple spaces and trim
+	parts := strings.Fields(s)
+	return strings.Join(parts, " ")
+}
+
+// rlExtractLastArgument extracts the last meaningful argument from a command line.
+// It avoids operators, durations, and pure numbers.
+func rlExtractLastArgument(cmd string) string {
+	if strings.TrimSpace(cmd) == "" {
+		return ""
+	}
+	// Ad-hoc command: return last field
+	if strings.HasPrefix(cmd, ".") {
+		parts := strings.Fields(cmd)
+		if len(parts) > 1 {
+			return parts[len(parts)-1]
+		}
+		return ""
+	}
+	seps := "(){}[]\" \t\n,="
+	tokens := []string{}
+	cur := ""
+	for _, ch := range cmd {
+		if strings.ContainsRune(seps, ch) {
+			if cur != "" {
+				tokens = append(tokens, cur)
+				cur = ""
+			}
+		} else {
+			cur += string(ch)
+		}
+	}
+	if cur != "" {
+		tokens = append(tokens, cur)
+	}
+	ops := map[string]bool{
+		"and": true, "or": true, "unless": true,
+		"by": true, "without": true, "on": true, "ignoring": true,
+		"group_left": true, "group_right": true,
+		"offset": true, "bool": true,
+	}
+	durRe := regexp.MustCompile(`^\d+[smhdwy]$`)
+	for i := len(tokens) - 1; i >= 0; i-- {
+		t := tokens[i]
+		if ops[strings.ToLower(t)] {
+			continue
+		}
+		if _, err := strconv.ParseFloat(t, 64); err == nil {
+			continue
+		}
+		if durRe.MatchString(t) {
+			continue
+		}
+		return t
+	}
+	return ""
+}
+
+// rlSaveTerminalState saves the current terminal state using stty
+func rlSaveTerminalState() string {
+	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// rlRestoreTerminalState restores a saved terminal state using stty
+func rlRestoreTerminalState(state string) {
+	if state == "" {
+		return
+	}
+	cmd := exec.Command("stty", state)
+	cmd.Stdin = os.Stdin
+	_ = cmd.Run()
+}
+
+// rlDrainStdin discards any immediately available bytes from STDIN (non-blocking)
+func rlDrainStdin() {
+	_ = unix.SetNonblock(int(os.Stdin.Fd()), true)
+	defer func() { _ = unix.SetNonblock(int(os.Stdin.Fd()), false) }()
+	buf := make([]byte, 8192)
+	for {
+		n, err := unix.Read(int(os.Stdin.Fd()), buf)
+		if n <= 0 {
+			if err == nil || err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				break
+			}
+			break
+		}
+		if n < len(buf) {
+			// likely drained
+		}
+	}
+}
+
+// rlLaunchExternalEditorForReadline opens the current line in the user's editor and returns
+// the edited text (flattened to a single line). If the editor fails, returns empty string.
+func rlLaunchExternalEditorForReadline(current string) string {
+	// Prepare temp file with .promql extension
+	tf, err := os.CreateTemp("", "promql-*.promql")
+	if err != nil {
+		fmt.Printf("Failed to create temp file: %v\n", err)
+		return ""
+	}
+	path := tf.Name()
+	defer os.Remove(path)
+	if _, err := tf.WriteString(current); err != nil {
+		_ = tf.Close()
+		fmt.Printf("Failed to write temp file: %v\n", err)
+		return ""
+	}
+	_ = tf.Close()
+
+	// Pick editor: PROMQL_EDITOR > VISUAL > EDITOR > nano
+	editor := os.Getenv("PROMQL_EDITOR")
+	if strings.TrimSpace(editor) == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if strings.TrimSpace(editor) == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if strings.TrimSpace(editor) == "" {
+		editor = "nano"
+	}
+
+	// Safely quote path
+	shQuote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+
+	// Restore terminal for external editor, then come back
+	raw := rlSaveTerminalState()
+	// Try to switch to previous cooked state if available (best-effort)
+	rlRestoreTerminalState("")
+
+	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("%s %s", editor, shQuote(path)))
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
+
+	// Return terminal to prior raw state
+	rlRestoreTerminalState(raw)
+	// Drain any pending bytes
+	rlDrainStdin()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Printf("Failed to read edited file: %v\n", err)
+		return ""
+	}
+	text := strings.TrimRight(string(data), "\r\n")
+	if text != "" {
+		text = rlFlattenEditorText(text)
+	}
+	return text
 }
 
 // normalizeAtModifierTimestamps converts PromQL @ timestamps provided in ms/us/ns to seconds with decimals.
