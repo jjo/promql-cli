@@ -472,11 +472,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		// Save current state for next keystroke (for Ctrl-W fix)
 		// Make a copy to avoid shared slice issues
-		if len(line) > 0 {
-			prevLine = append(prevLine[:0], line...)
-			prevPos = pos
-		}
-
+		prevLine = append(prevLine[:0], line...)
+		prevPos = pos
 		return nil, 0, false
 	}
 
