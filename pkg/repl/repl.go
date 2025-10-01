@@ -168,8 +168,15 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		state.idx = len(state.matches) // start from seed position (no selection yet)
 	}
 
+	// Track previous line state to detect if Ctrl-W cleared the whole line
+	var prevLine []rune
+	var prevPos int
+
 	// PromQL-aware previous-word deletion for Ctrl-W
 	deletePrevWord := func(line []rune, pos int) ([]rune, int) {
+		if pos == 0 {
+			return line, pos
+		}
 		// Skip any separators immediately before the cursor
 		i := pos
 		for i > 0 {
@@ -179,6 +186,11 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				continue
 			}
 			break
+		}
+		// If we only found separators and reached start, delete just the separators
+		if i == 0 {
+			newLine := append([]rune(nil), line[pos:]...)
+			return newLine, 0
 		}
 		// Then delete the previous word
 		for i > 0 {
@@ -197,6 +209,19 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Optional key debug
 		if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
 			fmt.Printf("\n[key=%#U code=%d]\n", key, key)
+		}
+
+		// Special handling for Ctrl-W and Ctrl-Backspace: readline processed them first (buggy), we fix it here
+		// Ctrl-W = rune(23), but other word-delete keys might also trigger this
+		if len(line) == 0 && len(prevLine) > 0 && prevPos > 0 {
+			// A word-delete key was pressed and readline cleared the whole line (bug)
+			// Apply our correct deletion logic using the previous state
+			// This handles Ctrl-W (23) and potentially Ctrl-Backspace which might not even reach us as a distinct key
+			nl, np := deletePrevWord(prevLine, prevPos)
+			// Save state for next iteration
+			prevLine = append(prevLine[:0], nl...)
+			prevPos = np
+			return nl, np, true
 		}
 
 		const (
@@ -236,7 +261,13 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		// Ctrl-W: PromQL-aware delete previous word
 		if key == keyCtrlW {
+			if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
+				fmt.Printf("\n[Ctrl-W] line=%q pos=%d\n", string(line), pos)
+			}
 			nl, np := deletePrevWord(line, pos)
+			if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
+				fmt.Printf("[Ctrl-W] newLine=%q newPos=%d\n", string(nl), np)
+			}
 			return nl, np, true
 		}
 
@@ -322,6 +353,11 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 						i--
 					}
 					return append([]rune(nil), line...), i, true
+				}
+				// ESC+Backspace/DEL: Delete word backward (Ctrl-Backspace in some terminals)
+				if key == 127 || key == 8 { // DEL or Backspace
+					nl, np := deletePrevWord(line, pos)
+					return nl, np, true
 				}
 				if key == '.' || key == '>' || key == ',' || (altDotRune != 0 && key == altDotRune) {
 					// Alt+. (or Alt+> / Alt+, fallbacks): insert last argument from previous command
@@ -434,6 +470,13 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			newLine = append(newLine, ins...)
 			newLine = append(newLine, line[pos:]...)
 			return newLine, pos + len(ins), true
+		}
+
+		// Save current state for next keystroke (for Ctrl-W fix)
+		// Make a copy to avoid shared slice issues
+		if len(line) > 0 {
+			prevLine = append(prevLine[:0], line...)
+			prevPos = pos
 		}
 
 		return nil, 0, false
