@@ -218,9 +218,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			// Apply our correct deletion logic using the previous state
 			// This handles Ctrl-W (23) and potentially Ctrl-Backspace which might not even reach us as a distinct key
 			nl, np := deletePrevWord(prevLine, prevPos)
-			// Save state for next iteration
-			prevLine = append(prevLine[:0], nl...)
-			prevPos = np
+			// Do not update prevLine/prevPos here; let the REPL main loop handle state updates
 			return nl, np, true
 		}
 
