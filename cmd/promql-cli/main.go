@@ -62,7 +62,7 @@ func normalizeLongOpts(args []string) []string {
 func main() {
 	// Root (global) flags
 	rootFlags := flag.NewFlagSet("promql-cli", flag.ContinueOnError)
-replBackend := rootFlags.String("repl", "readline", "REPL backend: prompt|readline")
+	replBackend := rootFlags.String("repl", "readline", "REPL backend: prompt|readline")
 	silent := rootFlags.Bool("silent", false, "suppress startup output")
 	rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
 
