@@ -141,6 +141,11 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	var escPending bool
 	var escAt time.Time
 
+	// State for Alt+. (yank-last-arg) cycling
+	var yankLastArgActive bool
+	var yankLastArgIndex int       // Index into history for cycling
+	var yankLastArgInserted string // What was inserted last time
+
 	// Optional custom Alt+. rune codepoint (for terminals that send non-ESC meta)
 	var altDotRune rune
 	if v := strings.TrimSpace(os.Getenv("PROMQL_CLI_ALT_DOT_KEY")); v != "" {
@@ -168,70 +173,148 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		state.idx = len(state.matches) // start from seed position (no selection yet)
 	}
 
-	// Track previous line state to detect if Ctrl-W cleared the whole line
-	var prevLine []rune
-	var prevPos int
+	// Helper: copy rune slice
+	copyRunes := func(src []rune) []rune {
+		return append([]rune(nil), src...)
+	}
+
+	// Helper: check if rune is a trigger character for Alt+.
+	isAltDotTriggerChar := func(r rune) bool {
+		return r == '.' || r == '>' || r == ','
+	}
+
+	// Helper: debug key output
+	debugKey := func(format string, args ...interface{}) {
+		if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
+			fmt.Printf(format, args...)
+		}
+	}
+
+	// Helper function for yank-last-arg (Alt+.) logic
+	// Handles cycling through history to insert/replace last arguments
+	yankLastArgCycle := func(line []rune, pos int) ([]rune, int, bool) {
+		cleanLine := line
+		cleanPos := pos
+
+		// Remove the trigger character (., >, or ,) that readline already inserted
+		if pos > 0 && isAltDotTriggerChar(line[pos-1]) {
+			cleanLine = copyRunes(line[:pos-1])
+			cleanLine = append(cleanLine, line[pos:]...)
+			cleanPos = pos - 1
+		}
+
+		// If we're cycling (successive Alt+.), remove the previously inserted text
+		if yankLastArgActive && yankLastArgInserted != "" {
+			// Check if the previously inserted text is at the cursor position
+			insLen := len([]rune(yankLastArgInserted))
+			if cleanPos >= insLen {
+				// Check if the text before cursor matches what we inserted
+				prevText := string(cleanLine[cleanPos-insLen : cleanPos])
+				if prevText == yankLastArgInserted {
+					// Remove the previously inserted text
+					startIdx := cleanPos - insLen
+					if startIdx < 0 {
+						startIdx = 0
+					}
+					if startIdx > len(cleanLine) {
+						startIdx = len(cleanLine)
+					}
+					if cleanPos > len(cleanLine) {
+						cleanPos = len(cleanLine)
+					}
+					// Reconstruct: [before_insertion] + [after_cursor]
+					newCleanLine := make([]rune, 0, len(cleanLine))
+					newCleanLine = append(newCleanLine, cleanLine[:startIdx]...)
+					newCleanLine = append(newCleanLine, cleanLine[cleanPos:]...)
+					cleanLine = newCleanLine
+					cleanPos = startIdx
+					// Move to older history entry for next iteration
+					yankLastArgIndex--
+				}
+			}
+		} else {
+			// First time: start from most recent history (will be used in search below)
+			yankLastArgActive = true
+			yankLastArgIndex = len(userHistory)
+		}
+
+		// Get the last argument from history at the current index
+		// Search backward from yankLastArgIndex for a non-empty last arg
+		var lastArg string
+		// Start search from the next older entry
+		for i := yankLastArgIndex - 1; i >= 0; i-- {
+			lastArg = rlExtractLastArgument(userHistory[i])
+			if lastArg != "" {
+				// Found one, update our position
+				yankLastArgIndex = i
+				break
+			}
+		}
+
+		if lastArg == "" {
+			// No more history, reset state
+			yankLastArgActive = false
+			return copyRunes(cleanLine), cleanPos, true
+		}
+
+		// Insert the argument
+		yankLastArgInserted = lastArg
+		ins := []rune(lastArg)
+		newLine := make([]rune, 0, len(cleanLine)+len(ins))
+		newLine = append(newLine, cleanLine[:cleanPos]...)
+		newLine = append(newLine, ins...)
+		newLine = append(newLine, cleanLine[cleanPos:]...)
+		return newLine, cleanPos + len(ins), true
+	}
 
 	// PromQL-aware previous-word deletion for Ctrl-W
 	deletePrevWord := func(line []rune, pos int) ([]rune, int) {
 		if pos == 0 {
 			return line, pos
 		}
-		// Skip any separators immediately before the cursor
-		i := pos
-		for i > 0 {
-			c := byte(line[i-1])
-			if isWordBoundary(c) {
-				i--
-				continue
-			}
-			break
-		}
-		// If we only found separators and reached start, delete just the separators
-		if i == 0 {
-			newLine := append([]rune(nil), line[pos:]...)
-			return newLine, 0
-		}
-		// Then delete the previous word
-		for i > 0 {
-			c := byte(line[i-1])
-			if isWordBoundary(c) {
-				break
-			}
+		// Find the start position for deletion
+		// First, skip trailing separators backward from cursor
+		i := pos - 1
+		for i >= 0 && isWordBoundary(byte(line[i])) {
 			i--
 		}
-		newLine := append([]rune(nil), line[:i]...)
+		// If we only found separators (i < 0), delete only the separators
+		if i < 0 {
+			// Keep everything from pos onward
+			newLine := copyRunes(line[pos:])
+			return newLine, 0
+		}
+		// Now delete the word: skip backward through non-separators
+		for i >= 0 && !isWordBoundary(byte(line[i])) {
+			i--
+		}
+		// i is now at the last separator before the word (or -1)
+		// Delete from i+1 to pos
+		deleteStart := i + 1
+		newLine := copyRunes(line[:deleteStart])
 		newLine = append(newLine, line[pos:]...)
-		return newLine, i
+		return newLine, deleteStart
 	}
+
+	// Track line state BEFORE readline processes each key
+	// This is needed because readline processes Ctrl-W before calling the listener
+	var prevLine []rune
+	var prevPos int
 
 	listener := func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
 		// Optional key debug
-		if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
-			fmt.Printf("\n[key=%#U code=%d]\n", key, key)
-		}
+		debugKey("\n[key=%#U code=%d]\n", key, key)
 
-		// Special handling for Ctrl-W and Ctrl-Backspace: readline processed them first (buggy), we fix it here
-		// Ctrl-W = rune(23), but other word-delete keys might also trigger this
-		if len(line) == 0 && len(prevLine) > 0 && prevPos > 0 {
-			// A word-delete key was pressed and readline cleared the whole line (bug)
-			// Apply our correct deletion logic using the previous state
-			// This handles Ctrl-W (23) and potentially Ctrl-Backspace which might not even reach us as a distinct key
-			nl, np := deletePrevWord(prevLine, prevPos)
-			// Save state for next iteration
-			prevLine = append(prevLine[:0], nl...)
-			prevPos = np
-			return nl, np, true
-		}
-
+		// Constants for key codes
 		const (
-			keyDown  = rune(14) // readline CharNext (Ctrl-N)
-			keyUp    = rune(16) // readline CharPrev (Ctrl-P)
-			keyCtrlY = rune(25) // Ctrl-Y (Yank/paste AI clipboard)
-			keyCtrlW = rune(23) // Ctrl-W (delete previous word with PromQL boundaries)
-			keyCtrlX = rune(24) // Ctrl-X (start chord Ctrl-X Ctrl-E)
-			keyCtrlE = rune(5)  // Ctrl-E (end-of-line or chord with Ctrl-X)
-			keyESC   = rune(27) // ESC (start of Alt- bindings)
+			keyDown          = rune(14) // readline CharNext (Ctrl-N)
+			keyUp            = rune(16) // readline CharPrev (Ctrl-P)
+			keyCtrlY         = rune(25) // Ctrl-Y (Yank/paste AI clipboard)
+			keyCtrlW         = rune(23) // Ctrl-W (delete previous word with PromQL boundaries)
+			keyCtrlBackspace = rune(-4) // Ctrl-Backspace (delete previous word, terminal-dependent)
+			keyCtrlX         = rune(24) // Ctrl-X (start chord Ctrl-X Ctrl-E)
+			keyCtrlE         = rune(5)  // Ctrl-E (end-of-line or chord with Ctrl-X)
+			keyESC           = rune(27) // ESC (start of Alt- bindings)
 		)
 
 		// Helper: strip certain control runes (e.g., ^X, ^E) from a rune slice
@@ -252,22 +335,35 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Ctrl-Y: paste AI clipboard (from .ai edit N)
 		if key == keyCtrlY {
 			if strings.TrimSpace(aiClipboard) == "" {
-				cur := append([]rune(nil), line...)
-				return cur, pos, true
+				return copyRunes(line), pos, true
 			}
 			newLine := []rune(aiClipboard)
 			return newLine, len(newLine), true
 		}
 
-		// Ctrl-W: PromQL-aware delete previous word
-		if key == keyCtrlW {
-			if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
-				fmt.Printf("\n[Ctrl-W] line=%q pos=%d\n", string(line), pos)
+		// Ctrl-W and Ctrl-Backspace: PromQL-aware delete previous word
+		// Readline processes these BEFORE calling this listener, often clearing the whole line
+		// So we detect this by checking if line is empty but prevLine wasn't
+		if key == keyCtrlW || key == keyCtrlBackspace {
+			keyName := "Ctrl-W"
+			if key == keyCtrlBackspace {
+				keyName = "Ctrl-Backspace"
 			}
+			debugKey("\n[%s] line=%q pos=%d prevLine=%q prevPos=%d\n", keyName, string(line), pos, string(prevLine), prevPos)
+			// If readline cleared the line (its bug), use the previous state
+			if len(line) == 0 && len(prevLine) > 0 {
+				nl, np := deletePrevWord(prevLine, prevPos)
+				debugKey("[%s] using prevLine, newLine=%q newPos=%d\n", keyName, string(nl), np)
+				// Update prevLine for next iteration
+				prevLine = append(prevLine[:0], nl...)
+				prevPos = np
+				return nl, np, true
+			}
+			// Otherwise use current line (shouldn't happen with readline's bug, but just in case)
 			nl, np := deletePrevWord(line, pos)
-			if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
-				fmt.Printf("[Ctrl-W] newLine=%q newPos=%d\n", string(nl), np)
-			}
+			debugKey("[%s] using current line, newLine=%q newPos=%d\n", keyName, string(nl), np)
+			prevLine = append(prevLine[:0], nl...)
+			prevPos = np
 			return nl, np, true
 		}
 
@@ -275,7 +371,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		if key == keyCtrlX {
 			lastCtrlX = time.Now()
 			// Consume the keystroke and actively remove any literal ^X that might have been inserted
-			nl := append([]rune(nil), line...)
+			nl := copyRunes(line)
 			// Remove ^X at or near cursor if present
 			const ctrlXRune = rune(0x18)
 			if pos > 0 && pos-1 < len(nl) && nl[pos-1] == ctrlXRune {
@@ -319,9 +415,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		if key == keyESC || key == rune(0) {
 			escPending = true
 			escAt = time.Now()
-			// Do not consume ESC completely; let readline carry on so the next key arrives normally.
-			// We'll intercept the following key if it comes within the window.
-			return nil, 0, false
+			// Consume the ESC/NUL so readline doesn't interfere with subsequent key detection
+			// Return current line unchanged
+			return copyRunes(line), pos, true
 		}
 		if escPending {
 			within := time.Since(escAt) <= 1500*time.Millisecond
@@ -339,7 +435,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 					for i < len(line) && isWordBoundary(byte(line[i])) {
 						i++
 					}
-					return append([]rune(nil), line...), i, true
+					return copyRunes(line), i, true
 				}
 				if key == 'b' {
 					// move backward to start of previous word
@@ -352,7 +448,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 					for i > 0 && !isWordBoundary(byte(line[i-1])) {
 						i--
 					}
-					return append([]rune(nil), line...), i, true
+					return copyRunes(line), i, true
 				}
 				// ESC+Backspace/DEL: Delete word backward (Ctrl-Backspace in some terminals)
 				if key == 127 || key == 8 { // DEL or Backspace
@@ -360,17 +456,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 					return nl, np, true
 				}
 				if key == '.' || key == '>' || key == ',' || (altDotRune != 0 && key == altDotRune) {
-					// Alt+. (or Alt+> / Alt+, fallbacks): insert last argument from previous command
-					lastArg := rlExtractLastArgument(lastExecutedCommand)
-					if lastArg == "" {
-						return append([]rune(nil), line...), pos, true
-					}
-					ins := []rune(lastArg)
-					newLine := make([]rune, 0, len(line)+len(ins))
-					newLine = append(newLine, line[:pos]...)
-					newLine = append(newLine, ins...)
-					newLine = append(newLine, line[pos:]...)
-					return newLine, pos + len(ins), true
+					// Alt+. (or Alt+> / Alt+, fallbacks): insert/cycle last argument from history
+					return yankLastArgCycle(line, pos)
 				}
 			}
 			// Not a recognized ESC sequence; treat this key normally (do not consume)
@@ -452,17 +539,34 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			return seed, len(seed), true
 		}
 
-		// Any other key: end any active navigation and let readline proceed
+		// Handle standalone . key when yank-last-arg is active
+		// This allows cycling even if readline eats the ESC prefix on subsequent presses
+		if yankLastArgActive && isAltDotTriggerChar(key) {
+			return yankLastArgCycle(line, pos)
+		}
+
+		// Any other key: end any active navigation and yank state, let readline proceed
 		if state.active {
 			state.active = false
 			state.lastPrefix = ""
+		}
+		// Reset yank-last-arg state on any key that's not ESC or part of the Alt+. sequence
+		// Note: We can't check processedEscSequence here because it's out of scope
+		// So we check if we're not in an ESC sequence context
+		if key != keyESC && key != rune(0) {
+			// Only reset if we're not currently processing an ESC sequence
+			// The escPending check happens BEFORE this, so we check if the key itself is a trigger
+			if !isAltDotTriggerChar(key) && (altDotRune == 0 || key != altDotRune) {
+				yankLastArgActive = false
+				yankLastArgInserted = ""
+			}
 		}
 
 		// Fallback key: Ctrl-] inserts last argument (portable), or custom altDotRune if supplied
 		if key == rune(29) || (altDotRune != 0 && key == altDotRune) {
 			lastArg := rlExtractLastArgument(lastExecutedCommand)
 			if lastArg == "" {
-				return append([]rune(nil), line...), pos, true
+				return copyRunes(line), pos, true
 			}
 			ins := []rune(lastArg)
 			newLine := make([]rune, 0, len(line)+len(ins))
@@ -472,12 +576,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			return newLine, pos + len(ins), true
 		}
 
-		// Save current state for next keystroke (for Ctrl-W fix)
-		// Make a copy to avoid shared slice issues
-		if len(line) > 0 {
-			prevLine = append(prevLine[:0], line...)
-			prevPos = pos
-		}
+		// Save current line state for next key press (needed for Ctrl-W detection)
+		prevLine = append(prevLine[:0], line...)
+		prevPos = pos
 
 		return nil, 0, false
 	}
@@ -1344,11 +1445,10 @@ func rlExtractLastArgument(cmd string) string {
 		}
 		return ""
 	}
-	seps := "(){}[]\" \t\n,="
 	tokens := []string{}
 	cur := ""
 	for _, ch := range cmd {
-		if strings.ContainsRune(seps, ch) {
+		if isWordBoundaryRune(ch) {
 			if cur != "" {
 				tokens = append(tokens, cur)
 				cur = ""
@@ -1423,19 +1523,10 @@ func rlLaunchExternalEditorForReadline(current string) string {
 	_ = tf.Close()
 
 	// Pick editor: PROMQL_EDITOR > VISUAL > EDITOR > nano
-	editor := os.Getenv("PROMQL_EDITOR")
-	if strings.TrimSpace(editor) == "" {
-		editor = os.Getenv("VISUAL")
-	}
-	if strings.TrimSpace(editor) == "" {
-		editor = os.Getenv("EDITOR")
-	}
-	if strings.TrimSpace(editor) == "" {
-		editor = "nano"
-	}
+	editor := getEditorCommand()
 
 	// Safely quote path
-	shQuote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+	shQuote := func(s string) string { return shellQuote(s) }
 
 	// Pause readline input so it won't intercept keys intended for the editor
 	if rlInputGate != nil {
