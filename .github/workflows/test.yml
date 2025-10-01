@@ -31,6 +31,9 @@ jobs:
       - name: Verify Go version
         run: go version
 
+      - name: Install gofumpt
+        run: go install mvdan.cc/gofumpt@latest
+
       - name: Run tests
         run: make test
 

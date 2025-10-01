@@ -55,6 +55,20 @@ _test_pkgs := $(shell go list ./... 2>/dev/null)
 # No tests currently; this target will succeed if there are no packages
 # with tests. It will run anything it finds.
 test:
+	@# Ensure gofumpt is available
+	@command -v gofumpt >/dev/null 2>&1 || { \
+		echo "gofumpt not found. Install with:"; \
+		echo "  go install mvdan.cc/gofumpt@latest"; \
+		exit 1; \
+	}
+	@# Check formatting (fail if any files need formatting)
+	@fmt_out=$$(gofumpt -l . | grep -v '^vendor/'); \
+	if [ -n "$$fmt_out" ]; then \
+		echo "gofumpt found unformatted files:"; \
+		echo "$$fmt_out"; \
+		echo "Run: make gofumpt"; \
+		exit 1; \
+	fi
 	@if [ -z "$(_test_pkgs)" ]; then echo "No Go packages found for testing"; else go test -v ./...; fi
 
 tidy:
