@@ -173,10 +173,6 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		state.idx = len(state.matches) // start from seed position (no selection yet)
 	}
 
-	// Track previous line state to detect if Ctrl-W cleared the whole line
-	var prevLine []rune
-	var prevPos int
-
 	// Helper: copy rune slice
 	copyRunes := func(src []rune) []rune {
 		return append([]rune(nil), src...)
@@ -276,58 +272,49 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		if pos == 0 {
 			return line, pos
 		}
-		// Skip any separators immediately before the cursor
-		i := pos
-		for i > 0 {
-			c := byte(line[i-1])
-			if isWordBoundary(c) {
-				i--
-				continue
-			}
-			break
-		}
-		// If we only found separators and reached start, delete just the separators
-		if i == 0 {
-			return copyRunes(line[pos:]), 0
-		}
-		// Then delete the previous word
-		for i > 0 {
-			c := byte(line[i-1])
-			if isWordBoundary(c) {
-				break
-			}
+		// Find the start position for deletion
+		// First, skip trailing separators backward from cursor
+		i := pos - 1
+		for i >= 0 && isWordBoundary(byte(line[i])) {
 			i--
 		}
-		newLine := copyRunes(line[:i])
+		// If we only found separators (i < 0), delete only the separators
+		if i < 0 {
+			// Keep everything from pos onward
+			newLine := copyRunes(line[pos:])
+			return newLine, 0
+		}
+		// Now delete the word: skip backward through non-separators
+		for i >= 0 && !isWordBoundary(byte(line[i])) {
+			i--
+		}
+		// i is now at the last separator before the word (or -1)
+		// Delete from i+1 to pos
+		deleteStart := i + 1
+		newLine := copyRunes(line[:deleteStart])
 		newLine = append(newLine, line[pos:]...)
-		return newLine, i
+		return newLine, deleteStart
 	}
+
+	// Track line state BEFORE readline processes each key
+	// This is needed because readline processes Ctrl-W before calling the listener
+	var prevLine []rune
+	var prevPos int
 
 	listener := func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
 		// Optional key debug
 		debugKey("\n[key=%#U code=%d]\n", key, key)
 
-		// Special handling for Ctrl-W and Ctrl-Backspace: readline processed them first (buggy), we fix it here
-		// Ctrl-W = rune(23), but other word-delete keys might also trigger this
-		if len(line) == 0 && len(prevLine) > 0 && prevPos > 0 {
-			// A word-delete key was pressed and readline cleared the whole line (bug)
-			// Apply our correct deletion logic using the previous state
-			// This handles Ctrl-W (23) and potentially Ctrl-Backspace which might not even reach us as a distinct key
-			nl, np := deletePrevWord(prevLine, prevPos)
-			// Save state for next iteration
-			prevLine = append(prevLine[:0], nl...)
-			prevPos = np
-			return nl, np, true
-		}
-
+		// Constants for key codes
 		const (
-			keyDown  = rune(14) // readline CharNext (Ctrl-N)
-			keyUp    = rune(16) // readline CharPrev (Ctrl-P)
-			keyCtrlY = rune(25) // Ctrl-Y (Yank/paste AI clipboard)
-			keyCtrlW = rune(23) // Ctrl-W (delete previous word with PromQL boundaries)
-			keyCtrlX = rune(24) // Ctrl-X (start chord Ctrl-X Ctrl-E)
-			keyCtrlE = rune(5)  // Ctrl-E (end-of-line or chord with Ctrl-X)
-			keyESC   = rune(27) // ESC (start of Alt- bindings)
+			keyDown          = rune(14) // readline CharNext (Ctrl-N)
+			keyUp            = rune(16) // readline CharPrev (Ctrl-P)
+			keyCtrlY         = rune(25) // Ctrl-Y (Yank/paste AI clipboard)
+			keyCtrlW         = rune(23) // Ctrl-W (delete previous word with PromQL boundaries)
+			keyCtrlBackspace = rune(-4) // Ctrl-Backspace (delete previous word, terminal-dependent)
+			keyCtrlX         = rune(24) // Ctrl-X (start chord Ctrl-X Ctrl-E)
+			keyCtrlE         = rune(5)  // Ctrl-E (end-of-line or chord with Ctrl-X)
+			keyESC           = rune(27) // ESC (start of Alt- bindings)
 		)
 
 		// Helper: strip certain control runes (e.g., ^X, ^E) from a rune slice
@@ -354,11 +341,29 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			return newLine, len(newLine), true
 		}
 
-		// Ctrl-W: PromQL-aware delete previous word
-		if key == keyCtrlW {
-			debugKey("\n[Ctrl-W] line=%q pos=%d\n", string(line), pos)
+		// Ctrl-W and Ctrl-Backspace: PromQL-aware delete previous word
+		// Readline processes these BEFORE calling this listener, often clearing the whole line
+		// So we detect this by checking if line is empty but prevLine wasn't
+		if key == keyCtrlW || key == keyCtrlBackspace {
+			keyName := "Ctrl-W"
+			if key == keyCtrlBackspace {
+				keyName = "Ctrl-Backspace"
+			}
+			debugKey("\n[%s] line=%q pos=%d prevLine=%q prevPos=%d\n", keyName, string(line), pos, string(prevLine), prevPos)
+			// If readline cleared the line (its bug), use the previous state
+			if len(line) == 0 && len(prevLine) > 0 {
+				nl, np := deletePrevWord(prevLine, prevPos)
+				debugKey("[%s] using prevLine, newLine=%q newPos=%d\n", keyName, string(nl), np)
+				// Update prevLine for next iteration
+				prevLine = append(prevLine[:0], nl...)
+				prevPos = np
+				return nl, np, true
+			}
+			// Otherwise use current line (shouldn't happen with readline's bug, but just in case)
 			nl, np := deletePrevWord(line, pos)
-			debugKey("[Ctrl-W] newLine=%q newPos=%d\n", string(nl), np)
+			debugKey("[%s] using current line, newLine=%q newPos=%d\n", keyName, string(nl), np)
+			prevLine = append(prevLine[:0], nl...)
+			prevPos = np
 			return nl, np, true
 		}
 
@@ -571,12 +576,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			return newLine, pos + len(ins), true
 		}
 
-		// Save current state for next keystroke (for Ctrl-W fix)
-		// Make a copy to avoid shared slice issues
-		if len(line) > 0 {
-			prevLine = append(prevLine[:0], copyRunes(line)...)
-			prevPos = pos
-		}
+		// Save current line state for next key press (needed for Ctrl-W detection)
+		prevLine = append(prevLine[:0], line...)
+		prevPos = pos
 
 		return nil, 0, false
 	}
