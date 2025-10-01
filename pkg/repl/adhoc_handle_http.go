@@ -415,13 +415,13 @@ func parsePromScrapeArgs(rest string) (uri string, query string, count int, dela
 	}
 	if i == start {
 		err = fmt.Errorf("missing PROM_API_URI")
-		return
+		return uri, query, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	uri = rest[start:i]
 	skipSpaces()
 	if i >= len(rest) {
 		err = fmt.Errorf("missing query expression")
-		return
+		return uri, query, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	// Query: quoted or unquoted token
 	if rest[i] == '\'' || rest[i] == '"' {
@@ -436,7 +436,7 @@ func parsePromScrapeArgs(rest string) (uri string, query string, count int, dela
 		}
 		if i >= len(rest) {
 			err = fmt.Errorf("unterminated quoted query")
-			return
+			return uri, query, count, delay, authMode, user, pass, orgID, apiKey, err
 		}
 		query = rest[qStart:i]
 		i++ // skip closing quote
@@ -499,7 +499,7 @@ func parsePromScrapeArgs(rest string) (uri string, query string, count int, dela
 			}
 		}
 	}
-	return
+	return uri, query, count, delay, authMode, user, pass, orgID, apiKey, err
 }
 
 // handleAdhocPromScrapeRangeCommand parses and executes .prom_scrape_range, importing results via query_range.
@@ -606,14 +606,14 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 	}
 	if i == startIdx {
 		err = fmt.Errorf("missing PROM_API_URI")
-		return
+		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	uri = rest[startIdx:i]
 	skipSpaces()
 	// Query token (quoted or unquoted)
 	if i >= len(rest) {
 		err = fmt.Errorf("missing query expression")
-		return
+		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	if rest[i] == '\'' || rest[i] == '"' {
 		quote := rest[i]
@@ -627,7 +627,7 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 		}
 		if i >= len(rest) {
 			err = fmt.Errorf("unterminated quoted query")
-			return
+			return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 		}
 		query = rest[qStart:i]
 		i++
@@ -642,7 +642,7 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 	// start time
 	if i >= len(rest) {
 		err = fmt.Errorf("missing start time")
-		return
+		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	sStart := i
 	for i < len(rest) && rest[i] != ' ' && rest[i] != '\t' {
@@ -652,13 +652,13 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 	start, err = parseEvalTime(startStr)
 	if err != nil {
 		err = fmt.Errorf("invalid start time %q: %v", startStr, err)
-		return
+		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	skipSpaces()
 	// end time
 	if i >= len(rest) {
 		err = fmt.Errorf("missing end time")
-		return
+		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	eStart := i
 	for i < len(rest) && rest[i] != ' ' && rest[i] != '\t' {
@@ -668,13 +668,13 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 	end, err = parseEvalTime(endStr)
 	if err != nil {
 		err = fmt.Errorf("invalid end time %q: %v", endStr, err)
-		return
+		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	skipSpaces()
 	// step duration
 	if i >= len(rest) {
 		err = fmt.Errorf("missing step duration")
-		return
+		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	stStart := i
 	for i < len(rest) && rest[i] != ' ' && rest[i] != '\t' {
@@ -684,7 +684,7 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 	step, err = time.ParseDuration(stepStr)
 	if err != nil {
 		err = fmt.Errorf("invalid step duration %q: %v", stepStr, err)
-		return
+		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	skipSpaces()
 	// optional count
@@ -742,5 +742,5 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 			}
 		}
 	}
-	return
+	return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 }
