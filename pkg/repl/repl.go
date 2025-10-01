@@ -177,6 +177,83 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	var prevLine []rune
 	var prevPos int
 
+	// Helper function for yank-last-arg (Alt+.) logic
+	// Handles cycling through history to insert/replace last arguments
+	yankLastArgCycle := func(line []rune, pos int) ([]rune, int, bool) {
+		cleanLine := line
+		cleanPos := pos
+
+		// Remove the trigger character (., >, or ,) that readline already inserted
+		if pos > 0 && (line[pos-1] == '.' || line[pos-1] == '>' || line[pos-1] == ',') {
+			cleanLine = append([]rune(nil), line[:pos-1]...)
+			cleanLine = append(cleanLine, line[pos:]...)
+			cleanPos = pos - 1
+		}
+
+		// If we're cycling (successive Alt+.), remove the previously inserted text
+		if yankLastArgActive && yankLastArgInserted != "" {
+			// Check if the previously inserted text is at the cursor position
+			insLen := len([]rune(yankLastArgInserted))
+			if cleanPos >= insLen {
+				// Check if the text before cursor matches what we inserted
+				prevText := string(cleanLine[cleanPos-insLen : cleanPos])
+				if prevText == yankLastArgInserted {
+					// Remove the previously inserted text
+					startIdx := cleanPos - insLen
+					if startIdx < 0 {
+						startIdx = 0
+					}
+					if startIdx > len(cleanLine) {
+						startIdx = len(cleanLine)
+					}
+					if cleanPos > len(cleanLine) {
+						cleanPos = len(cleanLine)
+					}
+					// Reconstruct: [before_insertion] + [after_cursor]
+					newCleanLine := make([]rune, 0, len(cleanLine))
+					newCleanLine = append(newCleanLine, cleanLine[:startIdx]...)
+					newCleanLine = append(newCleanLine, cleanLine[cleanPos:]...)
+					cleanLine = newCleanLine
+					cleanPos = startIdx
+					// Move to older history entry for next iteration
+					yankLastArgIndex--
+				}
+			}
+		} else {
+			// First time: start from most recent history (will be used in search below)
+			yankLastArgActive = true
+			yankLastArgIndex = len(userHistory)
+		}
+
+		// Get the last argument from history at the current index
+		// Search backward from yankLastArgIndex for a non-empty last arg
+		var lastArg string
+		// Start search from the next older entry
+		for i := yankLastArgIndex - 1; i >= 0; i-- {
+			lastArg = rlExtractLastArgument(userHistory[i])
+			if lastArg != "" {
+				// Found one, update our position
+				yankLastArgIndex = i
+				break
+			}
+		}
+
+		if lastArg == "" {
+			// No more history, reset state
+			yankLastArgActive = false
+			return append([]rune(nil), cleanLine...), cleanPos, true
+		}
+
+		// Insert the argument
+		yankLastArgInserted = lastArg
+		ins := []rune(lastArg)
+		newLine := make([]rune, 0, len(cleanLine)+len(ins))
+		newLine = append(newLine, cleanLine[:cleanPos]...)
+		newLine = append(newLine, ins...)
+		newLine = append(newLine, cleanLine[cleanPos:]...)
+		return newLine, cleanPos + len(ins), true
+	}
+
 	// PromQL-aware previous-word deletion for Ctrl-W
 	deletePrevWord := func(line []rune, pos int) ([]rune, int) {
 		if pos == 0 {
@@ -366,65 +443,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				}
 				if key == '.' || key == '>' || key == ',' || (altDotRune != 0 && key == altDotRune) {
 					// Alt+. (or Alt+> / Alt+, fallbacks): insert/cycle last argument from history
-					cleanLine := line
-					cleanPos := pos
-
-					// Remove the trigger character (., >, or ,) that readline already inserted
-					if pos > 0 && (line[pos-1] == '.' || line[pos-1] == '>' || line[pos-1] == ',') {
-						cleanLine = append([]rune(nil), line[:pos-1]...)
-						cleanLine = append(cleanLine, line[pos:]...)
-						cleanPos = pos - 1
-					}
-
-					// If we're cycling (successive Alt+.), remove the previously inserted text
-					if yankLastArgActive && yankLastArgInserted != "" {
-						// Check if the previously inserted text is at the cursor position
-						insLen := len([]rune(yankLastArgInserted))
-						if cleanPos >= insLen {
-							// Check if the text before cursor matches what we inserted
-							prevText := string(cleanLine[cleanPos-insLen : cleanPos])
-							if prevText == yankLastArgInserted {
-								// Remove the previously inserted text
-								cleanLine = append([]rune(nil), cleanLine[:cleanPos-insLen]...)
-								cleanLine = append(cleanLine, cleanLine[cleanPos:]...) // Keep text after cursor
-								cleanPos -= insLen
-								// Move to older history entry for next iteration
-								yankLastArgIndex--
-							}
-						}
-					} else {
-						// First time: start from most recent history (will be used in search below)
-						yankLastArgActive = true
-						yankLastArgIndex = len(userHistory)
-					}
-
-					// Get the last argument from history at the current index
-					// Search backward from yankLastArgIndex for a non-empty last arg
-					var lastArg string
-					// Start search from the next older entry
-					for i := yankLastArgIndex - 1; i >= 0; i-- {
-						lastArg = rlExtractLastArgument(userHistory[i])
-						if lastArg != "" {
-							// Found one, update our position
-							yankLastArgIndex = i
-							break
-						}
-					}
-
-					if lastArg == "" {
-						// No more history, reset state
-						yankLastArgActive = false
-						return append([]rune(nil), cleanLine...), cleanPos, true
-					}
-
-					// Insert the argument
-					yankLastArgInserted = lastArg
-					ins := []rune(lastArg)
-					newLine := make([]rune, 0, len(cleanLine)+len(ins))
-					newLine = append(newLine, cleanLine[:cleanPos]...)
-					newLine = append(newLine, ins...)
-					newLine = append(newLine, cleanLine[cleanPos:]...)
-					return newLine, cleanPos + len(ins), true
+					return yankLastArgCycle(line, pos)
 				}
 			}
 			// Not a recognized ESC sequence; treat this key normally (do not consume)
@@ -509,69 +528,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Handle standalone . key when yank-last-arg is active
 		// This allows cycling even if readline eats the ESC prefix on subsequent presses
 		if yankLastArgActive && (key == '.' || key == '>' || key == ',') {
-			// Treat this as if it were Alt+. (readline already inserted the character)
-			// Remove the trigger character that was just inserted
-			cleanLine := line
-			cleanPos := pos
-			if pos > 0 && (line[pos-1] == '.' || line[pos-1] == '>' || line[pos-1] == ',') {
-				cleanLine = append([]rune(nil), line[:pos-1]...)
-				cleanLine = append(cleanLine, line[pos:]...)
-				cleanPos = pos - 1
-			}
-
-			// Check if the previously inserted text is at the cursor position
-			if yankLastArgInserted != "" {
-				insLen := len([]rune(yankLastArgInserted))
-				if cleanPos >= insLen {
-					prevText := string(cleanLine[cleanPos-insLen : cleanPos])
-					if prevText == yankLastArgInserted {
-						// Remove the previously inserted text
-						startIdx := cleanPos - insLen
-						if startIdx < 0 {
-							startIdx = 0
-						}
-						if startIdx > len(cleanLine) {
-							startIdx = len(cleanLine)
-						}
-						if cleanPos > len(cleanLine) {
-							cleanPos = len(cleanLine)
-						}
-						// Reconstruct: [before_insertion] + [after_cursor]
-						newCleanLine := make([]rune, 0, len(cleanLine))
-						newCleanLine = append(newCleanLine, cleanLine[:startIdx]...)
-						newCleanLine = append(newCleanLine, cleanLine[cleanPos:]...)
-						cleanLine = newCleanLine
-						cleanPos = startIdx
-						// Move to older history entry
-						yankLastArgIndex--
-					}
-				}
-			}
-
-			// Search for next last arg in history
-			var lastArg string
-			for i := yankLastArgIndex - 1; i >= 0; i-- {
-				lastArg = rlExtractLastArgument(userHistory[i])
-				if lastArg != "" {
-					yankLastArgIndex = i
-					break
-				}
-			}
-
-			if lastArg == "" {
-				// No more history, resetting
-				yankLastArgActive = false
-				return append([]rune(nil), cleanLine...), cleanPos, true
-			}
-
-			// Insert the new argument
-			yankLastArgInserted = lastArg
-			ins := []rune(lastArg)
-			newLine := make([]rune, 0, len(cleanLine)+len(ins))
-			newLine = append(newLine, cleanLine[:cleanPos]...)
-			newLine = append(newLine, ins...)
-			newLine = append(newLine, cleanLine[cleanPos:]...)
-			return newLine, cleanPos + len(ins), true
+			return yankLastArgCycle(line, pos)
 		}
 
 		// Any other key: end any active navigation and yank state, let readline proceed
