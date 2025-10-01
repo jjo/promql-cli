@@ -24,8 +24,6 @@ import (
 
 var replTimeout = 60 * time.Second
 
-// lastExecutedCommand is shared across REPL backends to enable features like Alt+.
-var lastExecutedCommand string
 
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.

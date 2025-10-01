@@ -1,5 +1,3 @@
-//go:build !noprompt
-
 package repl
 
 import (

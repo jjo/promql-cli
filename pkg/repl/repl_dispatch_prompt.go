@@ -1,6 +1,3 @@
-//go:build !noprompt
-// +build !noprompt
-
 package repl
 
 import (
@@ -13,19 +10,21 @@ import (
 
 // RunInteractiveQueriesDispatch determines which REPL backend to use
 func RunInteractiveQueriesDispatch(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool, replBackend string) {
-	if replBackend == "readline" {
+	// Always set the eval engine for rule evaluations regardless of backend
+	SetEvalEngine(engine)
+
+	if replBackend == "prompt" {
 		if !silent {
-			fmt.Println("Using readline backend (--repl=readline)")
+			fmt.Println("Using go-prompt backend (--repl=prompt)")
 		}
-		runInteractiveQueries(engine, storage, silent)
+		runPromptREPL(engine, storage, silent)
 		return
 	}
-	// Default to go-prompt
+	// Default to readline
 	if !silent {
-		fmt.Println("Using go-prompt backend (default)")
+		fmt.Println("Using readline backend (default)")
 	}
-	SetEvalEngine(engine)
-	runPromptREPL(engine, storage, silent)
+	runInteractiveQueries(engine, storage, silent)
 }
 
 // runPromptREPL runs the go-prompt based REPL
