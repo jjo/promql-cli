@@ -1443,11 +1443,10 @@ func rlExtractLastArgument(cmd string) string {
 		}
 		return ""
 	}
-	seps := "(){}[]\" \t\n,="
 	tokens := []string{}
 	cur := ""
 	for _, ch := range cmd {
-		if strings.ContainsRune(seps, ch) {
+		if isWordBoundaryRune(ch) {
 			if cur != "" {
 				tokens = append(tokens, cur)
 				cur = ""
@@ -1522,19 +1521,10 @@ func rlLaunchExternalEditorForReadline(current string) string {
 	_ = tf.Close()
 
 	// Pick editor: PROMQL_EDITOR > VISUAL > EDITOR > nano
-	editor := os.Getenv("PROMQL_EDITOR")
-	if strings.TrimSpace(editor) == "" {
-		editor = os.Getenv("VISUAL")
-	}
-	if strings.TrimSpace(editor) == "" {
-		editor = os.Getenv("EDITOR")
-	}
-	if strings.TrimSpace(editor) == "" {
-		editor = "nano"
-	}
+	editor := getEditorCommand()
 
 	// Safely quote path
-	shQuote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+	shQuote := func(s string) string { return shellQuote(s) }
 
 	// Pause readline input so it won't intercept keys intended for the editor
 	if rlInputGate != nil {
