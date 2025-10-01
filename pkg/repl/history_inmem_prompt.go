@@ -1,5 +1,3 @@
-//go:build !noprompt
-
 package repl
 
 // getInMemoryHistory returns the current in-memory history used by the prompt backend.

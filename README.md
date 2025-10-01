@@ -67,7 +67,7 @@ promql-cli query -q 'up' -o json ./example.prom
 | `-c, --command "cmds"` | Run commands before REPL/query | `-c ".scrape http://localhost:9100/metrics"` |
 | `-s, --silent` | Suppress startup output | `-s -c ".load data.prom"` |
 | `--rules {dir/,fileglob.yml}` | Load alerting/recording rules file | `--rules example-rules.yml` |
-| `--repl {prompt\|readline}` | Choose REPL backend | `--repl readline` |
+| `--repl {prompt\|readline}` | Choose REPL backend (default: readline) | `--repl prompt` |
 | `--ai "key=value,..."` | Configure AI settings in one flag | `--ai "provider=claude,model=opus,answers=5"` |
 
 ### 🤖 REPL Commands
@@ -108,7 +108,7 @@ Commands you can use inside the interactive session:
 
 ### Smart Autocompletion
 
-The default go-prompt backend provides context-aware PromQL suggestions:
+The go-prompt backend provides context-aware PromQL suggestions (enable with `--repl=prompt`):
 
 - **🎯 Context-aware**: Suggests metrics, functions, and labels based on what you're typing
 - **📚 Documentation**: Shows help text and function signatures
@@ -440,11 +440,8 @@ docker run --rm -v "$PWD":/data xjjo/promql-cli:latest query \
 ## 🛠️ Building from Source
 
 ```bash
-# Full-featured build (default)
+# Build
 make build
-
-# Minimal build (smaller binary)
-make build-no-prompt
 
 # See all options
 make help
@@ -453,6 +450,7 @@ make help
 make test
 ```
 
-**Build options:**
-- Default: Advanced REPL with autocompletion (go-prompt)
-- `noprompt` tag: Basic readline interface for minimal deployments
+**Runtime options:**
+- Both REPL backends are built into the binary.
+- Default backend: readline (portable, minimal dependencies).
+- For advanced, rich UI with autocompletion, run with `--repl=prompt`.

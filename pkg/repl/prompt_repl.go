@@ -1,5 +1,3 @@
-//go:build !noprompt
-
 package repl
 
 import (
@@ -611,9 +609,6 @@ func getRangeDurationSuggests(prefix string, metricName string) []prompt.Suggest
 
 // Global variable to store the original terminal state for restoration
 var globalOriginalState string
-
-// Global variable to track the last executed command for Alt+. functionality
-var lastExecutedCommand string
 
 // Global variables for prefix-based history navigation
 var (
