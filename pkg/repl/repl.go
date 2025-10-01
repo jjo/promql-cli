@@ -189,7 +189,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		}
 		// If we only found separators and reached start, delete just the separators
 		if i == 0 {
-			newLine := append([]rune(nil), line[i:]...)
+			newLine := append([]rune(nil), line[pos:]...)
 			return newLine, 0
 		}
 		// Then delete the previous word
@@ -218,7 +218,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			// Apply our correct deletion logic using the previous state
 			// This handles Ctrl-W (23) and potentially Ctrl-Backspace which might not even reach us as a distinct key
 			nl, np := deletePrevWord(prevLine, prevPos)
-			// Do not update prevLine/prevPos here; let the REPL main loop handle state updates
+			// Save state for next iteration
+			prevLine = append(prevLine[:0], nl...)
+			prevPos = np
 			return nl, np, true
 		}
 
@@ -472,8 +474,11 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		// Save current state for next keystroke (for Ctrl-W fix)
 		// Make a copy to avoid shared slice issues
-		prevLine = append(prevLine[:0], line...)
-		prevPos = pos
+		if len(line) > 0 {
+			prevLine = append(prevLine[:0], line...)
+			prevPos = pos
+		}
+
 		return nil, 0, false
 	}
 
