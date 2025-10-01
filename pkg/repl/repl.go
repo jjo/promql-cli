@@ -189,7 +189,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		}
 		// If we only found separators and reached start, delete just the separators
 		if i == 0 {
-			newLine := append([]rune(nil), line[pos:]...)
+			newLine := append([]rune(nil), line[i:]...)
 			return newLine, 0
 		}
 		// Then delete the previous word
