@@ -12,6 +12,11 @@ import (
 	"github.com/prometheus/prometheus/promql"
 )
 
+// mustFprintf and mustFprintln intentionally ignore write errors, e.g. when piping to a closed consumer.
+// They keep the call sites free of errcheck noise while making the intent explicit.
+func mustFprintf(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+func mustFprintln(w io.Writer, a ...any)               { _, _ = fmt.Fprintln(w, a...) }
+
 // PrintUpstreamQueryResult formats and displays query results from the upstream PromQL engine.
 // It handles different result types (Vector, Scalar, Matrix) with appropriate formatting.
 func PrintUpstreamQueryResult(result *promql.Result) {
@@ -22,35 +27,35 @@ func PrintUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 	switch v := result.Value.(type) {
 	case promql.Vector:
 		if len(v) == 0 {
-			fmt.Fprintln(w, "No results found")
+			mustFprintln(w, "No results found")
 			return
 		}
-		fmt.Fprintf(w, "Vector (%d samples):\n", len(v))
+		mustFprintf(w, "Vector (%d samples):\n", len(v))
 		for i, sample := range v {
-			fmt.Fprintf(w, "  [%d] %s => %g @ %s\n",
+			mustFprintf(w, "  [%d] %s => %g @ %s\n",
 				i+1,
 				sample.Metric,
 				sample.F,
 				model.Time(sample.T).Time().Format(time.RFC3339))
 		}
 	case promql.Scalar:
-		fmt.Fprintf(w, "Scalar: %g @ %s\n", v.V, model.Time(v.T).Time().Format(time.RFC3339))
+		mustFprintf(w, "Scalar: %g @ %s\n", v.V, model.Time(v.T).Time().Format(time.RFC3339))
 	case promql.String:
-		fmt.Fprintf(w, "String: %s\n", v.V)
+		mustFprintf(w, "String: %s\n", v.V)
 	case promql.Matrix:
 		if len(v) == 0 {
-			fmt.Println("No results found")
+			mustFprintln(w, "No results found")
 			return
 		}
-		fmt.Fprintf(w, "Matrix (%d series):\n", len(v))
+		mustFprintf(w, "Matrix (%d series):\n", len(v))
 		for i, series := range v {
-			fmt.Fprintf(w, "  [%d] %s:\n", i+1, series.Metric)
+			mustFprintf(w, "  [%d] %s:\n", i+1, series.Metric)
 			for _, point := range series.Floats {
-				fmt.Fprintf(w, "    %g @ %s\n", point.F, model.Time(point.T).Time().Format(time.RFC3339))
+				mustFprintf(w, "    %g @ %s\n", point.F, model.Time(point.T).Time().Format(time.RFC3339))
 			}
 		}
 	default:
-		fmt.Fprintf(w, "Unsupported result type: %T\n", result.Value)
+		mustFprintf(w, "Unsupported result type: %T\n", result.Value)
 	}
 }
 
@@ -88,7 +93,9 @@ func PrintResultJSON(result *promql.Result) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(b))
+		if _, err := os.Stdout.Write(append(b, '\n')); err != nil {
+			return err
+		}
 		return nil
 	case promql.Scalar:
 		out := respJSON{Status: "success", Data: dataJSON{ResultType: "scalar"}}
@@ -97,7 +104,9 @@ func PrintResultJSON(result *promql.Result) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(b))
+		if _, err := os.Stdout.Write(append(b, '\n')); err != nil {
+			return err
+		}
 		return nil
 	case promql.Matrix:
 		out := respJSON{Status: "success", Data: dataJSON{ResultType: "matrix"}}
@@ -117,7 +126,9 @@ func PrintResultJSON(result *promql.Result) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(b))
+		if _, err := os.Stdout.Write(append(b, '\n')); err != nil {
+			return err
+		}
 		return nil
 	default:
 		// Unknown type; just marshal empty
@@ -126,7 +137,9 @@ func PrintResultJSON(result *promql.Result) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(b))
+		if _, err := os.Stdout.Write(append(b, '\n')); err != nil {
+			return err
+		}
 		return nil
 	}
 }

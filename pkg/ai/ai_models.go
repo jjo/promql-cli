@@ -58,3 +58,10 @@ func getModelCatalog() map[string][]ModelInfo {
 	}
 	return modelCatalogDefault
 }
+
+// Keep references so linters don't flag these as unused when codegen isn't present.
+var (
+	_ = modelCatalogHolder
+	_ = modelCatalogDefault
+	_ = getModelCatalog
+)

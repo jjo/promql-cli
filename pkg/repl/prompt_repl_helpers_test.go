@@ -50,8 +50,8 @@ func TestDrainFD(t *testing.T) {
 		t.Fatalf("pipe: %v", err)
 	}
 	r, w := p[0], p[1]
-	defer unix.Close(r)
-	defer unix.Close(w)
+	defer func() { _ = unix.Close(r) }()
+	defer func() { _ = unix.Close(w) }()
 	data := []byte("\x1b[2;2Rjunk")
 	if _, err := unix.Write(w, data); err != nil {
 		t.Fatalf("write: %v", err)
@@ -59,6 +59,7 @@ func TestDrainFD(t *testing.T) {
 	// Make read end non-blocking so drainFD works predictably
 	if err := unix.SetNonblock(r, true); err != nil {
 		// Best effort; continue anyway
+		_ = err
 	}
 	// Drain it
 	drainFD(r)

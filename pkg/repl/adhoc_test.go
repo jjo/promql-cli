@@ -34,7 +34,10 @@ func captureStdout(t *testing.T, fn func()) string {
 	// Close writer to finish the reader
 	_ = w.Close()
 	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
+	if _, err := io.Copy(&buf, r); err != nil {
+		// ignore in tests
+		_ = err
+	}
 	_ = r.Close()
 	return buf.String()
 }
@@ -186,7 +189,9 @@ foo_total{code="500"} 1
 `
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		io.Copy(w, strings.NewReader(payload))
+		if _, err := io.Copy(w, strings.NewReader(payload)); err != nil {
+			return
+		}
 	}))
 	defer ts.Close()
 
@@ -219,7 +224,9 @@ func TestAdhoc_PromScrape_ImportsVector(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		resp := `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","job":"test"},"value":[1738000000,"1"]}]}}`
-		_, _ = io.WriteString(w, resp)
+		if _, err := io.WriteString(w, resp); err != nil {
+			return
+		}
 	}))
 	defer ts.Close()
 
@@ -243,7 +250,9 @@ func TestAdhoc_PromScrape_BasicAuth(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+		if _, err := io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`); err != nil {
+			return
+		}
 	}))
 	defer ts.Close()
 	store := sstorage.NewSimpleStorage()
@@ -268,7 +277,9 @@ func TestAdhoc_PromScrape_MimirAuth(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+		if _, err := io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`); err != nil {
+			return
+		}
 	}))
 	defer ts.Close()
 	store := sstorage.NewSimpleStorage()
@@ -289,7 +300,9 @@ func TestAdhoc_PromScrapeRange_ImportsMatrix(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		resp := `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"foo_total","job":"test"},"values":[[1738000000,"5"],[1738000015,"7"]]}]}}`
-		_, _ = io.WriteString(w, resp)
+		if _, err := io.WriteString(w, resp); err != nil {
+			return
+		}
 	}))
 	defer ts.Close()
 

@@ -342,7 +342,7 @@ func postAndExtractAISuggestions(ctx context.Context, url, bearer string, body a
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("AI HTTP %d: %s", resp.StatusCode, string(b))
@@ -375,7 +375,7 @@ func postAndExtractAISuggestionsAnthropic(ctx context.Context, url, apiKey strin
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("AI HTTP %d: %s", resp.StatusCode, string(b))

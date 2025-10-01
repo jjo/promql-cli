@@ -22,7 +22,7 @@ LDFLAGS := -s -w \
 	-X main.commit=$(GIT_COMMIT) \
 	-X main.date=$(BUILD_DATE)
 
-.PHONY: all build build-binary build-no-prompt run test fmt vet tidy clean docker-build docker-run docker-push version help gofumpt
+.PHONY: all build build-binary build-no-prompt run test test-% fmt vet tidy clean docker-build docker-run docker-push version help gofumpt
 
 all: build
 
@@ -52,9 +52,15 @@ vet:
 
 _test_pkgs := $(shell go list ./... 2>/dev/null)
 
-# No tests currently; this target will succeed if there are no packages
-# with tests. It will run anything it finds.
-test:
+test: test-unit test-gofumpt test-lint
+
+test-unit:
+	@go test -v ./...
+
+test-lint:
+	@golangci-lint run -v ./...
+
+test-gofumpt:
 	@# Ensure gofumpt is available
 	@command -v gofumpt >/dev/null 2>&1 || { \
 		echo "gofumpt not found. Install with:"; \
@@ -69,7 +75,6 @@ test:
 		echo "Run: make gofumpt"; \
 		exit 1; \
 	fi
-	@if [ -z "$(_test_pkgs)" ]; then echo "No Go packages found for testing"; else go test -v ./...; fi
 
 tidy:
 	go mod tidy

@@ -7,7 +7,13 @@
 
 > **A lightweight PromQL playground and REPL for rapid Prometheus metric exploration**
 
-Load Prometheus text-format metrics, query them with the upstream Prometheus engine, and iterate quickly with intelligent autocompletion and AI assistance. Perfect for developing exporters, debugging metrics, and learning PromQL.
+TL;DR: prometheus-less promQL CLI that can load metrics files, scrape
+live endpoints (including prometheus itself), and basic get AI help.
+
+Load Prometheus text-format metrics, query them with the compiled-in
+upstream Prometheus engine, and iterate quickly with intelligent
+autocompletion and AI assistance. Perfect for developing exporters,
+debugging metrics, and learning PromQL.
 
 ## ✨ Key Features
 
@@ -399,28 +405,6 @@ promql-cli query snapshot-after.prom
 > .load /tmp/before-analysis.prom     # Load both for comparison
 ```
 </details>
-
-## 📚 PromQL Examples
-
-Common patterns you can try with your metrics:
-
-```promql
-# Request rate by service
-sum by (service) (http_requests_total)
-
-# Error rate percentage
-sum(rate(http_requests_total{code=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) * 100
-
-# 95th percentile latency
-histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))
-
-# Top 5 memory consumers
-topk(5, process_resident_memory_bytes)
-
-# Resource usage trends
-rate(cpu_usage_seconds_total[5m])
-rate(memory_usage_bytes[5m])
-```
 
 ## 🐳 Docker Usage
 

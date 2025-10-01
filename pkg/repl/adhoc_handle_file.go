@@ -41,7 +41,7 @@ func handleAdhocSave(query string, storage *sstorage.SimpleStorage) bool {
 		fmt.Printf("Failed to open %s for writing: %v\n", path, err)
 		return true
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	opts := sstorage.SaveOptions{TimestampMode: tsMode, FixedTimestamp: tsFixed}
 	if re != nil {
 		opts.SeriesRegex = re
@@ -149,10 +149,11 @@ func applyTimestampOverride(storage *sstorage.SimpleStorage, beforeCounts map[st
 			start = 0
 		}
 		for i := start; i < len(samples); i++ {
-			if mode == "remove" {
+			switch mode {
+			case "remove":
 				// set a uniform timestamp (current time) for all samples when 'remove' mode is used
 				storage.Metrics[name][i].Timestamp = time.Now().UnixMilli()
-			} else if mode == "set" {
+			case "set":
 				storage.Metrics[name][i].Timestamp = fixed
 			}
 		}
@@ -208,7 +209,7 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 		fmt.Printf("Failed to open %s: %v\n", path, err)
 		return true
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	beforeMetrics := len(storage.Metrics)
 	beforeSamples := 0
 	for _, ss := range storage.Metrics {
@@ -245,9 +246,10 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 				seriesSig := seriesSignature(name, s.Labels)
 				if re.MatchString(seriesSig) {
 					ts := s.Timestamp
-					if tsMode == "remove" {
+					switch tsMode {
+					case "remove":
 						ts = time.Now().UnixMilli()
-					} else if tsMode == "set" {
+					case "set":
 						ts = tsFixed
 					}
 					storage.AddSample(s.Labels, s.Value, ts)
