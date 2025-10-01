@@ -186,7 +186,17 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 		func() {
 			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				fmt.Printf("Prometheus API HTTP %d\n", resp.StatusCode)
+				// Try to read error details from response body
+				var pr promAPIResponse
+				if err := json.NewDecoder(resp.Body).Decode(&pr); err == nil {
+					if pr.Error != "" {
+						fmt.Printf("Prometheus API HTTP %d: %s (%s)\n", resp.StatusCode, pr.Error, pr.ErrorType)
+					} else {
+						fmt.Printf("Prometheus API HTTP %d\n", resp.StatusCode)
+					}
+				} else {
+					fmt.Printf("Prometheus API HTTP %d\n", resp.StatusCode)
+				}
 				return
 			}
 			var pr promAPIResponse
