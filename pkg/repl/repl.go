@@ -23,6 +23,9 @@ import (
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
+// lastExecutedCommand is shared across REPL backends to enable features like Alt+.
+var lastExecutedCommand string
+
 var replTimeout = 60 * time.Second
 
 // rlInputGate gates stdin to readline so we can pause input while running an external editor.
@@ -46,9 +49,9 @@ func newInputGate(src *os.File) *inputGate {
 }
 
 func (g *inputGate) Reader() io.ReadCloser { return g.r }
-func (g *inputGate) Pause()                 { atomic.StoreUint32(&g.paused, 1) }
-func (g *inputGate) Resume()                { atomic.StoreUint32(&g.paused, 0) }
-func (g *inputGate) Closed() bool           { return atomic.LoadUint32(&g.paused) == 2 }
+func (g *inputGate) Pause()                { atomic.StoreUint32(&g.paused, 1) }
+func (g *inputGate) Resume()               { atomic.StoreUint32(&g.paused, 0) }
+func (g *inputGate) Closed() bool          { return atomic.LoadUint32(&g.paused) == 2 }
 func (g *inputGate) Close() {
 	select {
 	case <-g.stop:
@@ -108,7 +111,6 @@ func (g *inputGate) Flush() {
 		// Continue until empty
 	}
 }
-
 
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
@@ -209,7 +211,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		// Helper: strip certain control runes (e.g., ^X, ^E) from a rune slice
 		stripCtrl := func(rs []rune) []rune {
-			if len(rs) == 0 { return rs }
+			if len(rs) == 0 {
+				return rs
+			}
 			out := rs[:0]
 			for _, r := range rs {
 				if r == rune(0x18) || r == rune(0x05) { // ^X, ^E
@@ -251,7 +255,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			} else if len(nl) > 0 && nl[len(nl)-1] == ctrlXRune {
 				// Sometimes control rune lands at end
 				nl = nl[:len(nl)-1]
-				if pos > len(nl) { pos = len(nl) }
+				if pos > len(nl) {
+					pos = len(nl)
+				}
 			}
 			return nl, pos, true
 		}
@@ -268,7 +274,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				}
 				// If editor failed or empty, keep sanitized current line and consume
 				cur := clean
-				if pos > len(cur) { pos = len(cur) }
+				if pos > len(cur) {
+					pos = len(cur)
+				}
 				return cur, pos, true
 			}
 			// otherwise let default Ctrl-E behavior (move to end) proceed
@@ -431,9 +439,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		return nil, 0, false
 	}
 
-// Build a gated stdin so we can pause input while the external editor is active
-rlInputGate = newInputGate(os.Stdin)
-rl, err := readline.NewEx(&readline.Config{
+	// Build a gated stdin so we can pause input while the external editor is active
+	rlInputGate = newInputGate(os.Stdin)
+	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          "> ",
 		HistoryFile:     historyPath,
 		AutoComplete:    createAutoCompleter(storage), // Dynamic tab completion
@@ -447,9 +455,14 @@ rl, err := readline.NewEx(&readline.Config{
 		runBasicInteractiveQueries(engine, storage, silent)
 		return
 	}
-defer rl.Close()
-// Ensure we stop proxying input when leaving the REPL
-defer func() { if rlInputGate != nil { rlInputGate.Close(); rlInputGate = nil } }()
+	defer rl.Close()
+	// Ensure we stop proxying input when leaving the REPL
+	defer func() {
+		if rlInputGate != nil {
+			rlInputGate.Close()
+			rlInputGate = nil
+		}
+	}()
 
 	// Multi-line continuation state (using backslash at EOL)
 	var mlActive bool
@@ -1418,7 +1431,7 @@ func rlLaunchExternalEditorForReadline(current string) string {
 	// Safely quote path
 	shQuote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 
-// Pause readline input so it won't intercept keys intended for the editor
+	// Pause readline input so it won't intercept keys intended for the editor
 	if rlInputGate != nil {
 		rlInputGate.Pause()
 	}
