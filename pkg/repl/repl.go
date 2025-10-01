@@ -177,6 +177,23 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	var prevLine []rune
 	var prevPos int
 
+	// Helper: copy rune slice
+	copyRunes := func(src []rune) []rune {
+		return append([]rune(nil), src...)
+	}
+
+	// Helper: check if rune is a trigger character for Alt+.
+	isAltDotTriggerChar := func(r rune) bool {
+		return r == '.' || r == '>' || r == ','
+	}
+
+	// Helper: debug key output
+	debugKey := func(format string, args ...interface{}) {
+		if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
+			fmt.Printf(format, args...)
+		}
+	}
+
 	// Helper function for yank-last-arg (Alt+.) logic
 	// Handles cycling through history to insert/replace last arguments
 	yankLastArgCycle := func(line []rune, pos int) ([]rune, int, bool) {
@@ -184,8 +201,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		cleanPos := pos
 
 		// Remove the trigger character (., >, or ,) that readline already inserted
-		if pos > 0 && (line[pos-1] == '.' || line[pos-1] == '>' || line[pos-1] == ',') {
-			cleanLine = append([]rune(nil), line[:pos-1]...)
+		if pos > 0 && isAltDotTriggerChar(line[pos-1]) {
+			cleanLine = copyRunes(line[:pos-1])
 			cleanLine = append(cleanLine, line[pos:]...)
 			cleanPos = pos - 1
 		}
@@ -241,7 +258,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		if lastArg == "" {
 			// No more history, reset state
 			yankLastArgActive = false
-			return append([]rune(nil), cleanLine...), cleanPos, true
+			return copyRunes(cleanLine), cleanPos, true
 		}
 
 		// Insert the argument
@@ -271,8 +288,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		}
 		// If we only found separators and reached start, delete just the separators
 		if i == 0 {
-			newLine := append([]rune(nil), line[pos:]...)
-			return newLine, 0
+			return copyRunes(line[pos:]), 0
 		}
 		// Then delete the previous word
 		for i > 0 {
@@ -282,16 +298,14 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			}
 			i--
 		}
-		newLine := append([]rune(nil), line[:i]...)
+		newLine := copyRunes(line[:i])
 		newLine = append(newLine, line[pos:]...)
 		return newLine, i
 	}
 
 	listener := func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
 		// Optional key debug
-		if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
-			fmt.Printf("\n[key=%#U code=%d]\n", key, key)
-		}
+		debugKey("\n[key=%#U code=%d]\n", key, key)
 
 		// Special handling for Ctrl-W and Ctrl-Backspace: readline processed them first (buggy), we fix it here
 		// Ctrl-W = rune(23), but other word-delete keys might also trigger this
@@ -334,8 +348,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Ctrl-Y: paste AI clipboard (from .ai edit N)
 		if key == keyCtrlY {
 			if strings.TrimSpace(aiClipboard) == "" {
-				cur := append([]rune(nil), line...)
-				return cur, pos, true
+				return copyRunes(line), pos, true
 			}
 			newLine := []rune(aiClipboard)
 			return newLine, len(newLine), true
@@ -343,13 +356,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		// Ctrl-W: PromQL-aware delete previous word
 		if key == keyCtrlW {
-			if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
-				fmt.Printf("\n[Ctrl-W] line=%q pos=%d\n", string(line), pos)
-			}
+			debugKey("\n[Ctrl-W] line=%q pos=%d\n", string(line), pos)
 			nl, np := deletePrevWord(line, pos)
-			if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
-				fmt.Printf("[Ctrl-W] newLine=%q newPos=%d\n", string(nl), np)
-			}
+			debugKey("[Ctrl-W] newLine=%q newPos=%d\n", string(nl), np)
 			return nl, np, true
 		}
 
@@ -357,7 +366,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		if key == keyCtrlX {
 			lastCtrlX = time.Now()
 			// Consume the keystroke and actively remove any literal ^X that might have been inserted
-			nl := append([]rune(nil), line...)
+			nl := copyRunes(line)
 			// Remove ^X at or near cursor if present
 			const ctrlXRune = rune(0x18)
 			if pos > 0 && pos-1 < len(nl) && nl[pos-1] == ctrlXRune {
@@ -403,7 +412,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			escAt = time.Now()
 			// Consume the ESC/NUL so readline doesn't interfere with subsequent key detection
 			// Return current line unchanged
-			return append([]rune(nil), line...), pos, true
+			return copyRunes(line), pos, true
 		}
 		if escPending {
 			within := time.Since(escAt) <= 1500*time.Millisecond
@@ -421,7 +430,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 					for i < len(line) && isWordBoundary(byte(line[i])) {
 						i++
 					}
-					return append([]rune(nil), line...), i, true
+					return copyRunes(line), i, true
 				}
 				if key == 'b' {
 					// move backward to start of previous word
@@ -434,7 +443,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 					for i > 0 && !isWordBoundary(byte(line[i-1])) {
 						i--
 					}
-					return append([]rune(nil), line...), i, true
+					return copyRunes(line), i, true
 				}
 				// ESC+Backspace/DEL: Delete word backward (Ctrl-Backspace in some terminals)
 				if key == 127 || key == 8 { // DEL or Backspace
@@ -527,7 +536,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		// Handle standalone . key when yank-last-arg is active
 		// This allows cycling even if readline eats the ESC prefix on subsequent presses
-		if yankLastArgActive && (key == '.' || key == '>' || key == ',') {
+		if yankLastArgActive && isAltDotTriggerChar(key) {
 			return yankLastArgCycle(line, pos)
 		}
 
@@ -542,7 +551,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		if key != keyESC && key != rune(0) {
 			// Only reset if we're not currently processing an ESC sequence
 			// The escPending check happens BEFORE this, so we check if the key itself is a trigger
-			if key != '.' && key != '>' && key != ',' && (altDotRune == 0 || key != altDotRune) {
+			if !isAltDotTriggerChar(key) && (altDotRune == 0 || key != altDotRune) {
 				yankLastArgActive = false
 				yankLastArgInserted = ""
 			}
@@ -552,7 +561,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		if key == rune(29) || (altDotRune != 0 && key == altDotRune) {
 			lastArg := rlExtractLastArgument(lastExecutedCommand)
 			if lastArg == "" {
-				return append([]rune(nil), line...), pos, true
+				return copyRunes(line), pos, true
 			}
 			ins := []rune(lastArg)
 			newLine := make([]rune, 0, len(line)+len(ins))
@@ -565,7 +574,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Save current state for next keystroke (for Ctrl-W fix)
 		// Make a copy to avoid shared slice issues
 		if len(line) > 0 {
-			prevLine = append(prevLine[:0], line...)
+			prevLine = append(prevLine[:0], copyRunes(line)...)
 			prevPos = pos
 		}
 
