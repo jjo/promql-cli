@@ -749,28 +749,13 @@ func launchExternalEditor(buf *prompt.Buffer) {
 	_ = tf.Close()
 
 	// Pick editor: PROMQL_EDITOR > VISUAL > EDITOR > nano
-	editor := os.Getenv("PROMQL_EDITOR")
-	if strings.TrimSpace(editor) == "" {
-		editor = os.Getenv("VISUAL")
-	}
-	if strings.TrimSpace(editor) == "" {
-		editor = os.Getenv("EDITOR")
-	}
-	if strings.TrimSpace(editor) == "" {
-		editor = "nano"
-	}
-
-	// Quote the file path for the shell
-	shQuote := func(s string) string {
-		// Safest POSIX single-quote escaping: ' -> '\''
-		return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-	}
+	editor := getEditorCommand()
 
 	// Temporarily restore terminal to cooked mode for the editor
 	rawState := saveTerminalState()
 	restoreTerminalState(globalOriginalState)
 
-	cmdStr := fmt.Sprintf("%s %s", editor, shQuote(path))
+	cmdStr := fmt.Sprintf("%s %s", editor, shellQuote(path))
 	cmd := exec.Command("/bin/sh", "-c", cmdStr)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -1214,16 +1199,15 @@ func (r *promptREPL) Run() error {
 				Fn: func(buf *prompt.Buffer) {
 					// Move forward one word
 					doc := buf.Document()
-					separators := "(){}[]\" \t\n,="
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 
 					// Skip current word
-					for pos < len(text) && !strings.ContainsRune(separators, rune(text[pos])) {
+					for pos < len(text) && !isWordBoundaryRune(rune(text[pos])) {
 						pos++
 					}
 					// Skip separators
-					for pos < len(text) && strings.ContainsRune(separators, rune(text[pos])) {
+					for pos < len(text) && isWordBoundaryRune(rune(text[pos])) {
 						pos++
 					}
 					// Move cursor
@@ -1241,7 +1225,6 @@ func (r *promptREPL) Run() error {
 				Fn: func(buf *prompt.Buffer) {
 					// Move backward one word
 					doc := buf.Document()
-					separators := "(){}[]\" \t\n,="
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 
@@ -1250,11 +1233,11 @@ func (r *promptREPL) Run() error {
 					}
 
 					// Skip separators backward
-					for pos > 0 && strings.ContainsRune(separators, rune(text[pos-1])) {
+					for pos > 0 && isWordBoundaryRune(rune(text[pos-1])) {
 						pos--
 					}
 					// Skip word backward
-					for pos > 0 && !strings.ContainsRune(separators, rune(text[pos-1])) {
+					for pos > 0 && !isWordBoundaryRune(rune(text[pos-1])) {
 						pos--
 					}
 					// Move cursor
@@ -1277,10 +1260,9 @@ func (r *promptREPL) Run() error {
 				}
 
 				// Find word boundary with PromQL-specific separators
-				separators := "(){}[]\" \t\n,="
 				start := pos - 1
 				// Skip trailing separators
-				for start >= 0 && strings.ContainsRune(separators, rune(text[start])) {
+				for start >= 0 && isWordBoundaryRune(rune(text[start])) {
 					start--
 				}
 				// If we only found separators and reached start, delete just the separators
@@ -1289,7 +1271,7 @@ func (r *promptREPL) Run() error {
 					return
 				}
 				// Find beginning of word
-				for start >= 0 && !strings.ContainsRune(separators, rune(text[start])) {
+				for start >= 0 && !isWordBoundaryRune(rune(text[start])) {
 					start--
 				}
 				start++ // Move to first char of word
@@ -1334,13 +1316,12 @@ func (r *promptREPL) Run() error {
 				Fn: func(buf *prompt.Buffer) {
 					// Delete word forward
 					doc := buf.Document()
-					separators := "(){}[]\" \t\n,="
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 					end := pos
 
 					// Advance to end of current word but do NOT consume following separators
-					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
+					for end < len(text) && !isWordBoundaryRune(rune(text[end])) {
 						end++
 					}
 					// Delete only the word; keep the next separator (e.g., '(', '{', space) intact
@@ -1363,10 +1344,9 @@ func (r *promptREPL) Run() error {
 						return
 					}
 
-					separators := "(){}[]\" \t\n,="
 					start := pos - 1
 					// Skip trailing separators
-					for start >= 0 && strings.ContainsRune(separators, rune(text[start])) {
+					for start >= 0 && isWordBoundaryRune(rune(text[start])) {
 						start--
 					}
 					// If we only found separators and reached start, delete just the separators
@@ -1375,7 +1355,7 @@ func (r *promptREPL) Run() error {
 						return
 					}
 					// Find beginning of word
-					for start >= 0 && !strings.ContainsRune(separators, rune(text[start])) {
+					for start >= 0 && !isWordBoundaryRune(rune(text[start])) {
 						start--
 					}
 					start++
@@ -1462,13 +1442,12 @@ func (r *promptREPL) Run() error {
 				ASCIICode: []byte{0x1b, 0x75}, // ESC + u
 				Fn: func(buf *prompt.Buffer) {
 					doc := buf.Document()
-					separators := "(){}[]\" \t\n,="
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 					end := pos
 
 					// Find end of current word
-					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
+					for end < len(text) && !isWordBoundaryRune(rune(text[end])) {
 						end++
 					}
 
@@ -1486,13 +1465,12 @@ func (r *promptREPL) Run() error {
 				ASCIICode: []byte{0x1b, 0x6c}, // ESC + l
 				Fn: func(buf *prompt.Buffer) {
 					doc := buf.Document()
-					separators := "(){}[]\" \t\n,="
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 					end := pos
 
 					// Find end of current word
-					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
+					for end < len(text) && !isWordBoundaryRune(rune(text[end])) {
 						end++
 					}
 
@@ -1510,13 +1488,12 @@ func (r *promptREPL) Run() error {
 				ASCIICode: []byte{0x1b, 0x63}, // ESC + c
 				Fn: func(buf *prompt.Buffer) {
 					doc := buf.Document()
-					separators := "(){}[]\" \t\n,="
 					text := doc.Text
 					pos := len(doc.TextBeforeCursor())
 					end := pos
 
 					// Find end of current word
-					for end < len(text) && !strings.ContainsRune(separators, rune(text[end])) {
+					for end < len(text) && !isWordBoundaryRune(rune(text[end])) {
 						end++
 					}
 
