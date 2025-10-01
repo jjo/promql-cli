@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -23,6 +24,90 @@ import (
 )
 
 var replTimeout = 60 * time.Second
+
+// rlInputGate gates stdin to readline so we can pause input while running an external editor.
+var rlInputGate *inputGate
+
+// inputGate proxies bytes from a real source (os.Stdin) to a pipe that readline consumes.
+// When paused, it stops reading from the source so the editor can read directly from the TTY.
+type inputGate struct {
+	src    *os.File
+	r      *io.PipeReader
+	w      *io.PipeWriter
+	paused uint32 // atomic 0/1
+	stop   chan struct{}
+}
+
+func newInputGate(src *os.File) *inputGate {
+	pr, pw := io.Pipe()
+	g := &inputGate{src: src, r: pr, w: pw, stop: make(chan struct{})}
+	go g.loop()
+	return g
+}
+
+func (g *inputGate) Reader() io.ReadCloser { return g.r }
+func (g *inputGate) Pause()                 { atomic.StoreUint32(&g.paused, 1) }
+func (g *inputGate) Resume()                { atomic.StoreUint32(&g.paused, 0) }
+func (g *inputGate) Closed() bool           { return atomic.LoadUint32(&g.paused) == 2 }
+func (g *inputGate) Close() {
+	select {
+	case <-g.stop:
+		// already closed
+	default:
+		close(g.stop)
+	}
+	_ = g.r.Close()
+	_ = g.w.Close()
+	atomic.StoreUint32(&g.paused, 2)
+}
+
+func (g *inputGate) loop() {
+	buf := make([]byte, 4096)
+	for {
+		if atomic.LoadUint32(&g.paused) == 1 {
+			select {
+			case <-g.stop:
+				return
+			case <-time.After(10 * time.Millisecond):
+				continue
+			}
+		}
+		select {
+		case <-g.stop:
+			return
+		default:
+		}
+		n, err := g.src.Read(buf)
+		if n > 0 {
+			_, _ = g.w.Write(buf[:n])
+		}
+		if err != nil {
+			_ = g.w.CloseWithError(err)
+			return
+		}
+	}
+}
+
+// Flush drains any immediately available bytes from the real stdin (TTY) without forwarding them.
+func (g *inputGate) Flush() {
+	if g == nil || g.src == nil {
+		return
+	}
+	fd := int(g.src.Fd())
+	_ = unix.SetNonblock(fd, true)
+	defer func() { _ = unix.SetNonblock(fd, false) }()
+	buf := make([]byte, 8192)
+	for {
+		n, err := unix.Read(fd, buf)
+		if n <= 0 {
+			if err == nil || err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				break
+			}
+			break
+		}
+		// Continue until empty
+	}
+}
 
 
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
@@ -122,6 +207,19 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			keyESC   = rune(27) // ESC (start of Alt- bindings)
 		)
 
+		// Helper: strip certain control runes (e.g., ^X, ^E) from a rune slice
+		stripCtrl := func(rs []rune) []rune {
+			if len(rs) == 0 { return rs }
+			out := rs[:0]
+			for _, r := range rs {
+				if r == rune(0x18) || r == rune(0x05) { // ^X, ^E
+					continue
+				}
+				out = append(out, r)
+			}
+			return out
+		}
+
 		// Ctrl-Y: paste AI clipboard (from .ai edit N)
 		if key == keyCtrlY {
 			if strings.TrimSpace(aiClipboard) == "" {
@@ -141,19 +239,36 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Ctrl-X: begin chord (for Ctrl-X Ctrl-E external editor)
 		if key == keyCtrlX {
 			lastCtrlX = time.Now()
-			return nil, 0, false
+			// Consume the keystroke and actively remove any literal ^X that might have been inserted
+			nl := append([]rune(nil), line...)
+			// Remove ^X at or near cursor if present
+			const ctrlXRune = rune(0x18)
+			if pos > 0 && pos-1 < len(nl) && nl[pos-1] == ctrlXRune {
+				nl = append(nl[:pos-1], nl[pos:]...)
+				pos--
+			} else if pos < len(nl) && nl[pos] == ctrlXRune {
+				nl = append(nl[:pos], nl[pos+1:]...)
+			} else if len(nl) > 0 && nl[len(nl)-1] == ctrlXRune {
+				// Sometimes control rune lands at end
+				nl = nl[:len(nl)-1]
+				if pos > len(nl) { pos = len(nl) }
+			}
+			return nl, pos, true
 		}
 		// Ctrl-E: if recently after Ctrl-X, launch external editor
 		if key == keyCtrlE {
 			if !lastCtrlX.IsZero() && time.Since(lastCtrlX) <= 1500*time.Millisecond {
 				lastCtrlX = time.Time{}
-				edited := rlLaunchExternalEditorForReadline(string(line))
+				// Sanitize current line to avoid passing literal control chars to the editor
+				clean := stripCtrl(append([]rune(nil), line...))
+				edited := rlLaunchExternalEditorForReadline(string(clean))
 				if edited != "" {
 					new := []rune(edited)
 					return new, len(new), true
 				}
-				// If editor failed or empty, keep current line and consume
-				cur := append([]rune(nil), line...)
+				// If editor failed or empty, keep sanitized current line and consume
+				cur := clean
+				if pos > len(cur) { pos = len(cur) }
 				return cur, pos, true
 			}
 			// otherwise let default Ctrl-E behavior (move to end) proceed
@@ -316,20 +431,25 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		return nil, 0, false
 	}
 
-	rl, err := readline.NewEx(&readline.Config{
+// Build a gated stdin so we can pause input while the external editor is active
+rlInputGate = newInputGate(os.Stdin)
+rl, err := readline.NewEx(&readline.Config{
 		Prompt:          "> ",
 		HistoryFile:     historyPath,
 		AutoComplete:    createAutoCompleter(storage), // Dynamic tab completion
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
 		Listener:        readline.FuncListener(listener),
+		Stdin:           rlInputGate.Reader(),
 	})
 	if err != nil {
 		fmt.Printf("Warning: Could not initialize readline, falling back to basic input: %v\n", err)
 		runBasicInteractiveQueries(engine, storage, silent)
 		return
 	}
-	defer rl.Close()
+defer rl.Close()
+// Ensure we stop proxying input when leaving the REPL
+defer func() { if rlInputGate != nil { rlInputGate.Close(); rlInputGate = nil } }()
 
 	// Multi-line continuation state (using backslash at EOL)
 	var mlActive bool
@@ -1298,12 +1418,16 @@ func rlLaunchExternalEditorForReadline(current string) string {
 	// Safely quote path
 	shQuote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 
-	// Restore terminal for external editor, then come back
+// Pause readline input so it won't intercept keys intended for the editor
+	if rlInputGate != nil {
+		rlInputGate.Pause()
+	}
+	// Save current (raw) tty state and switch to a sane cooked mode for the editor
 	raw := rlSaveTerminalState()
-	// Try to switch to previous cooked state if available (best-effort)
-	rlRestoreTerminalState("")
+	_ = exec.Command("stty", "sane").Run()
 
 	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("%s %s", editor, shQuote(path)))
+	// Use the real TTY for the editor
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -1311,8 +1435,16 @@ func rlLaunchExternalEditorForReadline(current string) string {
 
 	// Return terminal to prior raw state
 	rlRestoreTerminalState(raw)
-	// Drain any pending bytes
-	rlDrainStdin()
+	// Drain any pending bytes that may have been queued during editor exit
+	if rlInputGate != nil {
+		// Drain multiple times with small sleeps to capture late-arriving bytes
+		for i := 0; i < 3; i++ {
+			rlInputGate.Flush()
+			time.Sleep(15 * time.Millisecond)
+		}
+		// Resume forwarding input to readline
+		rlInputGate.Resume()
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
