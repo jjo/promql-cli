@@ -1283,6 +1283,11 @@ func (r *promptREPL) Run() error {
 				for start >= 0 && strings.ContainsRune(separators, rune(text[start])) {
 					start--
 				}
+				// If we only found separators and reached start, delete just the separators
+				if start < 0 {
+					buf.DeleteBeforeCursor(pos)
+					return
+				}
 				// Find beginning of word
 				for start >= 0 && !strings.ContainsRune(separators, rune(text[start])) {
 					start--
@@ -1363,6 +1368,11 @@ func (r *promptREPL) Run() error {
 					// Skip trailing separators
 					for start >= 0 && strings.ContainsRune(separators, rune(text[start])) {
 						start--
+					}
+					// If we only found separators and reached start, delete just the separators
+					if start < 0 {
+						buf.DeleteBeforeCursor(pos)
+						return
 					}
 					// Find beginning of word
 					for start >= 0 && !strings.ContainsRune(separators, rune(text[start])) {
