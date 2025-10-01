@@ -94,7 +94,7 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 			return true
 		}
 		func() {
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				fmt.Printf("Failed to scrape %s: HTTP %d\n", uri, resp.StatusCode)
 				return
@@ -184,7 +184,7 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 			return true
 		}
 		func() {
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				fmt.Printf("Prometheus API HTTP %d\n", resp.StatusCode)
 				return
@@ -549,7 +549,7 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 			return true
 		}
 		func() {
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				fmt.Printf("Prometheus API HTTP %d\n", resp.StatusCode)
 				return

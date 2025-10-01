@@ -48,7 +48,9 @@ func TestConfigureAIComposite_OpenAI(t *testing.T) {
 	}()
 	// Clear globals relevant to provider
 	aiProviderFlag, aiOpenAIModelFlag, aiOpenAIBaseFlag = "", "", ""
-	os.Setenv("PROMQL_CLI_AI", "")
+	if err := os.Setenv("PROMQL_CLI_AI", ""); err != nil {
+		t.Fatalf("Setenv: %v", err)
+	}
 
 	ConfigureAIComposite(map[string]string{
 		"provider": "openai",

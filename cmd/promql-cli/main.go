@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/promql"
 	promparser "github.com/prometheus/prometheus/promql/parser"
 
@@ -26,8 +25,6 @@ var (
 )
 
 func init() {
-	// Initialize validation scheme to avoid panics
-	model.NameValidationScheme = model.UTF8Validation
 	// Enable experimental PromQL functions (equivalent to --enable-feature=promql-experimental-functions)
 	promparser.EnableExperimentalFunctions = true
 }
@@ -85,8 +82,7 @@ func main() {
 
 	// load subcommand
 	loadFlags := flag.NewFlagSet("load", flag.ContinueOnError)
-	var loadCmd *ffcli.Command
-	loadCmd = &ffcli.Command{
+	loadCmd := &ffcli.Command{
 		Name:       "load",
 		ShortUsage: "promql-cli [--repl=...] load <file.prom>",
 		FlagSet:    loadFlags,
@@ -250,7 +246,7 @@ func loadMetricsFromFile(storage *sstorage.SimpleStorage, filename string) error
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	return storage.LoadFromReader(file)
 }

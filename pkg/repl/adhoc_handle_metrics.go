@@ -365,7 +365,10 @@ func handleAdhocSeed(query string, storage *sstorage.SimpleStorage) bool {
 	posIdx := 0
 	for _, a := range args[2:] {
 		if strings.HasPrefix(a, "steps=") {
-			fmt.Sscanf(a, "steps=%d", &steps)
+			if _, err := fmt.Sscanf(a, "steps=%d", &steps); err != nil {
+				// ignore invalid steps value; keep default
+				_ = err
+			}
 			continue
 		}
 		if strings.HasPrefix(a, "step=") {

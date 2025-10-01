@@ -455,7 +455,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		runBasicInteractiveQueries(engine, storage, silent)
 		return
 	}
-	defer rl.Close()
+	defer func() { _ = rl.Close() }()
 	// Ensure we stop proxying input when leaving the REPL
 	defer func() {
 		if rlInputGate != nil {
@@ -1268,24 +1268,6 @@ func getRangeDurationCompletions(currentWord string) []string {
 	return out
 }
 
-// longestCommonPrefix finds the common prefix among a slice of strings (case-sensitive)
-func longestCommonPrefix(strs []string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	prefix := strs[0]
-	for _, s := range strs[1:] {
-		// Trim prefix until it is a prefix of s
-		for !strings.HasPrefix(s, prefix) {
-			if len(prefix) == 0 {
-				return ""
-			}
-			prefix = prefix[:len(prefix)-1]
-		}
-	}
-	return prefix
-}
-
 // runeLen returns the rune length of a string (readline uses rune positions)
 func runeLen(s string) int {
 	return len([]rune(s))
@@ -1379,25 +1361,6 @@ func rlRestoreTerminalState(state string) {
 	_ = cmd.Run()
 }
 
-// rlDrainStdin discards any immediately available bytes from STDIN (non-blocking)
-func rlDrainStdin() {
-	_ = unix.SetNonblock(int(os.Stdin.Fd()), true)
-	defer func() { _ = unix.SetNonblock(int(os.Stdin.Fd()), false) }()
-	buf := make([]byte, 8192)
-	for {
-		n, err := unix.Read(int(os.Stdin.Fd()), buf)
-		if n <= 0 {
-			if err == nil || err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-				break
-			}
-			break
-		}
-		if n < len(buf) {
-			// likely drained
-		}
-	}
-}
-
 // rlLaunchExternalEditorForReadline opens the current line in the user's editor and returns
 // the edited text (flattened to a single line). If the editor fails, returns empty string.
 func rlLaunchExternalEditorForReadline(current string) string {
@@ -1408,7 +1371,7 @@ func rlLaunchExternalEditorForReadline(current string) string {
 		return ""
 	}
 	path := tf.Name()
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 	if _, err := tf.WriteString(current); err != nil {
 		_ = tf.Close()
 		fmt.Printf("Failed to write temp file: %v\n", err)
@@ -1539,7 +1502,7 @@ func seedHistory(storage *sstorage.SimpleStorage, metric string, steps int, step
 				copyLabels[k] = v
 			}
 			newTs := base.Timestamp - int64((steps-i+1))*step.Milliseconds()
-			newVal := base.Value
+			var newVal float64
 			if isCounter {
 				dec := base.Value * 0.001
 				if dec < 1 {
@@ -1823,7 +1786,10 @@ func captureOutput(fn func()) (string, error) {
 	outCh := make(chan []byte)
 	go func() {
 		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
+		if _, err := io.Copy(&buf, r); err != nil {
+			// ignore copy error; capture best-effort
+			_ = err
+		}
 		outCh <- buf.Bytes()
 	}()
 	fn()
@@ -1893,7 +1859,7 @@ func RunInitCommands(engine *promql.Engine, storage *sstorage.SimpleStorage, com
 
 func handleAdhocHistory(query string, storage *sstorage.SimpleStorage) bool {
 	fields := strings.Fields(query)
-	var n int = -1
+	n := -1
 	if len(fields) == 2 {
 		if v, err := strconv.Atoi(fields[1]); err == nil && v > 0 {
 			n = v

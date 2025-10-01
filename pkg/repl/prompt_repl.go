@@ -1,10 +1,11 @@
+//go:build !noprompt
+
 package repl
 
 import (
 	"bufio"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -34,13 +35,12 @@ var (
 	metrics     []string
 	metricsHelp map[string]string // metric name -> help text
 	// recordingRuleSet marks names that come from recording rules so we can label them
-	recordingRuleSet  map[string]bool
-	replHistory       []string
-	executeOneFunc    func(string) // Function pointer to executeOne
-	globalStorage     interface{}  // Storage for accessing metrics metadata
-	inGoPromptSession bool         // true while running go-prompt REPL
-	dropdownActive    bool         // true if user opened completion with Tab
-	lastCtrlX         time.Time    // timestamp of last Ctrl-X to detect Ctrl-X Ctrl-E chord
+	recordingRuleSet map[string]bool
+	replHistory      []string
+	executeOneFunc   func(string) // Function pointer to executeOne
+	globalStorage    interface{}  // Storage for accessing metrics metadata
+	dropdownActive   bool         // true if user opened completion with Tab
+	lastCtrlX        time.Time    // timestamp of last Ctrl-X to detect Ctrl-X Ctrl-E chord
 )
 
 // promptCompleter provides completions for go-prompt
@@ -393,7 +393,7 @@ func getFileCompletions(prefix string) []prompt.Suggest {
 		base = ""
 	}
 
-	files, err := ioutil.ReadDir(dir)
+	files, err := os.ReadDir(dir)
 	if err != nil {
 		return []prompt.Suggest{}
 	}
@@ -516,7 +516,7 @@ func getFunctionSuggests(prefix string) []prompt.Suggest {
 
 // getMetricSuggests returns metric suggestions based on prefix
 func getMetricSuggests(prefix string) []prompt.Suggest {
-	if metrics == nil || len(metrics) == 0 {
+	if len(metrics) == 0 {
 		// Try to fetch metrics if not already loaded
 		fetchMetrics()
 	}
@@ -540,11 +540,10 @@ func getMetricSuggests(prefix string) []prompt.Suggest {
 				description = metricsHelp[m]
 			} else {
 				// Check for related metrics with help (e.g., base metric for _total, _bucket, _count)
-				baseName := m
 				for _, suffix := range []string{"_total", "_bucket", "_count", "_sum"} {
 					if strings.HasSuffix(m, suffix) {
-						baseName = strings.TrimSuffix(m, suffix)
-						if help, ok := metricsHelp[baseName]; ok && help != "" {
+						bn := strings.TrimSuffix(m, suffix)
+						if help, ok := metricsHelp[bn]; ok && help != "" {
 							description = help
 							break
 						}
@@ -740,7 +739,7 @@ func launchExternalEditor(buf *prompt.Buffer) {
 		return
 	}
 	path := tf.Name()
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 	// Write current buffer text
 	if _, err := tf.WriteString(buf.Text()); err != nil {
 		_ = tf.Close()
@@ -827,9 +826,6 @@ func drainFD(fd int) {
 			break
 		}
 		// Continue reading until no more data is immediately available
-		if n < len(buf) {
-			// Quick next read will likely hit EAGAIN; loop continues
-		}
 	}
 }
 
@@ -876,6 +872,7 @@ type promptREPL struct {
 	prompt *prompt.Prompt
 }
 
+//nolint:unused // used from interactive keybinds in future integrations
 func pasteAISuggestionN(buf *prompt.Buffer, n int) {
 	if n <= 0 || n > len(lastAISuggestions) {
 		return
@@ -899,11 +896,10 @@ func pasteAISuggestionN(buf *prompt.Buffer, n int) {
 
 // runAIPicker opens a temporary go-prompt to pick an AI suggestion.
 // Returns true if a selection was made (either run or edit), false if canceled.
+//
+//nolint:unused // reserved for interactive AI suggestion picker feature
 func runAIPicker(validQ []string, validE []string) bool {
 	if len(validQ) == 0 {
-		return false
-	}
-	if !inGoPromptSession {
 		return false
 	}
 
@@ -1043,7 +1039,6 @@ func (r *promptREPL) Run() error {
 	eagerCompletion := os.Getenv("PROMQL_CLI_EAGER_COMPLETION") == "true"
 
 	// Create the prompt with proper options
-	inGoPromptSession = true
 	opts := []prompt.Option{
 		prompt.OptionPrefix("PromQL> "),
 		prompt.OptionTitle("PromQL CLI"),
@@ -1586,7 +1581,6 @@ func (r *promptREPL) Run() error {
 
 	// Run the prompt - this will handle terminal restoration on exit
 	r.prompt.Run()
-	inGoPromptSession = false
 
 	// Save history when exiting normally
 	saveHistory()
@@ -1983,7 +1977,7 @@ func saveHistory() {
 	if err != nil {
 		return // Silently fail if we can't create file
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	writer := bufio.NewWriter(file)
 	// Keep only last 1000 entries
@@ -2013,16 +2007,9 @@ func appendToHistoryFile(cmd string) {
 	if err != nil {
 		return // Silently fail
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	_, _ = file.WriteString(cmd + "\n")
-}
-
-// Helper function to check if a string is a valid PromQL function
-func isPromQLFunction(s string) bool {
-	// Use the parser's function list
-	_, exists := parser.Functions[s]
-	return exists
 }
 
 // extractLastArgument extracts the last meaningful argument from a command

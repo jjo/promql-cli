@@ -565,6 +565,7 @@ func (it *SimpleIterator) Next() chunkenc.ValueType {
 	return chunkenc.ValFloat
 }
 
+//nolint:govet // Seek is intentionally not io.Seeker; matches Prometheus chunkenc.Iterator semantics
 func (it *SimpleIterator) Seek(t int64) chunkenc.ValueType {
 	for i, sample := range it.samples {
 		if sample.Timestamp >= t {
