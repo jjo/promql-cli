@@ -175,39 +175,6 @@ func containsPrefix(ss []string, prefix string) bool {
 }
 
 func TestDeletePrevWord(t *testing.T) {
-	// Create the deletePrevWord function (copy from repl.go for testing)
-	deletePrevWord := func(line []rune, pos int) ([]rune, int) {
-		if pos == 0 {
-			return line, pos
-		}
-		// Skip any separators immediately before the cursor
-		i := pos
-		for i > 0 {
-			c := byte(line[i-1])
-			if isWordBoundary(c) {
-				i--
-				continue
-			}
-			break
-		}
-		// If we only found separators and reached start, delete just the separators
-		if i == 0 {
-			newLine := append([]rune(nil), line[pos:]...)
-			return newLine, 0
-		}
-		// Then delete the previous word
-		for i > 0 {
-			c := byte(line[i-1])
-			if isWordBoundary(c) {
-				break
-			}
-			i--
-		}
-		newLine := append([]rune(nil), line[:i]...)
-		newLine = append(newLine, line[pos:]...)
-		return newLine, i
-	}
-
 	tests := []struct {
 		name     string
 		line     string

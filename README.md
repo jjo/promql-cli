@@ -157,7 +157,7 @@ sum by (<Tab>                    # → suggests relevant grouping labels
 - `Alt-D` - Delete word forward
 - `Alt-Backspace` - Delete word backward
 
-**Multi-line**: `Alt-Enter` or `\` (line continuation)
+**Multi-line**: `\` (line continuation)
 **AI**: `Ctrl-Y` (paste AI suggestion)
 **External Editor**: `Ctrl-X Ctrl-E` (open line in $EDITOR)
 

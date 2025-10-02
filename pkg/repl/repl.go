@@ -176,11 +176,6 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		state.idx = len(state.matches) // start from seed position (no selection yet)
 	}
 
-	// Helper: copy rune slice
-	copyRunes := func(src []rune) []rune {
-		return append([]rune(nil), src...)
-	}
-
 	// Helper: check if rune is a trigger character for Alt+.
 	isAltDotTriggerChar := func(r rune) bool {
 		return r == '.' || r == '>' || r == ','
@@ -268,35 +263,6 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		newLine = append(newLine, ins...)
 		newLine = append(newLine, cleanLine[cleanPos:]...)
 		return newLine, cleanPos + len(ins), true
-	}
-
-	// PromQL-aware previous-word deletion for Ctrl-W
-	deletePrevWord := func(line []rune, pos int) ([]rune, int) {
-		if pos == 0 {
-			return line, pos
-		}
-		// Find the start position for deletion
-		// First, skip trailing separators backward from cursor
-		i := pos - 1
-		for i >= 0 && isWordBoundary(byte(line[i])) {
-			i--
-		}
-		// If we only found separators (i < 0), delete only the separators
-		if i < 0 {
-			// Keep everything from pos onward
-			newLine := copyRunes(line[pos:])
-			return newLine, 0
-		}
-		// Now delete the word: skip backward through non-separators
-		for i >= 0 && !isWordBoundary(byte(line[i])) {
-			i--
-		}
-		// i is now at the last separator before the word (or -1)
-		// Delete from i+1 to pos
-		deleteStart := i + 1
-		newLine := copyRunes(line[:deleteStart])
-		newLine = append(newLine, line[pos:]...)
-		return newLine, deleteStart
 	}
 
 	// Track line state BEFORE readline processes each key
@@ -892,6 +858,40 @@ func isWordBoundary(c byte) bool {
 		c == ',' || c == '=' || c == '!' || c == '~' || c == '"' ||
 		c == '\t' || c == '\n' || c == '+' || c == '-' || c == '*' ||
 		c == '/' || c == '^' || c == '%'
+}
+
+// copyRunes creates a copy of a rune slice
+func copyRunes(src []rune) []rune {
+	return append([]rune(nil), src...)
+}
+
+// deletePrevWord implements PromQL-aware previous-word deletion for Ctrl-W
+func deletePrevWord(line []rune, pos int) ([]rune, int) {
+	if pos == 0 {
+		return line, pos
+	}
+	// Find the start position for deletion
+	// First, skip trailing separators backward from cursor
+	i := pos - 1
+	for i >= 0 && isWordBoundary(byte(line[i])) {
+		i--
+	}
+	// If we only found separators (i < 0), delete only the separators
+	if i < 0 {
+		// Keep everything from pos onward
+		newLine := copyRunes(line[pos:])
+		return newLine, 0
+	}
+	// Now delete the word: skip backward through non-separators
+	for i >= 0 && !isWordBoundary(byte(line[i])) {
+		i--
+	}
+	// i is now at the last separator before the word (or -1)
+	// Delete from i+1 to pos
+	deleteStart := i + 1
+	newLine := copyRunes(line[:deleteStart])
+	newLine = append(newLine, line[pos:]...)
+	return newLine, deleteStart
 }
 
 // getCompletions returns appropriate completions based on the query context.
