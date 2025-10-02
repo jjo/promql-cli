@@ -156,6 +156,11 @@ func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
 		}
 	}
 
+	// Handle .quit and quit - silently ignore in file execution context
+	if trimmed == ".quit" || trimmed == "quit" {
+		return true
+	}
+
 	return false
 }
 
