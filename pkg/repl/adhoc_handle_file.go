@@ -189,35 +189,99 @@ func seriesSignature(name string, lbls map[string]string) string {
 
 // ExecuteQueriesFromFile reads and executes PromQL expressions from a file
 // This is exported for use by the CLI -f flag
+// Queries are separated by blank lines, EOF is treated as query terminator
+// Supports backslash continuation within queries
 func ExecuteQueriesFromFile(engine *promql.Engine, storage *sstorage.SimpleStorage, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", path, err)
 	}
 
-	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimRight(line, "\r")
-		line = strings.TrimSpace(line)
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		lines = append(lines, line)
-	}
+	queries := parseQueriesFromContent(string(data))
 
-	if len(lines) == 0 {
+	if len(queries) == 0 {
 		fmt.Printf("No expressions found in %s\n", path)
 		return nil
 	}
 
-	// Execute each expression
-	for _, expr := range lines {
-		fmt.Printf("> %s\n", expr)
-		ExecuteQueryLine(engine, storage, expr)
+	// Execute each query
+	for _, q := range queries {
+		fmt.Printf("> %s\n", q.query)
+		ExecuteQueryLine(engine, storage, q.query)
 	}
 
 	return nil
+}
+
+// queryWithLineNum tracks a query and its starting line number for error reporting
+type queryWithLineNum struct {
+	query    string
+	startLine int
+}
+
+// parseQueriesFromContent parses multi-line queries from file content
+// Queries are separated by blank lines, backslash continues lines
+func parseQueriesFromContent(content string) []queryWithLineNum {
+	var queries []queryWithLineNum
+	var currentLines []string
+	var startLine int
+	lineNum := 0
+	inContinuation := false
+
+	for _, rawLine := range strings.Split(content, "\n") {
+		lineNum++
+		line := strings.TrimRight(rawLine, "\r")
+
+		// Start new query if this is the first non-comment, non-empty line
+		if len(currentLines) == 0 && !inContinuation {
+			startLine = lineNum
+		}
+
+		// Handle comments - skip but don't break query accumulation
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		// Check for backslash continuation (before trimming)
+		trimmedRight := strings.TrimRight(line, " \t")
+		hasBackslash := strings.HasSuffix(trimmedRight, "\\") && !strings.HasSuffix(trimmedRight, "\\\\")
+
+		if hasBackslash {
+			// Remove backslash and accumulate
+			part := strings.TrimSuffix(trimmedRight, "\\")
+			if part != "" {
+				currentLines = append(currentLines, part)
+			}
+			inContinuation = true
+			continue
+		}
+
+		// Not a continuation line
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "" {
+			// Blank line - end current query if any
+			if len(currentLines) > 0 {
+				query := strings.Join(currentLines, " ")
+				queries = append(queries, queryWithLineNum{query: query, startLine: startLine})
+				currentLines = nil
+				inContinuation = false
+			}
+			continue
+		}
+
+		// Regular line - add to current query
+		currentLines = append(currentLines, trimmed)
+		inContinuation = false
+	}
+
+	// Handle EOF - treat as query terminator if we have accumulated lines
+	if len(currentLines) > 0 {
+		query := strings.Join(currentLines, " ")
+		queries = append(queries, queryWithLineNum{query: query, startLine: startLine})
+	}
+
+	return queries
 }
 
 func handleAdhocSource(query string, storage *sstorage.SimpleStorage) bool {
