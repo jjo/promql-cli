@@ -177,3 +177,89 @@ func TestPromQL_SelectorByLabel(t *testing.T) {
 		t.Fatalf("unexpected value for code=404: got=%v want=3", vec[0].F)
 	}
 }
+
+func TestRenameMetric(t *testing.T) {
+	storage := NewSimpleStorage()
+
+	// Add some test metrics
+	storage.AddSample(map[string]string{
+		"__name__": "http_requests_total",
+		"method":   "GET",
+		"code":     "200",
+	}, 100, 1000)
+
+	storage.AddSample(map[string]string{
+		"__name__": "http_requests_total",
+		"method":   "POST",
+		"code":     "201",
+	}, 50, 2000)
+
+	storage.MetricsHelp["http_requests_total"] = "Total number of HTTP requests"
+
+	// Test successful rename
+	err := storage.RenameMetric("http_requests_total", "http_reqs")
+	if err != nil {
+		t.Fatalf("RenameMetric failed: %v", err)
+	}
+
+	// Check old metric is gone
+	if _, exists := storage.Metrics["http_requests_total"]; exists {
+		t.Error("Old metric name still exists after rename")
+	}
+
+	// Check new metric exists
+	samples, exists := storage.Metrics["http_reqs"]
+	if !exists {
+		t.Fatal("New metric name doesn't exist after rename")
+	}
+
+	// Check sample count
+	if len(samples) != 2 {
+		t.Errorf("Expected 2 samples, got %d", len(samples))
+	}
+
+	// Check __name__ labels are updated
+	for i, sample := range samples {
+		if sample.Labels["__name__"] != "http_reqs" {
+			t.Errorf("Sample %d has wrong __name__: %s", i, sample.Labels["__name__"])
+		}
+	}
+
+	// Check help text was moved
+	if help, ok := storage.MetricsHelp["http_reqs"]; !ok {
+		t.Error("Help text wasn't moved to new metric name")
+	} else if help != "Total number of HTTP requests" {
+		t.Errorf("Help text is incorrect: %s", help)
+	}
+
+	if _, ok := storage.MetricsHelp["http_requests_total"]; ok {
+		t.Error("Help text still exists for old metric name")
+	}
+}
+
+func TestRenameMetricErrors(t *testing.T) {
+	storage := NewSimpleStorage()
+
+	// Test rename on empty storage
+	err := storage.RenameMetric("nonexistent", "new_name")
+	if err == nil {
+		t.Error("Expected error for non-existent metric")
+	}
+
+	// Add a metric
+	storage.AddSample(map[string]string{
+		"__name__": "metric1",
+		"label":    "value",
+	}, 42, 1000)
+
+	// Test rename to existing name
+	storage.AddSample(map[string]string{
+		"__name__": "metric2",
+		"label":    "value",
+	}, 84, 2000)
+
+	err = storage.RenameMetric("metric1", "metric2")
+	if err == nil {
+		t.Error("Expected error when renaming to existing metric name")
+	}
+}
