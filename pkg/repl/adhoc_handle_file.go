@@ -215,7 +215,7 @@ func ExecuteQueriesFromFile(engine *promql.Engine, storage *sstorage.SimpleStora
 
 // queryWithLineNum tracks a query and its starting line number for error reporting
 type queryWithLineNum struct {
-	query    string
+	query     string
 	startLine int
 }
 
