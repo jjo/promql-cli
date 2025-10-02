@@ -108,6 +108,8 @@ func main() {
 	queryFlags := flag.NewFlagSet("query", flag.ContinueOnError)
 	oneOffQuery := queryFlags.String("query", "", "one-off query expr; exit")
 	queryFlags.StringVar(oneOffQuery, "q", "", "shorthand for --query")
+	queryFile := queryFlags.String("file", "", "file containing PromQL expressions (one per line)")
+	queryFlags.StringVar(queryFile, "f", "", "shorthand for --file")
 	rulesSpec := queryFlags.String("rules", "", "Prometheus rules: directory of .yml/.yaml or a glob (e.g., /path/*.yaml)")
 	output := queryFlags.String("output", "", "output format for -q (json)")
 	initCommands := queryFlags.String("command", "", "semicolon-separated pre-commands")
@@ -173,6 +175,13 @@ func main() {
 						fmt.Printf("Total: %d metrics, %d samples\n\n", tm, ts)
 					}
 				}
+			}
+
+			if *queryFile != "" {
+				if err := repl.ExecuteQueriesFromFile(engine, storage, *queryFile); err != nil {
+					return fmt.Errorf("error executing queries from file: %w", err)
+				}
+				return nil
 			}
 
 			if *oneOffQuery != "" {

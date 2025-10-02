@@ -9,6 +9,7 @@ import (
 	"time"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
+	"github.com/prometheus/prometheus/promql"
 )
 
 func handleAdhocSave(query string, storage *sstorage.SimpleStorage) bool {
@@ -184,6 +185,66 @@ func seriesSignature(name string, lbls map[string]string) string {
 		return name
 	}
 	return fmt.Sprintf("%s{%s}", name, strings.Join(parts, ","))
+}
+
+// ExecuteQueriesFromFile reads and executes PromQL expressions from a file
+// This is exported for use by the CLI -f flag
+func ExecuteQueriesFromFile(engine *promql.Engine, storage *sstorage.SimpleStorage, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", path, err)
+	}
+
+	var lines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimRight(line, "\r")
+		line = strings.TrimSpace(line)
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+
+	if len(lines) == 0 {
+		fmt.Printf("No expressions found in %s\n", path)
+		return nil
+	}
+
+	// Execute each expression
+	for _, expr := range lines {
+		fmt.Printf("> %s\n", expr)
+		ExecuteQueryLine(engine, storage, expr)
+	}
+
+	return nil
+}
+
+func handleAdhocSource(query string, storage *sstorage.SimpleStorage) bool {
+	rest := strings.TrimSpace(strings.TrimPrefix(query, ".source"))
+	usage := GetAdHocCommandByName(".source").Usage
+	if rest == "" {
+		fmt.Println(usage)
+		return true
+	}
+	path, _ := parsePathAndArgs(rest)
+	if path == "" {
+		fmt.Println(usage)
+		return true
+	}
+
+	// Check if replEngine is set
+	if replEngine == nil {
+		fmt.Println("Error: PromQL engine not available")
+		return true
+	}
+
+	// Use the exported function
+	if err := ExecuteQueriesFromFile(replEngine, storage, path); err != nil {
+		fmt.Printf("Error: %v\n", err)
+	}
+
+	return true
 }
 
 func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {

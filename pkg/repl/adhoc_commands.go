@@ -71,6 +71,15 @@ var AdHocCommands = []AdHocCommand{
 		},
 	},
 	{
+		Command:     ".source",
+		Description: "Execute PromQL expressions from a file (one per line)",
+		Usage:       ".source <file>",
+		Examples: []string{
+			".source queries.promql",
+			".source /path/to/expressions.txt",
+		},
+	},
+	{
 		Command:     ".save",
 		Description: "Save current store to a Prometheus text-format file",
 		Usage:       ".save <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
@@ -166,6 +175,15 @@ var AdHocCommands = []AdHocCommand{
 		Examples: []string{
 			".history",
 			".history 20",
+		},
+	},
+	{
+		Command:     ".rename",
+		Description: "Rename a metric (all series with that metric name)",
+		Usage:       ".rename <old_metric> <new_metric>",
+		Examples: []string{
+			".rename http_requests_total http_requests",
+			".rename old_metric_name new_metric_name",
 		},
 	},
 }

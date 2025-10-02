@@ -308,6 +308,28 @@ func handleAdhocKeep(query string, storage *sstorage.SimpleStorage) bool {
 	return true
 }
 
+// handleAdhocRename handles the .rename command
+func handleAdhocRename(query string, storage *sstorage.SimpleStorage) bool {
+	args := strings.Fields(strings.TrimSpace(strings.TrimPrefix(query, ".rename")))
+	if len(args) != 2 {
+		fmt.Println("Usage: .rename <old_metric> <new_metric>")
+		fmt.Println("Example: .rename http_requests_total http_requests")
+		return true
+	}
+	oldName := args[0]
+	newName := args[1]
+	if err := storage.RenameMetric(oldName, newName); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return true
+	}
+	count := len(storage.Metrics[newName])
+	fmt.Printf("Renamed %q to %q (%d series)\n", oldName, newName, count)
+	if refreshMetricsCache != nil {
+		refreshMetricsCache(storage)
+	}
+	return true
+}
+
 // .rules command: shows or sets active rules (directory, glob, or single file)
 func handleAdhocRules(query string, storage *sstorage.SimpleStorage) bool {
 	trim := strings.TrimSpace(query)

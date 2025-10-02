@@ -115,6 +115,9 @@ func (g *inputGate) Flush() {
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
 func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
+	// Set global references for adhoc commands
+	replEngine = engine
+
 	if !silent {
 		fmt.Println("Enter PromQL queries (or 'quit' to exit):")
 		fmt.Println()
@@ -960,14 +963,16 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 		if trimmed == ".help" || trimmed == ".metrics" || strings.HasPrefix(trimmed, ".help ") || strings.HasPrefix(trimmed, ".metrics ") {
 			return []string{}
 		}
-		// If after ".load " or ".save ", complete filesystem paths (current word = base name)
-		if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") {
+		// If after ".load ", ".save ", or ".source ", complete filesystem paths (current word = base name)
+		if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") || strings.HasPrefix(trimmed, ".source ") {
 			// Extract the path substring after the command token
 			var pathSoFar string
 			if strings.HasPrefix(trimmed, ".load ") {
 				pathSoFar = trimmed[len(".load "):]
-			} else {
+			} else if strings.HasPrefix(trimmed, ".save ") {
 				pathSoFar = trimmed[len(".save "):]
+			} else {
+				pathSoFar = trimmed[len(".source "):]
 			}
 			return pac.getFilePathCompletions(pathSoFar, currentWord)
 		}
@@ -1743,6 +1748,9 @@ func createAutoCompleter(storage *sstorage.SimpleStorage) readline.AutoCompleter
 
 // runBasicInteractiveQueries provides a fallback when readline is unavailable
 func runBasicInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
+	// Set global references for adhoc commands
+	replEngine = engine
+
 	if !silent {
 		fmt.Println("Using basic input mode (readline unavailable)")
 	}
@@ -1773,6 +1781,12 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleS
 
 		executeOne(engine, storage, query)
 	}
+}
+
+// ExecuteQueryLine evaluates a single PromQL expression or command and prints the result.
+// This is exported for use by adhoc commands like .source.
+func ExecuteQueryLine(engine *promql.Engine, storage *sstorage.SimpleStorage, line string) {
+	executeOne(engine, storage, line)
 }
 
 // executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
@@ -1957,6 +1971,9 @@ func getHistoryFilePath() string {
 // RunInitCommands executes semicolon-separated commands before interactive session or one-off query.
 // When silent is true, outputs produced by these commands are suppressed.
 func RunInitCommands(engine *promql.Engine, storage *sstorage.SimpleStorage, commands string, silent bool) {
+	// Set global references for adhoc commands
+	replEngine = engine
+
 	if strings.TrimSpace(commands) == "" {
 		return
 	}
