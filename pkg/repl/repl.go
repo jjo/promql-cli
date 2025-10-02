@@ -115,6 +115,9 @@ func (g *inputGate) Flush() {
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
 func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
+	// Set global references for adhoc commands
+	replEngine = engine
+
 	if !silent {
 		fmt.Println("Enter PromQL queries (or 'quit' to exit):")
 		fmt.Println()
@@ -171,11 +174,6 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			}
 		}
 		state.idx = len(state.matches) // start from seed position (no selection yet)
-	}
-
-	// Helper: copy rune slice
-	copyRunes := func(src []rune) []rune {
-		return append([]rune(nil), src...)
 	}
 
 	// Helper: check if rune is a trigger character for Alt+.
@@ -265,35 +263,6 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		newLine = append(newLine, ins...)
 		newLine = append(newLine, cleanLine[cleanPos:]...)
 		return newLine, cleanPos + len(ins), true
-	}
-
-	// PromQL-aware previous-word deletion for Ctrl-W
-	deletePrevWord := func(line []rune, pos int) ([]rune, int) {
-		if pos == 0 {
-			return line, pos
-		}
-		// Find the start position for deletion
-		// First, skip trailing separators backward from cursor
-		i := pos - 1
-		for i >= 0 && isWordBoundary(byte(line[i])) {
-			i--
-		}
-		// If we only found separators (i < 0), delete only the separators
-		if i < 0 {
-			// Keep everything from pos onward
-			newLine := copyRunes(line[pos:])
-			return newLine, 0
-		}
-		// Now delete the word: skip backward through non-separators
-		for i >= 0 && !isWordBoundary(byte(line[i])) {
-			i--
-		}
-		// i is now at the last separator before the word (or -1)
-		// Delete from i+1 to pos
-		deleteStart := i + 1
-		newLine := copyRunes(line[:deleteStart])
-		newLine = append(newLine, line[pos:]...)
-		return newLine, deleteStart
 	}
 
 	// Track line state BEFORE readline processes each key
@@ -891,6 +860,40 @@ func isWordBoundary(c byte) bool {
 		c == '/' || c == '^' || c == '%'
 }
 
+// copyRunes creates a copy of a rune slice
+func copyRunes(src []rune) []rune {
+	return append([]rune(nil), src...)
+}
+
+// deletePrevWord implements PromQL-aware previous-word deletion for Ctrl-W
+func deletePrevWord(line []rune, pos int) ([]rune, int) {
+	if pos == 0 {
+		return line, pos
+	}
+	// Find the start position for deletion
+	// First, skip trailing separators backward from cursor
+	i := pos - 1
+	for i >= 0 && isWordBoundary(byte(line[i])) {
+		i--
+	}
+	// If we only found separators (i < 0), delete only the separators
+	if i < 0 {
+		// Keep everything from pos onward
+		newLine := copyRunes(line[pos:])
+		return newLine, 0
+	}
+	// Now delete the word: skip backward through non-separators
+	for i >= 0 && !isWordBoundary(byte(line[i])) {
+		i--
+	}
+	// i is now at the last separator before the word (or -1)
+	// Delete from i+1 to pos
+	deleteStart := i + 1
+	newLine := copyRunes(line[:deleteStart])
+	newLine = append(newLine, line[pos:]...)
+	return newLine, deleteStart
+}
+
 // getCompletions returns appropriate completions based on the query context.
 func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, currentWord string) []string {
 	// Special handling for ad-hoc commands starting with '.'
@@ -960,14 +963,16 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 		if trimmed == ".help" || trimmed == ".metrics" || strings.HasPrefix(trimmed, ".help ") || strings.HasPrefix(trimmed, ".metrics ") {
 			return []string{}
 		}
-		// If after ".load " or ".save ", complete filesystem paths (current word = base name)
-		if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") {
+		// If after ".load ", ".save ", or ".source ", complete filesystem paths (current word = base name)
+		if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") || strings.HasPrefix(trimmed, ".source ") {
 			// Extract the path substring after the command token
 			var pathSoFar string
 			if strings.HasPrefix(trimmed, ".load ") {
 				pathSoFar = trimmed[len(".load "):]
-			} else {
+			} else if strings.HasPrefix(trimmed, ".save ") {
 				pathSoFar = trimmed[len(".save "):]
+			} else {
+				pathSoFar = trimmed[len(".source "):]
 			}
 			return pac.getFilePathCompletions(pathSoFar, currentWord)
 		}
@@ -1743,6 +1748,9 @@ func createAutoCompleter(storage *sstorage.SimpleStorage) readline.AutoCompleter
 
 // runBasicInteractiveQueries provides a fallback when readline is unavailable
 func runBasicInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
+	// Set global references for adhoc commands
+	replEngine = engine
+
 	if !silent {
 		fmt.Println("Using basic input mode (readline unavailable)")
 	}
@@ -1773,6 +1781,12 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleS
 
 		executeOne(engine, storage, query)
 	}
+}
+
+// ExecuteQueryLine evaluates a single PromQL expression or command and prints the result.
+// This is exported for use by adhoc commands like .source.
+func ExecuteQueryLine(engine *promql.Engine, storage *sstorage.SimpleStorage, line string) {
+	executeOne(engine, storage, line)
 }
 
 // executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
@@ -1957,6 +1971,9 @@ func getHistoryFilePath() string {
 // RunInitCommands executes semicolon-separated commands before interactive session or one-off query.
 // When silent is true, outputs produced by these commands are suppressed.
 func RunInitCommands(engine *promql.Engine, storage *sstorage.SimpleStorage, commands string, silent bool) {
+	// Set global references for adhoc commands
+	replEngine = engine
+
 	if strings.TrimSpace(commands) == "" {
 		return
 	}

@@ -288,6 +288,33 @@ func (s *SimpleStorage) AddSample(labels map[string]string, value float64, times
 	s.Metrics[name] = append(s.Metrics[name], MetricSample{Labels: lbls, Value: value, Timestamp: timestampMillis})
 }
 
+// RenameMetric renames all series with oldName to newName
+func (s *SimpleStorage) RenameMetric(oldName, newName string) error {
+	if s.Metrics == nil {
+		return fmt.Errorf("no metrics loaded")
+	}
+	samples, exists := s.Metrics[oldName]
+	if !exists {
+		return fmt.Errorf("metric %q not found", oldName)
+	}
+	if _, exists := s.Metrics[newName]; exists {
+		return fmt.Errorf("metric %q already exists", newName)
+	}
+	// Update the __name__ label in all samples
+	for i := range samples {
+		samples[i].Labels["__name__"] = newName
+	}
+	// Move to new key
+	s.Metrics[newName] = samples
+	delete(s.Metrics, oldName)
+	// Move help text if present
+	if help, ok := s.MetricsHelp[oldName]; ok {
+		s.MetricsHelp[newName] = help
+		delete(s.MetricsHelp, oldName)
+	}
+	return nil
+}
+
 // SaveOptions controls optional behaviors for SaveToWriter
 type SaveOptions struct {
 	// TimestampMode controls how timestamps are written: "keep" (default), "remove", or "set" (use FixedTimestamp)

@@ -69,6 +69,7 @@ promql-cli query -q 'up' -o json ./example.prom
 | Option | Description | Example |
 |--------|-------------|---------|
 | `-q, --query "<expr>"` | Run single query and exit | `-q 'up'` |
+| `-f, --file <file>` | Execute PromQL queries from file | `-f queries.promql` |
 | `-o, --output json` | Output JSON format (with `-q`) | `-q 'up' -o json` |
 | `-c, --command "cmds"` | Run commands before REPL/query | `-c ".scrape http://localhost:9100/metrics"` |
 | `-s, --silent` | Suppress startup output | `-s -c ".load data.prom"` |
@@ -81,16 +82,21 @@ promql-cli query -q 'up' -o json ./example.prom
 Commands you can use inside the interactive session:
 
 #### **Data Management**
+
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `.load <file> [timestamp={now,remove,<timespec>}] [regex='<series regex>']` | Load metrics (override ts and/or filter by series) | `.load metrics.prom timestamp=now regex='^up\{.*\}$'` |
 | `.save <file> [timestamp={now,remove,<timespec>}] [regex='<series regex>']` | Save metrics (override ts and/or filter by series) | `.save snapshot.prom timestamp=remove regex='http_requests_total\{.*code="5..".*\}'` |
+| `.source <file>` | Execute PromQL queries from file | `.source queries.promql` |
 | `.scrape <url> [regex] [count] [delay]` | Fetch live metrics (text exposition) | `.scrape http://localhost:9100/metrics` |
 | `.prom_scrape <api> 'query' [count] [delay] [auth=...]` | Import from Prometheus API (instant) | `.prom_scrape http://prom:9090 'up'` |
-| `.prom_scrape_range <api> 'query' <start> <end> <step> [count] [delay] [auth=...]` | Import from Prometheus API (range) | `.prom_scrape_range http://prom:9090 'rate(http_requests_total[5m])' now-1h now 30s` |
-| `.drop <metric>` | Remove metric from memory | `.drop http_requests_total` |
+| `.prom_scrape_range <api> 'query' <start> <end> <step> [count] [delay] [auth={basic\|mimir}] [user=... pass=...] [org_id=... api_key=...]` | Import from Prometheus API (range) | `.prom_scrape_range http://prom:9090 'rate(http_requests_total[5m])' now-1h now 30s` |
+| `.drop <regex>` | Remove metrics by regex from memory | `.drop http_requests_.*` |
+| `.keep <regex>` | Keep only metrics by regex from memory | `.keep http_requests_.*` |
+| `.rename <old> <new>` | Rename a metric (all series with that name) | `.rename http_requests_total http_reqs_total` |
 
 #### **Exploration**
+
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `.metrics` | List all loaded metrics | `.metrics` |
@@ -98,16 +104,21 @@ Commands you can use inside the interactive session:
 | `.timestamps <metric>` | Show timestamp info | `.timestamps http_requests_total` |
 
 #### **Time Manipulation**
+
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `.at <time> <query>` | Query at specific time | `.at now-5m rate(cpu_usage[1m])` |
-| `.pinat [time]` | Pin evaluation time | `.pinat now` |
+| `.pinat <time>` | Pin evaluation time | `.pinat now` |
 | `.seed <metric> [steps] [interval]` | Generate historical data | `.seed http_requests_total 10 1m` |
 
 #### **AI Assistance**
+
 | Command | Purpose | Example |
 |---------|---------|---------|
-| `.ai <question>` | Get AI query suggestions | `.ai show me error rates by service` |
+| `.ai ask <question>` | Get AI query suggestions | `.ai ask show me error rates by service` |
+| `.ai edit <N>` | Copy AI answer#<N> to clipboard | `.ai edit 1` |
+| `.ai run <N>` | Run AI answer#<N> as query | `.ai run 2` |
+| `.ai show` | Show all AI answers | `.ai show` |
 | `.help` | Show all commands | `.help` |
 
 ## ⚡ Advanced Features
@@ -119,7 +130,7 @@ The go-prompt backend provides context-aware PromQL suggestions (enable with `--
 - **🎯 Context-aware**: Suggests metrics, functions, and labels based on what you're typing
 - **📚 Documentation**: Shows help text and function signatures
 - **🔄 Dynamic updates**: Refreshes automatically after loading new data
-- **⌨️ Multi-line support**: Alt+Enter or backslash continuation
+- **⌨️ Multi-line support**: Backslash continuation
 
 ```promql
 # Examples of smart completion:
@@ -132,10 +143,23 @@ sum by (<Tab>                    # → suggests relevant grouping labels
 
 ### ⌨️ Key Bindings
 
-**Navigation**: `Ctrl-A/E` (line start/end), `Alt-B/F` (word movement), `↑/↓` (prefix-filtered history)
-**Editing**: `Ctrl-K/U/W` (delete to end/start/word), `Alt-D/Backspace` (delete word forward/back)
-**Multi-line**: `Alt-Enter` or `\` (line continuation)
+**Navigation**
+
+- `Ctrl-A/E` - Jump to line start/end
+- `Alt-B/F` - Move backward/forward by word
+- `↑/↓` - Prefix-filtered history search
+- `Alt-.` - Insert/cycle last argument from history (like bash yank-last-arg)
+
+**Editing**
+
+- `Ctrl-K/U` - Delete to end/start of line
+- `Ctrl-W`, `Ctrl-Backspace` - Delete previous word (PromQL-aware: respects `(){},.` as boundaries)
+- `Alt-D` - Delete word forward
+- `Alt-Backspace` - Delete word backward
+
+**Multi-line**: `\` (line continuation)
 **AI**: `Ctrl-Y` (paste AI suggestion)
+**External Editor**: `Ctrl-X Ctrl-E` (open line in $EDITOR)
 
 ### 🤖 AI Configuration
 
@@ -170,6 +194,7 @@ The `--ai` flag lets you configure all AI settings in one place:
 ```
 
 **Supported keys:**
+
 - `provider` - AI provider (openai|claude|grok|ollama)
 - `model` - Model name to use
 - `base` - Custom API base URL
@@ -188,6 +213,7 @@ The `--ai` flag lets you configure all AI settings in one place:
 #### Configuration Priority
 
 Settings are applied in this order (later overrides earlier):
+
 1. Profile file (`~/.config/promql-cli/ai.toml`)
 2. Environment variables (`PROMQL_CLI_AI` or individual vars)
 3. Command line `--ai` flag
@@ -223,21 +249,24 @@ Import series from a remote Prometheus-compatible API directly into the in-memor
 - Instant import (vector/matrix/scalar via /api/v1/query):
 
 ```bash
-.prom_scrape <PROM_API_URI> 'query' [count] [delay] [auth=basic|mimir] [user=...] [pass=...] [org_id=...] [api_key=...]
+.prom_scrape <PROM_API_URI> 'query' [count] [delay] [auth={basic|mimir}] [user=... pass=...] [org_id=... api_key=...]
 ```
 
 - Range import (matrix via /api/v1/query_range):
 
 ```bash
-.prom_scrape_range <PROM_API_URI> 'query' <start> <end> <step> [count] [delay] [auth=basic|mimir] [user=...] [pass=...] [org_id=...] [api_key=...]
+.prom_scrape_range <PROM_API_URI> 'query' <start> <end> <step> [count] [delay] [auth={basic|mimir}] [user=... pass=...] [org_id=... api_key=...]
 ```
 
 Notes:
-- PROM_API_URI can be the root (http://host:9090), the API root (…/api/v1), or full endpoint (…/api/v1/query[_range]).
+
+- PROM_API_URI can be the root (http://host:9090), the API root (`/api/v1`), or full endpoint (`/api/v1/query[_range]`).
 - count repeats the import N times; delay waits between repeats (e.g., 10s).
 - If auth is omitted, it will be inferred from provided credentials (user/pass => basic, org_id/api_key => mimir).
+- HTTP errors now display detailed error messages from the Prometheus API (e.g., "parse error: unexpected character")
 
 Auth options:
+
 - Basic auth: sets Authorization: Basic base64(user:pass)
 
 ```bash
@@ -252,17 +281,68 @@ Auth options:
 
 After importing, use `.metrics`, `.labels <metric>`, and run PromQL normally on the imported data.
 
+### 📄 Executing Queries from Files (.source and -f flag)
+
+Run multiple PromQL queries from a file, displaying each expression and its result:
+
+```bash
+# From the CLI
+promql-cli query -f queries.promql metrics.prom
+
+# From within the REPL
+.source queries.promql
+```
+
+**File format:**
+
+- One PromQL expression per line
+- Lines starting with `#` are treated as comments
+- Empty lines are ignored
+
+**Example file (queries.promql):**
+
+```promql
+# Check service availability
+up
+
+# Calculate error rate
+rate(http_requests_total{code=~"5.."}[5m])
+
+# Top 5 memory consumers
+topk(5, process_resident_memory_bytes)
+```
+
+**Output format:**
+
+```promql
+> up
+Vector (3 samples):
+  [1] {instance="localhost:9090", job="prometheus"} => 1 @ ...
+  ...
+
+> rate(http_requests_total{code=~"5.."}[5m])
+Vector (2 samples):
+  ...
+```
+
+This feature is perfect for:
+
+- Running query suites for testing
+- Documenting and sharing query collections
+- Automated metric validation in CI/CD pipelines
+
 ### 🕒 Timestamp and regex options for .save and .load
 
 Both `.save` and `.load` accept an optional timestamp argument to control timestamps:
 
 - Syntax: `timestamp={now|remove|<timespec>}`
 - `<timespec>` supports the same formats as `.pinat`/`.at`:
-  - `now`, `now±<duration>` (e.g., `now-5m`, `now+1h`)
+  - `now`, `now-<duration>` (e.g., `now-5m`, `now+1h`)
   - RFC3339 (e.g., `2025-10-01T12:00:00Z`)
   - Unix seconds or milliseconds
 
 Examples:
+
 ```bash
 .save snapshot.prom timestamp=remove                # write without timestamps
 .save snapshot.prom timestamp=now-10m               # write with a fixed timestamp
@@ -271,6 +351,7 @@ Examples:
 ```
 
 Notes:
+
 - For `.load`, the timestamp override applies only to the samples loaded by that command; existing samples are unchanged.
 - For `.save`, the timestamp override affects how timestamps are written to the output file; it does not modify in-memory data.
 
@@ -378,6 +459,7 @@ docker run --rm promql-cli:latest query \
   -q "up{job='test-exporter'} == 1" \
   -o json | jq '.data.result | length > 0'
 ```
+
 </details>
 
 <details>
@@ -389,6 +471,7 @@ Test Prometheus alert rules against historical data:
 promql-cli query -c ".load historical-data.prom; .pinat 2023-12-01T10:00:00Z"
 > rate(errors_total[5m]) > 0.1  # Test your alert condition
 ```
+
 </details>
 
 <details>
@@ -404,6 +487,7 @@ promql-cli query snapshot-before.prom
 promql-cli query snapshot-after.prom
 > .load /tmp/before-analysis.prom     # Load both for comparison
 ```
+
 </details>
 
 ## 🐳 Docker Usage
@@ -435,6 +519,7 @@ make test
 ```
 
 **Runtime options:**
+
 - Both REPL backends are built into the binary.
 - Default backend: readline (portable, minimal dependencies).
 - For advanced, rich UI with autocompletion, run with `--repl=prompt`.

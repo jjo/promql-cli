@@ -422,3 +422,65 @@ func TestAdhoc_Seed_KVAndPositional(t *testing.T) {
 		t.Fatalf("expected at least %d samples after positional seeding, got %d", kvCount+2, posCount)
 	}
 }
+
+func TestAdhoc_Rename_SuccessfulRename(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+
+	// Add test metrics
+	storage.AddSample(map[string]string{
+		"__name__": "old_metric",
+		"label":    "value1",
+	}, 100, 1000)
+
+	storage.AddSample(map[string]string{
+		"__name__": "old_metric",
+		"label":    "value2",
+	}, 200, 2000)
+
+	// Test successful rename
+	out := captureStdout(t, func() {
+		if !handleAdhocRename(".rename old_metric new_metric", storage) {
+			t.Fatal("handleAdhocRename should have returned true")
+		}
+	})
+
+	if !strings.Contains(out, "Renamed") {
+		t.Errorf("Expected success message, got: %s", out)
+	}
+
+	// Verify rename worked
+	if _, exists := storage.Metrics["old_metric"]; exists {
+		t.Error("Old metric still exists")
+	}
+
+	if samples, exists := storage.Metrics["new_metric"]; !exists {
+		t.Error("New metric doesn't exist")
+	} else if len(samples) != 2 {
+		t.Errorf("Expected 2 samples, got %d", len(samples))
+	}
+}
+
+func TestAdhoc_Rename_Usage(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+
+	testCases := []struct {
+		cmd string
+	}{
+		{".rename"},
+		{".rename only_one_arg"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.cmd, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				if !handleAdhocRename(tc.cmd, storage) {
+					t.Fatal("handleAdhocRename should have returned true")
+				}
+			})
+
+			if !strings.Contains(out, "Usage:") {
+				t.Errorf("Expected usage message, got: %s", out)
+			}
+		})
+	}
+}

@@ -186,8 +186,8 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			return emptySuggestions
 		}
 
-		// Check if we're after .load or .save for file completions
-		if strings.Contains(text, ".load ") || strings.Contains(text, ".save ") {
+		// Check if we're after .load, .save, or .source for file completions
+		if strings.Contains(text, ".load ") || strings.Contains(text, ".save ") || strings.Contains(text, ".source ") {
 			if lastSpace := strings.LastIndex(text, " "); lastSpace != -1 {
 				pathPrefix := text[lastSpace+1:]
 				return getFileCompletions(pathPrefix)

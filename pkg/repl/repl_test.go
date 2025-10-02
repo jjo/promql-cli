@@ -173,3 +173,69 @@ func containsPrefix(ss []string, prefix string) bool {
 	}
 	return false
 }
+
+func TestDeletePrevWord(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		pos      int
+		wantLine string
+		wantPos  int
+	}{
+		{
+			name:     "delete word with separator after cursor (OK case from bug report)",
+			line:     "sum by (foo)(foobar)",
+			pos:      8, // cursor after "sum by (" at position of 'f'
+			wantLine: "sum foo)(foobar)",
+			wantPos:  4, // should delete "by (", leaving "sum "
+		},
+		{
+			name:     "delete word when cursor is at beginning of word after separator (BUG case)",
+			line:     "sum foo)(foobar)",
+			pos:      4, // cursor after "sum "
+			wantLine: "foo)(foobar)",
+			wantPos:  0, // should delete "sum " not entire line
+		},
+		{
+			name:     "delete word in middle",
+			line:     "sum by job",
+			pos:      10, // cursor at end
+			wantLine: "sum by ",
+			wantPos:  7,
+		},
+		{
+			name:     "delete word with parenthesis",
+			line:     "sum(rate(foo))",
+			pos:      9, // cursor after "sum(rate("
+			wantLine: "sum(foo))",
+			wantPos:  4,
+		},
+		{
+			name:     "cursor at beginning",
+			line:     "sum by job",
+			pos:      0,
+			wantLine: "sum by job",
+			wantPos:  0,
+		},
+		{
+			name:     "only separators before cursor",
+			line:     "  foo",
+			pos:      2, // cursor after "  "
+			wantLine: "foo",
+			wantPos:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotLine, gotPos := deletePrevWord([]rune(tt.line), tt.pos)
+			gotLineStr := string(gotLine)
+			if gotLineStr != tt.wantLine {
+				t.Errorf("deletePrevWord() line = %q, want %q", gotLineStr, tt.wantLine)
+			}
+			if gotPos != tt.wantPos {
+				t.Errorf("deletePrevWord() pos = %d, want %d", gotPos, tt.wantPos)
+			}
+		})
+	}
+}

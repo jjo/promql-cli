@@ -6,6 +6,7 @@ import (
 	"time"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
+	"github.com/prometheus/prometheus/promql"
 )
 
 // pinnedEvalTime, when set, forces future query evaluation to use this timestamp.
@@ -15,6 +16,10 @@ var pinnedEvalTime *time.Time
 // refreshMetricsCache is a function pointer to refresh the metrics cache for autocompletion
 // It's set by the prompt backend when active
 var refreshMetricsCache func(*sstorage.SimpleStorage)
+
+// replEngine is set when the REPL starts,
+// allowing adhoc commands (like .source) to access it
+var replEngine *promql.Engine
 
 // handleAdHocFunction handles special ad-hoc functions that are not part of PromQL
 func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
@@ -102,6 +107,13 @@ func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
 		}
 	}
 
+	// Handle .source <file>
+	if strings.HasPrefix(trimmed, ".source ") || trimmed == ".source" {
+		if handled := handleAdhocSource(trimmed, storage); handled {
+			return true
+		}
+	}
+
 	// Handle .pinat <time|now|remove>
 	if strings.HasPrefix(trimmed, ".pinat") {
 		if handled := handleAdhocPinAt(trimmed, storage); handled {
@@ -135,6 +147,18 @@ func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
 		if handled := handleAdhocSeed(trimmed, storage); handled {
 			return true
 		}
+	}
+
+	// Handle .rename <old_metric> <new_metric>
+	if strings.HasPrefix(trimmed, ".rename ") || trimmed == ".rename" {
+		if handled := handleAdhocRename(trimmed, storage); handled {
+			return true
+		}
+	}
+
+	// Handle .quit and quit - silently ignore in file execution context
+	if trimmed == ".quit" || trimmed == "quit" {
+		return true
 	}
 
 	return false
