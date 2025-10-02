@@ -323,7 +323,7 @@ func handleAdhocRename(query string, storage *sstorage.SimpleStorage) bool {
 		return true
 	}
 	count := len(storage.Metrics[newName])
-	fmt.Printf("Renamed %q to %q (%d series)\n", oldName, newName, count)
+	fmt.Printf("Renamed %q to %q (%d samples)\n", oldName, newName, count)
 	if refreshMetricsCache != nil {
 		refreshMetricsCache(storage)
 	}
