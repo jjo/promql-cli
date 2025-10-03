@@ -7,6 +7,16 @@
 
 > **A lightweight PromQL playground and REPL for rapid Prometheus metric exploration**
 
+<!--
+![Demo Animation](docs/demo.gif)
+TODO: Add animated GIF showing:
+  - Starting promql-cli with a metrics file
+  - Tab-completion of metric names and labels
+  - Running a query with instant results
+  - Using .ai ask for query suggestions
+  - Key bindings in action (Ctrl-W, Alt-., history search)
+-->
+
 TL;DR: prometheus-less promQL CLI that can load metrics files, scrape
 live endpoints (including prometheus itself), and basic get AI help.
 
@@ -27,7 +37,44 @@ debugging metrics, and learning PromQL.
 - 🎯 **Developer-friendly** with prefix-based history and multi-line editing
 - 📦 **Zero-config** - works with any Prometheus text-format metrics
 
+## 🎬 Quick Examples
+
+```bash
+# Scrape live metrics and explore
+promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"
+
+# Test an exporter with repeated scraping (3 times, 10s apart)
+promql-cli query -c ".scrape http://localhost:9123/metrics ^my_metric 3 10s"
+
+# Analyze a metrics file and get AI query suggestions
+promql-cli query ./metrics.prom
+> .ai ask show me error rates by service
+
+# Run queries from a file and save results
+promql-cli query -f queries.promql metrics.prom > results.txt
+
+# Quick one-shot query with JSON output
+promql-cli query -q 'rate(http_requests_total[5m])' -o json metrics.prom | jq
+```
+
 ## 🏃‍♂️ Quick Start
+
+### Try Without Installing (Docker)
+
+No installation needed! Try it immediately with Docker:
+
+```bash
+# Try it instantly - scrape node_exporter metrics
+docker run --rm -it --net=host xjjo/promql-cli:latest query \
+  -c ".scrape http://localhost:9100/metrics; .metrics"
+
+# Or with your own metrics file
+docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query /data/metrics.prom
+
+# One-shot query with JSON output
+docker run --rm -v "$PWD":/data xjjo/promql-cli:latest query \
+  -q 'rate(http_requests_total[5m])' -o json /data/metrics.prom | jq
+```
 
 ### Installation
 
@@ -54,6 +101,231 @@ promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"
 promql-cli query -q 'up' -o json ./example.prom
 ```
 
+## 🎯 Why Use promql-cli?
+
+### 🚀 Exporter Development
+
+**Problem**: You're developing a Prometheus exporter and need to quickly test metrics output.
+
+**Solution**: Use promql-cli for rapid iteration during development:
+
+```bash
+# Start your exporter development loop
+promql-cli query -c ".scrape http://localhost:9123/metrics ^awesome_metric 3 10s; .pinat now"
+> .labels awesome_metric_total    # Explore your metric's labels
+> rate(awesome_metric_total[30s]) # Test rate calculations
+```
+
+**Why it's better**: No need to set up Prometheus just to test your metrics during development.
+
+### 📊 Kubernetes Metric Investigation
+
+**Problem**: You need to debug metrics from a pod in your K8s cluster.
+
+**Solution**: Port-forward and capture metrics for offline analysis:
+
+```bash
+# Port-forward the service
+kubectl -n production port-forward svc/my-app 9090:9090 &
+
+# Capture and explore
+promql-cli query -c ".scrape http://localhost:9090/metrics 6 10s; .save debug-snapshot.prom"
+> .labels http_requests_total{job="my-app"}  # Find problematic series
+> histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[1m]))
+```
+
+**Why it's better**: Work offline, share snapshots with your team, and avoid hitting production systems repeatedly.
+
+### 🎓 PromQL Learning & Validation
+
+**Problem**: Learning PromQL syntax and testing alert rules.
+
+**Solution**: Use synthetic data and AI assistance:
+
+```bash
+# Create realistic test data
+promql-cli query ./sample-metrics.prom
+> .seed http_requests_total steps=20 step=1m  # Generate historical data
+> .ai show me error rate over time            # Get AI suggestions
+> rate(http_requests_total{code=~"5.."}[5m]) / rate(http_requests_total[5m])
+```
+
+**Why it's better**: Learn with real-looking data, get AI help, and validate queries before deploying alerts.
+
+### 🔍 System Performance Analysis
+
+**Problem**: You want to quickly check system metrics without setting up monitoring.
+
+**Solution**: One-liner performance analysis:
+
+```bash
+# Quick system overview
+docker run -d --name=node-exporter --net="host" --pid="host" \
+  -v "/:/host:ro,rslave" prom/node-exporter:latest --path.rootfs=/host
+
+promql-cli query -c ".scrape http://localhost:9100/metrics ^node 5 2s; .pinat now" \
+  -q 'topk(5, rate(node_network_transmit_bytes_total[10s]))'
+
+# Clean up
+docker rm -f node-exporter
+```
+
+**Why it's better**: No permanent monitoring setup required, perfect for quick investigations.
+
+<details>
+<summary><strong>⚡ More Use Cases (click to expand)</strong></summary>
+
+**CI/CD Integration** - Validate exporter metrics in your CI pipeline:
+
+```bash
+docker run --rm promql-cli:latest query \
+  -c ".scrape http://test-exporter:8080/metrics" \
+  -q "up{job='test-exporter'} == 1" \
+  -o json | jq '.data.result | length > 0'
+```
+
+**Alert Rule Testing** - Test Prometheus alert rules against historical data:
+
+```bash
+promql-cli query -c ".load historical-data.prom; .pinat 2023-12-01T10:00:00Z"
+> rate(errors_total[5m]) > 0.1  # Test your alert condition
+```
+
+**Metric Comparison** - Compare metrics between different time periods or environments:
+
+```bash
+promql-cli query snapshot-before.prom
+> .save /tmp/before-analysis.prom
+promql-cli query snapshot-after.prom
+> .load /tmp/before-analysis.prom     # Load both for comparison
+```
+
+</details>
+
+## 🎓 5-Minute Tutorial
+
+Want to get hands-on? Follow this quick tutorial:
+
+**Step 1: Get sample metrics**
+```bash
+# Create a sample metrics file with realistic data
+cat > tutorial.prom <<'EOF'
+# HELP http_requests_total Total HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{method="GET",code="200",service="api"} 1543 1704067200000
+http_requests_total{method="GET",code="404",service="api"} 23 1704067200000
+http_requests_total{method="GET",code="500",service="api"} 5 1704067200000
+http_requests_total{method="POST",code="200",service="api"} 892 1704067200000
+http_requests_total{method="POST",code="500",service="api"} 12 1704067200000
+
+# HELP process_cpu_seconds_total Total CPU time
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total{service="api"} 45.3 1704067200000
+process_cpu_seconds_total{service="db"} 123.7 1704067200000
+EOF
+```
+
+**Step 2: Start exploring**
+```bash
+promql-cli query --repl=prompt tutorial.prom
+```
+
+**Step 3: Try these commands in the REPL**
+```promql
+# See what metrics are available
+> .metrics
+
+# Explore labels for a specific metric
+> .labels http_requests_total
+
+# Run your first query - see all HTTP requests
+> http_requests_total
+
+# Calculate error rate (5xx errors)
+> rate(http_requests_total{code="500"}[5m])
+
+# Get total requests by method
+> sum by (method) (http_requests_total)
+
+# Find error percentage
+> sum(http_requests_total{code=~"5.."}) / sum(http_requests_total) * 100
+
+# Generate historical data to test rate() properly
+> .seed http_requests_total 20 30s
+
+# Now calculate actual rate
+> rate(http_requests_total[2m])
+```
+
+**Step 4: Try AI assistance** (requires API key)
+```bash
+# Set your API key first
+export ANTHROPIC_API_KEY="your-key-here"
+# or
+export OPENAI_API_KEY="your-key-here"
+
+# Start with AI enabled
+promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
+```
+
+```promql
+# Ask AI for help
+> .ai ask show me the error rate by service
+
+# Run one of the AI suggestions
+> .ai run 1
+
+# Get more creative queries
+> .ai ask which service has the highest CPU usage
+```
+
+**Step 5: Save your work**
+```bash
+# Save modified metrics (with generated history)
+> .save tutorial-with-history.prom
+
+# Exit
+> .quit
+```
+
+🎉 **Congratulations!** You now know the basics. Check out the sections below for advanced features.
+
+## 🔄 promql-cli vs Alternatives
+
+| Feature / Task | promql-cli | Prometheus + Grafana | promtool |
+|----------------|------------|----------------------|----------|
+| **Setup time** | < 1 minute | 15-30 minutes | < 1 minute |
+| **Query metrics file** | ✅ Native | ❌ Need import | ✅ Limited |
+| **Interactive REPL** | ✅ Rich w/ autocomplete | ➖ Web UI only | ❌ No |
+| **AI query assistance** | ✅ Built-in | ❌ No | ❌ No |
+| **Offline usage** | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Generate test data** | ✅ `.seed` command | ➖ Manual | ❌ No |
+| **Scrape live endpoints** | ✅ `.scrape` command | ✅ Config required | ❌ No |
+| **Test alert rules** | ✅ `--rules` flag | ✅ Full featured | ✅ Limited |
+| **JSON output** | ✅ `-o json` | ✅ API | ✅ Yes |
+| **Multi-line queries** | ✅ Native | ✅ Yes | ❌ No |
+| **Visualization** | ❌ No | ✅ Graphs/dashboards | ❌ No |
+| **Time-series storage** | ➖ In-memory only | ✅ Persistent | ❌ No |
+| **Best for** | Dev/debug/learn | Production monitoring | CI/CD validation |
+
+**When to use promql-cli:**
+- 🚀 Developing/testing Prometheus exporters
+- 🐛 Debugging metrics offline
+- 📚 Learning PromQL interactively
+- 🧪 Testing queries before deploying to production
+- 💻 Quick metric analysis without infrastructure
+
+**When to use Prometheus + Grafana:**
+- 📈 Production monitoring with alerts
+- 📊 Visual dashboards and graphs
+- 🗄️ Long-term metric storage
+- 👥 Team collaboration and sharing
+
+**When to use promtool:**
+- ✅ CI/CD pipeline validation
+- 🔍 Rule syntax checking
+- 📋 Non-interactive testing
+
 ## 📋 Command Reference
 
 ### CLI Commands
@@ -66,60 +338,78 @@ promql-cli query -q 'up' -o json ./example.prom
 
 ### CLI Options
 
-| Option | Description | Example |
-|--------|-------------|---------|
-| `-q, --query "<expr>"` | Run single query and exit | `-q 'up'` |
-| `-f, --file <file>` | Execute PromQL queries from file | `-f queries.promql` |
-| `-o, --output json` | Output JSON format (with `-q`) | `-q 'up' -o json` |
-| `-c, --command "cmds"` | Run commands before REPL/query | `-c ".scrape http://localhost:9100/metrics"` |
-| `-s, --silent` | Suppress startup output | `-s -c ".load data.prom"` |
-| `--rules {dir/,fileglob.yml}` | Load alerting/recording rules file | `--rules example-rules.yml` |
-| `--repl {prompt\|readline}` | Choose REPL backend (default: readline) | `--repl prompt` |
-| `--ai "key=value,..."` | Configure AI settings in one flag | `--ai "provider=claude,model=opus,answers=5"` |
+| Option | Description | When to Use | Example |
+|--------|-------------|-------------|---------|
+| `-q, --query "<expr>"` | Run single query and exit | Scripting, CI/CD, quick checks | `-q 'up'` |
+| `-f, --file <file>` | Execute PromQL queries from file | Batch query execution, testing suites | `-f queries.promql` |
+| `-o, --output json` | Output JSON format (with `-q`) | Piping to jq, programmatic parsing | `-q 'up' -o json` |
+| `-c, --command "cmds"` | Run commands before REPL/query | Automating data loading, setup | `-c ".scrape http://localhost:9100/metrics"` |
+| `-s, --silent` | Suppress startup output | Scripts, clean output | `-s -c ".load data.prom"` |
+| `--rules {dir/,fileglob.yml}` | Load alerting/recording rules | Testing alert rules | `--rules example-rules.yml` |
+| `--repl {prompt\|readline}` | Choose REPL backend | Use `prompt` for autocompletion | `--repl prompt` |
+| `--ai "key=value,..."` | Configure AI settings in one flag | Query suggestions, learning PromQL | `--ai "provider=claude,model=opus"` |
 
-### 🤖 REPL Commands
+### 🤖 REPL Commands (Grouped by Workflow)
 
-Commands you can use inside the interactive session:
+#### **Getting Started with Data**
 
-#### **Data Management**
+| Command | What it does | Example |
+|---------|--------------|---------|
+| `.load <file> [timestamp=...] [regex='...']` | Load metrics from file | `.load metrics.prom` |
+| `.scrape <url> [regex] [count] [delay]` | Fetch live metrics from HTTP endpoint | `.scrape http://localhost:9100/metrics` |
+| `.prom_scrape <api> 'query' [...]` | Import instant data from Prometheus API | `.prom_scrape http://prom:9090 'up'` |
+| `.source <file>` | Run queries from a file | `.source queries.promql` |
 
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `.load <file> [timestamp={now,remove,<timespec>}] [regex='<series regex>']` | Load metrics (override ts and/or filter by series) | `.load metrics.prom timestamp=now regex='^up\{.*\}$'` |
-| `.save <file> [timestamp={now,remove,<timespec>}] [regex='<series regex>']` | Save metrics (override ts and/or filter by series) | `.save snapshot.prom timestamp=remove regex='http_requests_total\{.*code="5..".*\}'` |
-| `.source <file>` | Execute PromQL queries from file | `.source queries.promql` |
-| `.scrape <url> [regex] [count] [delay]` | Fetch live metrics (text exposition) | `.scrape http://localhost:9100/metrics` |
-| `.prom_scrape <api> 'query' [count] [delay] [auth=...]` | Import from Prometheus API (instant) | `.prom_scrape http://prom:9090 'up'` |
-| `.prom_scrape_range <api> 'query' <start> <end> <step> [count] [delay] [auth={basic\|mimir}] [user=... pass=...] [org_id=... api_key=...]` | Import from Prometheus API (range) | `.prom_scrape_range http://prom:9090 'rate(http_requests_total[5m])' now-1h now 30s` |
-| `.drop <regex>` | Remove metrics by regex from memory | `.drop http_requests_.*` |
-| `.keep <regex>` | Keep only metrics by regex from memory | `.keep http_requests_.*` |
-| `.rename <old> <new>` | Rename a metric (all series with that name) | `.rename http_requests_total http_reqs_total` |
+#### **Exploring Your Metrics**
 
-#### **Exploration**
+| Command | What it does | Example |
+|---------|--------------|---------|
+| `.metrics` | List all available metrics | `.metrics` |
+| `.labels <metric>` | Show what labels a metric has | `.labels http_requests_total` |
+| `.timestamps <metric>` | Check timestamp information | `.timestamps http_requests_total` |
 
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `.metrics` | List all loaded metrics | `.metrics` |
-| `.labels <metric>` | Show labels for a metric | `.labels http_requests_total` |
-| `.timestamps <metric>` | Show timestamp info | `.timestamps http_requests_total` |
+#### **Testing & Debugging Queries**
 
-#### **Time Manipulation**
+| Command | What it does | Example |
+|---------|--------------|---------|
+| `.seed <metric> [steps] [interval]` | Generate test data history | `.seed http_requests_total 20 30s` |
+| `.pinat <time>` | Lock evaluation time (for testing) | `.pinat now-1h` |
+| `.at <time> <query>` | Run query at specific time | `.at now-5m rate(cpu[1m])` |
 
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `.at <time> <query>` | Query at specific time | `.at now-5m rate(cpu_usage[1m])` |
-| `.pinat <time>` | Pin evaluation time | `.pinat now` |
-| `.seed <metric> [steps] [interval]` | Generate historical data | `.seed http_requests_total 10 1m` |
+#### **Managing Metrics**
 
-#### **AI Assistance**
+| Command | What it does | Example |
+|---------|--------------|---------|
+| `.save <file> [timestamp=...] [regex='...']` | Export metrics to file | `.save snapshot.prom timestamp=remove` |
+| `.rename <old> <new>` | Rename a metric | `.rename old_name new_name` |
+| `.drop <regex>` | Delete metrics matching regex | `.drop test_.*` |
+| `.keep <regex>` | Keep only matching metrics | `.keep important_.*` |
 
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `.ai ask <question>` | Get AI query suggestions | `.ai ask show me error rates by service` |
-| `.ai edit <N>` | Copy AI answer#<N> to clipboard | `.ai edit 1` |
-| `.ai run <N>` | Run AI answer#<N> as query | `.ai run 2` |
-| `.ai show` | Show all AI answers | `.ai show` |
-| `.help` | Show all commands | `.help` |
+#### **AI-Powered Query Help**
+
+| Command | What it does | Example |
+|---------|--------------|---------|
+| `.ai ask <question>` | Get query suggestions from AI | `.ai ask show me error rates` |
+| `.ai run <N>` | Execute AI suggestion #N | `.ai run 1` |
+| `.ai edit <N>` | Copy AI suggestion #N to clipboard | `.ai edit 2` |
+| `.ai show` | Show all previous AI answers | `.ai show` |
+
+#### **Advanced Data Import**
+
+<details>
+<summary>Click to expand: Prometheus API range queries and authentication</summary>
+
+| Command | What it does | Example |
+|---------|--------------|---------|
+| `.prom_scrape_range <api> 'query' <start> <end> <step> [auth=...] [...]` | Import time-range data from Prometheus | `.prom_scrape_range http://prom:9090 'rate(http[5m])' now-1h now 30s` |
+
+**Authentication options:**
+- Basic auth: `auth=basic user=alice pass=secret`
+- Mimir/tenant: `auth=mimir org_id=tenant1 api_key=$KEY`
+
+</details>
+
+**💡 Tip:** Type `.help` in the REPL to see all commands with descriptions.
 
 ## ⚡ Advanced Features
 
@@ -141,25 +431,36 @@ http_requests_total{code="<Tab>  # → shows real label values
 sum by (<Tab>                    # → suggests relevant grouping labels
 ```
 
-### ⌨️ Key Bindings
+### ⌨️ Keyboard Shortcuts Cheat Sheet
 
-**Navigation**
+Enable with `--repl=prompt` for full keyboard support.
 
-- `Ctrl-A/E` - Jump to line start/end
-- `Alt-B/F` - Move backward/forward by word
-- `↑/↓` - Prefix-filtered history search
-- `Alt-.` - Insert/cycle last argument from history (like bash yank-last-arg)
+| Action | Shortcut | Notes |
+|--------|----------|-------|
+| **Navigation** |
+| Jump to start/end of line | `Ctrl-A` / `Ctrl-E` | Like bash/emacs |
+| Move by word | `Alt-B` / `Alt-F` | Backward/Forward |
+| Search history (prefix) | `↑` / `↓` | Type prefix first, then arrow keys |
+| Insert last argument | `Alt-.` | Cycles through previous args (bash-style) |
+| **Editing** |
+| Delete to line end/start | `Ctrl-K` / `Ctrl-U` | Kill to end/beginning |
+| Delete previous word | `Ctrl-W` or `Ctrl-Backspace` | PromQL-aware (respects `(){},.`) |
+| Delete forward word | `Alt-D` | |
+| Delete backward word | `Alt-Backspace` | |
+| **Multi-line Queries** |
+| Line continuation | `\` (backslash at end) | Continue query on next line |
+| Literal newline | `Alt-Enter` | Insert actual newline |
+| **AI & External Tools** |
+| Paste AI suggestion | `Ctrl-Y` | After `.ai edit N` |
+| Open in external editor | `Ctrl-X Ctrl-E` | Uses `$EDITOR` (vim, nano, etc.) |
+| **Completion** |
+| Trigger completion | `Tab` | Context-aware PromQL completion |
+| Accept completion | `Enter` or `→` | |
 
-**Editing**
-
-- `Ctrl-K/U` - Delete to end/start of line
-- `Ctrl-W`, `Ctrl-Backspace` - Delete previous word (PromQL-aware: respects `(){},.` as boundaries)
-- `Alt-D` - Delete word forward
-- `Alt-Backspace` - Delete word backward
-
-**Multi-line**: `\` (line continuation)
-**AI**: `Ctrl-Y` (paste AI suggestion)
-**External Editor**: `Ctrl-X Ctrl-E` (open line in $EDITOR)
+💡 **Pro tips:**
+- Type a metric name prefix + `↑` to search history for queries with that metric
+- Use `Alt-.` repeatedly to cycle through arguments from previous commands
+- `Ctrl-W` understands PromQL syntax (e.g., stops at `{` when deleting in `metric_name{label="value"}`)
 
 ### 🤖 AI Configuration
 
@@ -374,121 +675,373 @@ Both `.save` and `.load` accept an optional `regex='<series regex>'` that filter
 .load node.prom regex='node_cpu_seconds_total\{.*mode="idle".*\}' timestamp=now-5m
 ```
 
-## 🎯 Use Cases
+## 📖 Query Recipes
 
-### 🚀 Exporter Development
+Common PromQL patterns you can use with your metrics:
 
-**Problem**: You're developing a Prometheus exporter and need to quickly test metrics output.
+### Finding Top Consumers
 
-**Solution**: Use promql-cli for rapid iteration during development:
+```promql
+# Top 10 memory consumers
+topk(10, process_resident_memory_bytes)
 
-```bash
-# Start your exporter development loop
-promql-cli query -c ".scrape http://localhost:9123/metrics ^awesome_metric 3 10s; .pinat now"
-> .labels awesome_metric_total    # Explore your metric's labels
-> rate(awesome_metric_total[30s]) # Test rate calculations
+# Top 5 error-generating services
+topk(5, sum by (service) (rate(http_requests_total{code=~"5.."}[5m])))
+
+# Bottom 5 by CPU usage
+bottomk(5, rate(process_cpu_seconds_total[5m]))
 ```
 
-**Why it's better**: No need to set up Prometheus + Grafana just to test your metrics during development.
+### Error Rates & Percentages
 
-### 📊 Kubernetes Metric Investigation
+```promql
+# Overall error rate (errors per second)
+sum(rate(http_requests_total{code=~"5.."}[5m]))
 
-**Problem**: You need to debug metrics from a pod in your K8s cluster.
+# Error percentage by service
+sum by (service) (rate(http_requests_total{code=~"5.."}[5m]))
+  / sum by (service) (rate(http_requests_total[5m])) * 100
 
-**Solution**: Port-forward and capture metrics for offline analysis:
-
-```bash
-# Port-forward the service
-kubectl -n production port-forward svc/my-app 9090:9090 &
-
-# Capture and explore
-promql-cli query -c ".scrape http://localhost:9090/metrics; .save debug-snapshot.prom"
-> .labels http_requests_total{job="my-app"}  # Find problematic series
-> histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+# Request success rate (as percentage)
+sum(rate(http_requests_total{code=~"2.."}[5m]))
+  / sum(rate(http_requests_total[5m])) * 100
 ```
 
-**Why it's better**: Work offline, share snapshots with your team, and avoid hitting production systems repeatedly.
+### Aggregations & Grouping
 
-### 🎓 PromQL Learning & Validation
+```promql
+# Total requests per minute across all services
+sum(rate(http_requests_total[1m])) * 60
 
-**Problem**: Learning PromQL syntax and testing alert rules.
+# Requests by HTTP method
+sum by (method) (http_requests_total)
 
-**Solution**: Use synthetic data and AI assistance:
+# Average response time per endpoint
+avg by (endpoint) (http_request_duration_seconds)
 
-```bash
-# Create realistic test data
-promql-cli query ./sample-metrics.prom
-> .seed http_requests_total steps=20 step=1m  # Generate historical data
-> .ai show me error rate over time            # Get AI suggestions
-> rate(http_requests_total{code=~"5.."}[5m]) / rate(http_requests_total[5m])
+# Count of unique services reporting metrics
+count(count by (service) (up))
 ```
 
-**Why it's better**: Learn with real-looking data, get AI help, and validate queries before deploying alerts.
+### Latency & Percentiles
 
-### 🔍 System Performance Analysis
+```promql
+# 95th percentile latency
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
 
-**Problem**: You want to quickly check system metrics without setting up monitoring.
+# 99th percentile by service
+histogram_quantile(0.99,
+  sum by (service, le) (rate(http_request_duration_seconds_bucket[5m])))
 
-**Solution**: One-liner performance analysis:
+# Median (50th percentile) response time
+histogram_quantile(0.5, rate(http_request_duration_seconds_bucket[5m]))
+```
+
+### Time Comparisons
+
+```promql
+# Current value vs 1 hour ago
+http_requests_total - http_requests_total offset 1h
+
+# Percentage change in last hour
+((http_requests_total - http_requests_total offset 1h)
+  / http_requests_total offset 1h) * 100
+
+# Rate of change (derivative)
+deriv(http_requests_total[10m])
+```
+
+### Predictions & Trends
+
+```promql
+# Predict value in 4 hours based on current trend
+predict_linear(http_requests_total[1h], 4*3600)
+
+# How fast is disk filling up (hours until full)
+predict_linear(node_filesystem_free_bytes[1h], 3600) /
+  node_filesystem_free_bytes < 0
+```
+
+### Testing with Generated Data
 
 ```bash
-# Quick system overview
+# Generate realistic test data first
+> .seed http_requests_total 50 1m
+> .pinat now
+
+# Then test your queries
+> rate(http_requests_total[5m])
+> increase(http_requests_total[10m])
+```
+
+💡 **Pro tip:** Use `.ai ask` to generate custom queries for your specific metrics!
+
+## 🔧 Common Workflows
+
+Real-world step-by-step workflows you can follow:
+
+### Workflow 1: Debugging a Production Issue
+
+```bash
+# 1. Capture current state from production
+promql-cli query -c ".scrape http://prod-server:9090/metrics; .save prod-snapshot.prom timestamp=now"
+
+# 2. Work offline with the snapshot
+promql-cli query --repl=prompt prod-snapshot.prom
+
+# 3. Investigate in the REPL
+> .metrics | grep error
+> .labels http_errors_total
+> rate(http_errors_total[5m])
+> sum by (service, code) (http_errors_total)
+
+# 4. Share findings - save filtered metrics
+> .save error-metrics-only.prom regex='.*error.*'
+```
+
+### Workflow 2: Developing a New Exporter
+
+```bash
+# 1. Start your exporter on localhost:9123
+./my-exporter --port=9123 &
+
+# 2. Test with live reloading (scrape every 5 seconds, 100 times)
+promql-cli query --repl=prompt -c ".scrape http://localhost:9123/metrics 100 5s; .pinat now"
+
+# 3. In the REPL: verify metrics structure
+> .metrics
+> .labels my_custom_metric
+> .timestamps my_custom_metric
+
+# 4. Test rate calculations work correctly
+> rate(my_custom_metric[30s])
+
+# 5. Generate historical data to test range queries
+> .seed my_custom_metric 50 10s
+> rate(my_custom_metric[2m])
+> increase(my_custom_metric[5m])
+```
+
+### Workflow 3: Testing Alert Rules Before Deployment
+
+```bash
+# 1. Get sample data from production
+promql-cli query -c ".prom_scrape http://prod:9090 'up or http_requests_total'; .save test-data.prom"
+
+# 2. Test your alert expression locally
+promql-cli query test-data.prom
+
+# 3. Test the alert condition
+> rate(http_requests_total{code="500"}[5m]) > 0.1
+> absent(up{job="critical-service"})
+
+# 4. Use AI to refine the query
+> .ai ask improve this alert to detect sustained high error rates
+> .ai run 1
+
+# 5. Save validated query for deployment
+> .save validated-metrics.prom
+```
+
+### Workflow 4: Learning PromQL with Real Data
+
+```bash
+# 1. Get node_exporter running
 docker run -d --name=node-exporter --net="host" --pid="host" \
   -v "/:/host:ro,rslave" prom/node-exporter:latest --path.rootfs=/host
 
-promql-cli query -c ".scrape http://localhost:9100/metrics ^node 5 2s; .pinat now" \
-  -q 'topk(5, rate(node_network_transmit_bytes_total[10s]))'
+# 2. Start learning session with AI help
+promql-cli query --ai "provider=claude" \
+  -c ".scrape http://localhost:9100/metrics 3 10s; .metrics"
 
-# Clean up
-docker rm -f node-exporter
+# 3. Explore and learn
+> .ai ask show me CPU usage patterns
+> .ai run 1
+> .ai ask how do I calculate memory percentage
+> .ai run 2
+
+# 4. Practice with generated data
+> .seed node_cpu_seconds_total 100 30s
+> rate(node_cpu_seconds_total[5m])
 ```
 
-**Why it's better**: No permanent monitoring setup required, perfect for quick investigations.
-
-### ⚡ Additional Use Cases
-
-<details>
-<summary><strong>CI/CD Integration</strong></summary>
-
-Validate exporter metrics in your CI pipeline:
+### Workflow 5: Batch Query Validation in CI/CD
 
 ```bash
-# In your CI script
-docker run --rm promql-cli:latest query \
-  -c ".scrape http://test-exporter:8080/metrics" \
-  -q "up{job='test-exporter'} == 1" \
-  -o json | jq '.data.result | length > 0'
+# Create test query suite
+cat > queries-to-validate.promql <<EOF
+# Health checks
+up{job="api"} == 1
+up{job="database"} == 1
+
+# Performance checks
+rate(http_requests_total[5m]) > 0
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) < 1
+EOF
+
+# Run in CI pipeline
+promql-cli query -f queries-to-validate.promql test-metrics.prom > results.txt
+if [ $? -eq 0 ]; then
+  echo "✅ All queries validated successfully"
+else
+  echo "❌ Query validation failed"
+  exit 1
+fi
 ```
 
-</details>
-
-<details>
-<summary><strong>Alert Rule Testing</strong></summary>
-
-Test Prometheus alert rules against historical data:
+### Workflow 6: Comparing Metrics Across Environments
 
 ```bash
-promql-cli query -c ".load historical-data.prom; .pinat 2023-12-01T10:00:00Z"
-> rate(errors_total[5m]) > 0.1  # Test your alert condition
+# 1. Capture from both environments
+promql-cli query -c ".scrape http://staging:9090/metrics; .save staging.prom"
+promql-cli query -c ".scrape http://prod:9090/metrics; .save prod.prom"
+
+# 2. Load both and compare
+promql-cli query --repl=prompt staging.prom
+> .load prod.prom  # Load second file into same session
+> .metrics  # See all metrics from both
+
+# 3. Compare specific metrics
+> http_requests_total{env="staging"}
+> http_requests_total{env="prod"}
+
+# 4. Calculate differences
+> sum by (service) (http_requests_total{env="prod"})
+  - sum by (service) (http_requests_total{env="staging"})
 ```
 
-</details>
+## 🔧 Troubleshooting
 
-<details>
-<summary><strong>Metric Comparison</strong></summary>
+### Autocompletion Not Working
 
-Compare metrics between different time periods or environments:
+**Problem:** Tab completion doesn't suggest metrics or labels.
+
+**Solution:**
+```bash
+# Make sure you're using the prompt backend
+promql-cli query --repl=prompt metrics.prom
+
+# Verify metrics are loaded
+> .metrics
+```
+
+**Common causes:**
+- Using default `readline` backend (no advanced completion)
+- No metrics loaded yet (use `.load` or `.scrape` first)
+- Metrics file is empty or malformed
+
+### AI Not Responding
+
+**Problem:** `.ai ask` returns errors or no response.
+
+**Solution:**
+```bash
+# 1. Check API key is set
+echo $OPENAI_API_KEY        # For OpenAI
+echo $ANTHROPIC_API_KEY     # For Claude
+echo $XAI_API_KEY           # For Grok
+
+# 2. Verify provider configuration
+promql-cli query --ai "provider=claude" metrics.prom
+
+# 3. Test with debug mode
+export PROMQL_CLI_AI_DEBUG=1
+promql-cli query --ai "provider=claude" metrics.prom
+```
+
+**Common causes:**
+- Missing or invalid API key
+- Wrong provider name (use: `openai`, `claude`, `grok`, `ollama`)
+- Network connectivity issues
+- API rate limits exceeded
+
+### Query Returns "No Data" or Empty Results
+
+**Problem:** Queries return no results even though metrics are loaded.
+
+**Solution:**
+```bash
+# 1. Verify metrics exist, and their labels
+> .metrics
+> .labels some_metric
+
+# 2. Check metric name exactly (case-sensitive)
+> http_requests_total    # Not HTTP_Requests_Total
+
+# 3. Verify timestamp alignment
+> .timestamps http_requests_total
+> .pinat now              # Pin evaluation time to now
+
+# 4. Check if metrics have history for rate() queries
+> .seed http_requests_total 20 30s    # Generate test history
+> rate(http_requests_total[2m])
+```
+
+**Common causes:**
+- Evaluation time outside metric timestamp range, see `.pinat`
+- Typo in metric name
+- Using `rate()` on single-point counter (needs history)
+- Label selectors don't match any series
+
+### History/Arrow Keys Not Working
+
+**Problem:** Up/down arrows show `^[[A` instead of history.
+
+**Solution:**
 
 ```bash
-# Compare two snapshots
-promql-cli query snapshot-before.prom
-> .save /tmp/before-analysis.prom
+# Try the (experimental) prompt backend
+promql-cli query --repl=prompt metrics.prom
 
-promql-cli query snapshot-after.prom
-> .load /tmp/before-analysis.prom     # Load both for comparison
+# If still broken, check terminal compatibility
+echo $TERM    # Should be xterm-256color or similar
 ```
 
-</details>
+### Ctrl-W Deletes Entire Metric Name
+
+**Problem:** `Ctrl-W` deletes too much when editing queries.
+
+**Solution:**
+This is an issue that has been worked-around in the (default) readline backend. Try the prompt backend:
+
+```bash
+promql-cli query --repl=prompt metrics.prom
+```
+
+### Docker Container Can't Access Host Services
+
+**Problem:** `.scrape http://localhost:9100/metrics` fails in Docker.
+
+**Solution:**
+
+```bash
+# Use --net=host to access host network
+docker run --rm -it --net=host xjjo/promql-cli:latest query \
+  -c ".scrape http://localhost:9100/metrics"
+
+# Or use host.docker.internal on Mac/Windows
+docker run --rm -it xjjo/promql-cli:latest query \
+  -c ".scrape http://host.docker.internal:9100/metrics"
+```
+
+### Performance Issues with Large Metric Files
+
+**Problem:** Slow loading or query performance.
+
+**Solution:**
+
+```bash
+# 1. Filter metrics during load
+> .load huge.prom regex='critical_metrics_.*'
+
+# 2. Drop unused metrics after loading
+> .keep important_.*
+
+# 3. For very large files, use .prom_scrape with filters instead
+> .prom_scrape http://prom:9090 'important_metric' 1
+```
+
+**💡 Still having issues?** Report bugs at https://github.com/jjo/promql-cli/issues
 
 ## 🐳 Docker Usage
 
@@ -511,15 +1064,12 @@ docker run --rm -v "$PWD":/data xjjo/promql-cli:latest query \
 # Build
 make build
 
-# See all options
-make help
-
 # Run tests
 make test
 ```
 
 **Runtime options:**
 
-- Both REPL backends are built into the binary.
-- Default backend: readline (portable, minimal dependencies).
-- For advanced, rich UI with autocompletion, run with `--repl=prompt`.
+- Both REPL backends (`readline` and `prompt`) are built into the binary.
+- Default backend: `readline` (UI less invasive)
+- Experimental: for advanced, rich UI with autocompletion, run with `--repl=prompt`.

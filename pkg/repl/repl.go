@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chzyer/readline"
 	"github.com/prometheus/prometheus/promql"
@@ -28,17 +29,23 @@ var lastExecutedCommand string
 
 var replTimeout = 60 * time.Second
 
+// altDotMarker is a private Unicode character (U+E000) used to mark Alt+. sequences
+// that have been converted from ESC+. at the byte level before readline processes them.
+// This allows us to distinguish between a literal "." typed by the user and Alt+.
+const altDotMarker = rune(0xE000)
+
 // rlInputGate gates stdin to readline so we can pause input while running an external editor.
 var rlInputGate *inputGate
 
 // inputGate proxies bytes from a real source (os.Stdin) to a pipe that readline consumes.
 // When paused, it stops reading from the source so the editor can read directly from the TTY.
 type inputGate struct {
-	src    *os.File
-	r      *io.PipeReader
-	w      *io.PipeWriter
-	paused uint32 // atomic 0/1
-	stop   chan struct{}
+	src                *os.File
+	r                  *io.PipeReader
+	w                  *io.PipeWriter
+	paused             uint32 // atomic 0/1
+	stop               chan struct{}
+	escSeqTransformers []func([]byte) []byte // transformers for ESC sequences
 }
 
 func newInputGate(src *os.File) *inputGate {
@@ -82,7 +89,12 @@ func (g *inputGate) loop() {
 		}
 		n, err := g.src.Read(buf)
 		if n > 0 {
-			_, _ = g.w.Write(buf[:n])
+			data := buf[:n]
+			// Apply any ESC sequence transformers
+			for _, transform := range g.escSeqTransformers {
+				data = transform(data)
+			}
+			_, _ = g.w.Write(data)
 		}
 		if err != nil {
 			_ = g.w.CloseWithError(err)
@@ -148,6 +160,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	var yankLastArgActive bool
 	var yankLastArgIndex int       // Index into history for cycling
 	var yankLastArgInserted string // What was inserted last time
+	var yankInProgress bool        // Flag to prevent recursive yankLastArgCycle calls
+	var promptShownAt time.Time    // Track when we showed the prompt
 
 	// Optional custom Alt+. rune codepoint (for terminals that send non-ESC meta)
 	var altDotRune rune
@@ -190,12 +204,21 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 	// Helper function for yank-last-arg (Alt+.) logic
 	// Handles cycling through history to insert/replace last arguments
-	yankLastArgCycle := func(line []rune, pos int) ([]rune, int, bool) {
+	yankLastArgCycle := func(line []rune, pos int, removeTrigger bool) ([]rune, int, bool) {
+		// Prevent recursive calls
+		if yankInProgress {
+			return copyRunes(line), pos, true
+		}
+		yankInProgress = true
+		defer func() { yankInProgress = false }()
+
 		cleanLine := line
 		cleanPos := pos
 
-		// Remove the trigger character (., >, or ,) that readline already inserted
-		if pos > 0 && isAltDotTriggerChar(line[pos-1]) {
+		// Remove the trigger character (., >, or ,) only if readline already inserted it
+		// When called from listener (before readline processes key), removeTrigger=false
+		// When called from Ctrl-X chord handler, removeTrigger=true as key was already inserted
+		if removeTrigger && pos > 0 && isAltDotTriggerChar(line[pos-1]) {
 			cleanLine = copyRunes(line[:pos-1])
 			cleanLine = append(cleanLine, line[pos:]...)
 			cleanPos = pos - 1
@@ -239,11 +262,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Get the last argument from history at the current index
 		// Search backward from yankLastArgIndex for a non-empty last arg
 		var lastArg string
-		// Start search from the next older entry
 		for i := yankLastArgIndex - 1; i >= 0; i-- {
 			lastArg = rlExtractLastArgument(userHistory[i])
 			if lastArg != "" {
-				// Found one, update our position
 				yankLastArgIndex = i
 				break
 			}
@@ -271,8 +292,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	var prevPos int
 
 	listener := func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
-		// Optional key debug
-		debugKey("\n[key=%#U code=%d]\n", key, key)
+		debugKey("\n[key=%#U code=%d] line=%q pos=%d\n", key, key, string(line), pos)
 
 		// Constants for key codes
 		const (
@@ -285,6 +305,20 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			keyCtrlE         = rune(5)  // Ctrl-E (end-of-line or chord with Ctrl-X)
 			keyESC           = rune(27) // ESC (start of Alt- bindings)
 		)
+
+		// Handle special Alt+. marker from input filter
+		if key == altDotMarker {
+			// Remove the marker character that readline inserted
+			cleanLine := line
+			cleanPos := pos
+			if pos > 0 && line[pos-1] == altDotMarker {
+				cleanLine = make([]rune, 0, len(line)-1)
+				cleanLine = append(cleanLine, line[:pos-1]...)
+				cleanLine = append(cleanLine, line[pos:]...)
+				cleanPos = pos - 1
+			}
+			return yankLastArgCycle(cleanLine, cleanPos, false)
+		}
 
 		// Helper: strip certain control runes (e.g., ^X, ^E) from a rune slice
 		stripCtrl := func(rs []rune) []rune {
@@ -314,23 +348,15 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Readline processes these BEFORE calling this listener, often clearing the whole line
 		// So we detect this by checking if line is empty but prevLine wasn't
 		if key == keyCtrlW || key == keyCtrlBackspace {
-			keyName := "Ctrl-W"
-			if key == keyCtrlBackspace {
-				keyName = "Ctrl-Backspace"
-			}
-			debugKey("\n[%s] line=%q pos=%d prevLine=%q prevPos=%d\n", keyName, string(line), pos, string(prevLine), prevPos)
 			// If readline cleared the line (its bug), use the previous state
 			if len(line) == 0 && len(prevLine) > 0 {
 				nl, np := deletePrevWord(prevLine, prevPos)
-				debugKey("[%s] using prevLine, newLine=%q newPos=%d\n", keyName, string(nl), np)
-				// Update prevLine for next iteration
 				prevLine = append(prevLine[:0], nl...)
 				prevPos = np
 				return nl, np, true
 			}
 			// Otherwise use current line (shouldn't happen with readline's bug, but just in case)
 			nl, np := deletePrevWord(line, pos)
-			debugKey("[%s] using current line, newLine=%q newPos=%d\n", keyName, string(nl), np)
 			prevLine = append(prevLine[:0], nl...)
 			prevPos = np
 			return nl, np, true
@@ -379,19 +405,35 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			return nil, 0, false
 		}
 
-		// Simple support for Alt-F / Alt-B via ESC sequences
-		// Some terminals may deliver ESC as NUL (0). Treat both as Meta prefix.
-		if key == keyESC || key == rune(0) {
+		// ESC key handling for Alt-F / Alt-B / Alt-. sequences
+		if key == keyESC {
 			escPending = true
 			escAt = time.Now()
-			// Consume the ESC/NUL so readline doesn't interfere with subsequent key detection
-			// Return current line unchanged
+			return copyRunes(line), pos, true
+		}
+		// NUL (code 0) handling: Some terminals send NUL as Alt-key prefix (readline converts ESC->NUL)
+		// But readline also sends spurious NULs immediately after showing prompt
+		if key == rune(0) {
+			// Ignore duplicate NUL (within 10ms of previous)
+			if !escAt.IsZero() && time.Since(escAt) < 10*time.Millisecond {
+				return copyRunes(line), pos, true
+			}
+			// Ignore spurious startup NUL (arrives within 10ms of prompt)
+			// Real user Alt+key would take at least ~100ms (human reaction time)
+			if time.Since(promptShownAt) < 10*time.Millisecond {
+				return copyRunes(line), pos, true
+			}
+			// Otherwise, treat as ESC prefix for Alt-key
+			escPending = true
+			escAt = time.Now()
 			return copyRunes(line), pos, true
 		}
 		if escPending {
-			within := time.Since(escAt) <= 1500*time.Millisecond
+			// Window for ESC sequences (1 second for human Alt+key press)
+			gap := time.Since(escAt)
+			within := gap <= 1000*time.Millisecond
 			escPending = false
-			// Only handle the next key as part of ESC- sequence if within window
+			// Only handle the next key as part of ESC sequence if within window
 			if within {
 				if key == 'f' {
 					// move forward to start of next word
@@ -426,7 +468,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				}
 				if key == '.' || key == '>' || key == ',' || (altDotRune != 0 && key == altDotRune) {
 					// Alt+. (or Alt+> / Alt+, fallbacks): insert/cycle last argument from history
-					return yankLastArgCycle(line, pos)
+					// removeTrigger=false because listener intercepts BEFORE readline inserts the key
+					return yankLastArgCycle(line, pos, false)
 				}
 			}
 			// Not a recognized ESC sequence; treat this key normally (do not consume)
@@ -511,7 +554,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Handle standalone . key when yank-last-arg is active
 		// This allows cycling even if readline eats the ESC prefix on subsequent presses
 		if yankLastArgActive && isAltDotTriggerChar(key) {
-			return yankLastArgCycle(line, pos)
+			// removeTrigger=false because we intercept before readline inserts the key
+			return yankLastArgCycle(line, pos, false)
 		}
 
 		// Any other key: end any active navigation and yank state, let readline proceed
@@ -554,6 +598,27 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 	// Build a gated stdin so we can pause input while the external editor is active
 	rlInputGate = newInputGate(os.Stdin)
+
+	// Add transformer to convert Alt+. (ESC+.) to special marker before readline sees it
+	// This is necessary because readline intercepts ESC sequences before the listener sees them
+	rlInputGate.escSeqTransformers = append(rlInputGate.escSeqTransformers, func(data []byte) []byte {
+		result := make([]byte, 0, len(data))
+		for i := 0; i < len(data); i++ {
+			if data[i] == 0x1B && i+1 < len(data) {
+				next := data[i+1]
+				if next == '.' || next == ',' || next == '>' {
+					// Convert ESC+. to UTF-8 encoded altDotMarker (U+E000)
+					var buf [4]byte
+					n := utf8.EncodeRune(buf[:], altDotMarker)
+					result = append(result, buf[:n]...)
+					i++ // skip the trigger char
+					continue
+				}
+			}
+			result = append(result, data[i])
+		}
+		return result
+	})
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          "> ",
 		HistoryFile:     historyPath,
@@ -595,8 +660,15 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	}
 
 	for {
+		// Reset yank-last-arg state for each new input line
+		yankLastArgActive = false
+		yankLastArgInserted = ""
+		yankLastArgIndex = 0
+		yankInProgress = false
+
 		// Update prompt dynamically
 		rl.SetPrompt(getPrompt())
+		promptShownAt = time.Now() // Record when we show the prompt
 
 		line, err := rl.Readline()
 		if err != nil {
