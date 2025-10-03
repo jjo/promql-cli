@@ -614,14 +614,13 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		return result
 	})
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:              "> ",
-		HistoryFile:         historyPath,
-		AutoComplete:        createAutoCompleter(storage), // Dynamic tab completion
-		InterruptPrompt:     "^C",
-		EOFPrompt:           "exit",
-		Listener:            readline.FuncListener(listener),
-		Stdin:               rlInputGate.Reader(),
-		FuncFilterInputRune: inputFilter,
+		Prompt:          "> ",
+		HistoryFile:     historyPath,
+		AutoComplete:    createAutoCompleter(storage), // Dynamic tab completion
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+		Listener:        readline.FuncListener(listener),
+		Stdin:           rlInputGate.Reader(),
 	})
 	if err != nil {
 		fmt.Printf("Warning: Could not initialize readline, falling back to basic input: %v\n", err)
