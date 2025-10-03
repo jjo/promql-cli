@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chzyer/readline"
 	"github.com/prometheus/prometheus/promql"
@@ -27,6 +28,11 @@ import (
 var lastExecutedCommand string
 
 var replTimeout = 60 * time.Second
+
+// altDotMarker is a private Unicode character (U+E000) used to mark Alt+. sequences
+// that have been converted from ESC+. at the byte level before readline processes them.
+// This allows us to distinguish between a literal "." typed by the user and Alt+.
+const altDotMarker = rune(0xE000)
 
 // rlInputGate gates stdin to readline so we can pause input while running an external editor.
 var rlInputGate *inputGate
@@ -290,23 +296,22 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		// Constants for key codes
 		const (
-			keyDown          = rune(14)     // readline CharNext (Ctrl-N)
-			keyUp            = rune(16)     // readline CharPrev (Ctrl-P)
-			keyCtrlY         = rune(25)     // Ctrl-Y (Yank/paste AI clipboard)
-			keyCtrlW         = rune(23)     // Ctrl-W (delete previous word with PromQL boundaries)
-			keyCtrlBackspace = rune(-4)     // Ctrl-Backspace (delete previous word, terminal-dependent)
-			keyCtrlX         = rune(24)     // Ctrl-X (start chord Ctrl-X Ctrl-E)
-			keyCtrlE         = rune(5)      // Ctrl-E (end-of-line or chord with Ctrl-X)
-			keyESC           = rune(27)     // ESC (start of Alt- bindings)
-			keyAltDotMarker  = rune(0xE000) // Special marker for Alt+. from input filter
+			keyDown          = rune(14) // readline CharNext (Ctrl-N)
+			keyUp            = rune(16) // readline CharPrev (Ctrl-P)
+			keyCtrlY         = rune(25) // Ctrl-Y (Yank/paste AI clipboard)
+			keyCtrlW         = rune(23) // Ctrl-W (delete previous word with PromQL boundaries)
+			keyCtrlBackspace = rune(-4) // Ctrl-Backspace (delete previous word, terminal-dependent)
+			keyCtrlX         = rune(24) // Ctrl-X (start chord Ctrl-X Ctrl-E)
+			keyCtrlE         = rune(5)  // Ctrl-E (end-of-line or chord with Ctrl-X)
+			keyESC           = rune(27) // ESC (start of Alt- bindings)
 		)
 
 		// Handle special Alt+. marker from input filter
-		if key == keyAltDotMarker {
+		if key == altDotMarker {
 			// Remove the marker character that readline inserted
 			cleanLine := line
 			cleanPos := pos
-			if pos > 0 && line[pos-1] == keyAltDotMarker {
+			if pos > 0 && line[pos-1] == altDotMarker {
 				cleanLine = make([]rune, 0, len(line)-1)
 				cleanLine = append(cleanLine, line[:pos-1]...)
 				cleanLine = append(cleanLine, line[pos:]...)
@@ -602,9 +607,10 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			if data[i] == 0x1B && i+1 < len(data) {
 				next := data[i+1]
 				if next == '.' || next == ',' || next == '>' {
-					// Convert ESC+. to UTF-8 encoded 0xE000 (private use character)
-					// 0xE000 in UTF-8 is: 0xEE 0x80 0x80
-					result = append(result, 0xEE, 0x80, 0x80)
+					// Convert ESC+. to UTF-8 encoded altDotMarker (U+E000)
+					var buf [4]byte
+					n := utf8.EncodeRune(buf[:], altDotMarker)
+					result = append(result, buf[:n]...)
 					i++ // skip the trigger char
 					continue
 				}
