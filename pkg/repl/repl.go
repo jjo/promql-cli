@@ -591,26 +591,6 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		return nil, 0, false
 	}
 
-	// Input filter to intercept ESC sequences before readline processes them
-	// Note: This is currently unused but left for potential future enhancements
-	var lastWasEsc bool
-	var escTime time.Time
-	inputFilter := func(r rune) (rune, bool) {
-		if r == 27 {
-			lastWasEsc = true
-			escTime = time.Now()
-			return r, true
-		}
-		if lastWasEsc && time.Since(escTime) < 100*time.Millisecond {
-			if r == '.' || r == '>' || r == ',' {
-				lastWasEsc = false
-				return 0xE000, true // Special marker for Alt+. handled in listener
-			}
-			lastWasEsc = false
-		}
-		return r, true
-	}
-
 	// Build a gated stdin so we can pause input while the external editor is active
 	rlInputGate = newInputGate(os.Stdin)
 
