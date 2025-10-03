@@ -22,7 +22,7 @@ LDFLAGS := -s -w \
 	-X main.commit=$(GIT_COMMIT) \
 	-X main.date=$(BUILD_DATE)
 
-.PHONY: all build build-binary build-no-prompt run test test-% fmt vet tidy clean docker-build docker-run docker-push version help gofumpt
+.PHONY: all build build-binary run test test-% fmt vet tidy clean docker-build docker-run docker-push version help gofumpt
 
 all: build
 
@@ -35,11 +35,6 @@ build: $(BIN) build-binary
 build-binary:
 	GOFLAGS=$(GOFLAGS) CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -trimpath -ldflags "$(LDFLAGS)" -o bin/$(APP) ./cmd/promql-cli/...
 	@echo "Built $(BIN)/$(APP) (version=$(GIT_VERSION), commit=$(GIT_COMMIT), tags=$(BUILD_TAGS))"
-
-# Build without prompt support (minimal binary)
-build-no-prompt:
-	BUILD_TAGS="noprompt" $(MAKE) build-binary
-	@echo "Built minimal binary without go-prompt support"
 
 run: build
 	$(BIN)/$(APP) $(ARGS)
