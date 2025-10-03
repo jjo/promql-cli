@@ -340,7 +340,21 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			if strings.TrimSpace(aiClipboard) == "" {
 				return copyRunes(line), pos, true
 			}
-			newLine := []rune(aiClipboard)
+			text := aiClipboard
+			// Try to find matching explanation
+			idx := -1
+			for i, q := range lastAISuggestions {
+				if strings.TrimSpace(q) == strings.TrimSpace(aiClipboard) {
+					idx = i
+					break
+				}
+			}
+			if idx >= 0 && idx < len(lastAIExplanations) {
+				if ex := strings.TrimSpace(lastAIExplanations[idx]); ex != "" {
+					text = text + " # " + ex
+				}
+			}
+			newLine := []rune(text)
 			return newLine, len(newLine), true
 		}
 
@@ -1865,6 +1879,11 @@ func ExecuteQueryLine(engine *promql.Engine, storage *sstorage.SimpleStorage, li
 func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line string) {
 	orig := strings.TrimSpace(line)
 	if orig == "" {
+		return
+	}
+
+	// Comment: lines starting with # are no-ops
+	if strings.HasPrefix(orig, "#") {
 		return
 	}
 
