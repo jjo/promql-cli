@@ -413,3 +413,118 @@ count(down)`
 		t.Errorf("expected '%s', got '%s'", expected, queries[0].query)
 	}
 }
+
+func TestParseQueriesFromContent_AdhocCommandsNoBlankLine(t *testing.T) {
+	// Adhoc commands (starting with .) should be processed immediately
+	// without requiring blank lines
+	content := `.load /tmp/test.prom
+.metrics
+sum(test_metric)
+
+test_metric * 2
+
+.quit`
+
+	queries := parseQueriesFromContent(content)
+
+	if len(queries) != 5 {
+		t.Fatalf("expected 5 queries, got %d: %v", len(queries), queries)
+	}
+
+	expected := []string{
+		".load /tmp/test.prom",
+		".metrics",
+		"sum(test_metric)",
+		"test_metric * 2",
+		".quit",
+	}
+
+	for i, exp := range expected {
+		if queries[i].query != exp {
+			t.Errorf("query %d: expected '%s', got '%s'", i, exp, queries[i].query)
+		}
+	}
+}
+
+func TestParseQueriesFromContent_AdhocCommandsConsecutive(t *testing.T) {
+	// Multiple consecutive adhoc commands without blank lines
+	content := `.load /tmp/test.prom
+.metrics
+.pinat now
+.quit`
+
+	queries := parseQueriesFromContent(content)
+
+	if len(queries) != 4 {
+		t.Fatalf("expected 4 queries, got %d: %v", len(queries), queries)
+	}
+
+	expected := []string{
+		".load /tmp/test.prom",
+		".metrics",
+		".pinat now",
+		".quit",
+	}
+
+	for i, exp := range expected {
+		if queries[i].query != exp {
+			t.Errorf("query %d: expected '%s', got '%s'", i, exp, queries[i].query)
+		}
+	}
+}
+
+func TestParseQueriesFromContent_AdhocAfterMultilineQuery(t *testing.T) {
+	// Adhoc command immediately after multiline query should flush the query first
+	content := `sum(
+  test_metric
+)
+.metrics
+.quit`
+
+	queries := parseQueriesFromContent(content)
+
+	if len(queries) != 3 {
+		t.Fatalf("expected 3 queries, got %d: %v", len(queries), queries)
+	}
+
+	expected := []string{
+		"sum( test_metric )",
+		".metrics",
+		".quit",
+	}
+
+	for i, exp := range expected {
+		if queries[i].query != exp {
+			t.Errorf("query %d: expected '%s', got '%s'", i, exp, queries[i].query)
+		}
+	}
+}
+
+func TestParseQueriesFromContent_MixedAdhocAndQueries(t *testing.T) {
+	// Mixed adhoc commands and queries
+	content := `.load /tmp/test.prom
+test_metric
+.metrics
+sum(test_metric)
+.quit`
+
+	queries := parseQueriesFromContent(content)
+
+	if len(queries) != 5 {
+		t.Fatalf("expected 5 queries, got %d: %v", len(queries), queries)
+	}
+
+	expected := []string{
+		".load /tmp/test.prom",
+		"test_metric",
+		".metrics",
+		"sum(test_metric)",
+		".quit",
+	}
+
+	for i, exp := range expected {
+		if queries[i].query != exp {
+			t.Errorf("query %d: expected '%s', got '%s'", i, exp, queries[i].query)
+		}
+	}
+}

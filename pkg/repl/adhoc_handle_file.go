@@ -220,7 +220,8 @@ type queryWithLineNum struct {
 }
 
 // parseQueriesFromContent parses multi-line queries from file content
-// Queries are separated by blank lines, backslash continues lines
+// Adhoc commands (starting with .) are processed on first newline
+// PromQL queries are separated by blank lines, backslash continues lines
 func parseQueriesFromContent(content string) []queryWithLineNum {
 	var queries []queryWithLineNum
 	var currentLines []string
@@ -267,6 +268,21 @@ func parseQueriesFromContent(content string) []queryWithLineNum {
 				currentLines = nil
 				inContinuation = false
 			}
+			continue
+		}
+
+		// Check if this is an adhoc command (starts with .)
+		// Adhoc commands should be processed immediately, not accumulated
+		if strings.HasPrefix(trimmed, ".") {
+			// First, flush any accumulated query
+			if len(currentLines) > 0 {
+				query := strings.Join(currentLines, " ")
+				queries = append(queries, queryWithLineNum{query: query, startLine: startLine})
+				currentLines = nil
+			}
+			// Then add the adhoc command immediately without requiring blank line
+			queries = append(queries, queryWithLineNum{query: trimmed, startLine: lineNum})
+			inContinuation = false
 			continue
 		}
 
