@@ -222,6 +222,7 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 							bucketLabels[k] = v
 						}
 						bucketLabels["le"] = fmt.Sprintf("%g", bucket.GetUpperBound())
+						bucketLabels["__name__"] = metricName + "_bucket"
 						s.Metrics[metricName+"_bucket"] = append(s.Metrics[metricName+"_bucket"], MetricSample{
 							Labels:    bucketLabels,
 							Value:     float64(bucket.GetCumulativeCount()),
@@ -230,10 +231,20 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 					}
 					// Sum and Count
 					if metric.Histogram.SampleSum != nil {
-						s.Metrics[metricName+"_sum"] = append(s.Metrics[metricName+"_sum"], MetricSample{Labels: lbls, Value: metric.Histogram.GetSampleSum(), Timestamp: timestamp})
+						sumLabels := make(map[string]string)
+						for k, v := range lbls {
+							sumLabels[k] = v
+						}
+						sumLabels["__name__"] = metricName + "_sum"
+						s.Metrics[metricName+"_sum"] = append(s.Metrics[metricName+"_sum"], MetricSample{Labels: sumLabels, Value: metric.Histogram.GetSampleSum(), Timestamp: timestamp})
 					}
 					if metric.Histogram.SampleCount != nil {
-						s.Metrics[metricName+"_count"] = append(s.Metrics[metricName+"_count"], MetricSample{Labels: lbls, Value: float64(metric.Histogram.GetSampleCount()), Timestamp: timestamp})
+						countLabels := make(map[string]string)
+						for k, v := range lbls {
+							countLabels[k] = v
+						}
+						countLabels["__name__"] = metricName + "_count"
+						s.Metrics[metricName+"_count"] = append(s.Metrics[metricName+"_count"], MetricSample{Labels: countLabels, Value: float64(metric.Histogram.GetSampleCount()), Timestamp: timestamp})
 					}
 				}
 				// Histogram fully handled; proceed to next metric
