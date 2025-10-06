@@ -7,8 +7,6 @@
 
 > **A lightweight PromQL playground and REPL for rapid Prometheus metric exploration**
 
-![AI Demo](demo/demo-ai.gif)
-
 TL;DR: prometheus-less promQL CLI that can load metrics files, scrape
 live endpoints (including prometheus itself), and basic get AI help.
 
@@ -455,6 +453,8 @@ Enable with `--repl=prompt` for full keyboard support.
 - `Ctrl-W` understands PromQL syntax (e.g., stops at `{` when deleting in `metric_name{label="value"}`)
 
 ### 🤖 AI Configuration
+
+![AI Demo](demo/demo-ai.gif)
 
 #### Quick Setup
 
