@@ -7,6 +7,8 @@ PKG := github.com/jjo/promql-cli
 TAG ?= latest
 IMAGE := xjjo/$(APP):$(TAG)
 
+DEMO_TARGETS := $(patsubst %.tape,%.gif,$(wildcard demo/*.tape))
+
 # Git-derived versioning (falls back for non-git envs)
 GIT_VERSION := $(shell git describe --tags --dirty --always 2>/dev/null || echo dev)
 GIT_COMMIT  := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
@@ -22,7 +24,7 @@ LDFLAGS := -s -w \
 	-X main.commit=$(GIT_COMMIT) \
 	-X main.date=$(BUILD_DATE)
 
-.PHONY: all build build-binary run test test-% fmt vet tidy clean docker-build docker-run docker-push version help gofumpt
+.PHONY: all build build-binary run test test-% fmt vet tidy clean docker-build docker-run docker-push version help gofumpt demos
 
 all: build
 
@@ -96,6 +98,10 @@ docker-push:
 
 gofumpt:
 	find . -name '*.go' -not -path "./vendor/*" | xargs gofumpt -w
+
+demos: $(DEMO_TARGETS)
+demo/%.gif: demo/%.tape
+	vhs $< -o $@
 
 # Show computed version info
 version:
