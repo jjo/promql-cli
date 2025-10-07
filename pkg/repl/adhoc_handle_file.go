@@ -26,12 +26,12 @@ func handleAdhocSave(query string, storage *sstorage.SimpleStorage) bool {
 		return true
 	}
 	// Parse optional timestamp and regex
-	tsMode, tsFixed, ok := parseTimestampArg(args)
+	tsMode, tsFixed, ok := ParseTimestampArg(args)
 	if !ok {
 		fmt.Println("Invalid timestamp specification. Use: timestamp={now|remove|<timespec>}")
 		return true
 	}
-	re, ok := parseRegexArg(args)
+	re, ok := ParseRegexArg(args)
 	if !ok {
 		fmt.Println("Invalid regex specification. Use: regex='timeseries regex' (quote if it contains spaces)")
 		return true
@@ -93,9 +93,9 @@ func parsePathAndArgs(rest string) (string, []string) {
 	return path, args
 }
 
-// parseTimestampArg scans args for timestamp=... and returns (mode, fixedMs, ok)
+// ParseTimestampArg scans args for timestamp=... and returns (mode, fixedMs, ok)
 // mode is one of: keep (default), remove, set
-func parseTimestampArg(args []string) (string, int64, bool) {
+func ParseTimestampArg(args []string) (string, int64, bool) {
 	mode := "keep"
 	if len(args) == 0 {
 		return mode, 0, true
@@ -122,8 +122,8 @@ func parseTimestampArg(args []string) (string, int64, bool) {
 	return mode, 0, true
 }
 
-// parseRegexArg finds regex=... and returns a compiled regexp (or nil if absent).
-func parseRegexArg(args []string) (*regexp.Regexp, bool) {
+// ParseRegexArg finds regex=... and returns a compiled regexp (or nil if absent).
+func ParseRegexArg(args []string) (*regexp.Regexp, bool) {
 	for _, a := range args {
 		if !strings.HasPrefix(strings.ToLower(a), "regex=") {
 			continue
@@ -142,8 +142,44 @@ func parseRegexArg(args []string) (*regexp.Regexp, bool) {
 	return nil, true
 }
 
-// applyTimestampOverride updates only newly loaded samples to the given mode
-func applyTimestampOverride(storage *sstorage.SimpleStorage, beforeCounts map[string]int, mode string, fixed int64) {
+// calculateTimestampOffset calculates the offset needed to align the latest timestamp to the target.
+// It examines samples in the given range and returns (offset, hasData).
+// For "set" mode: offset = target - latest_timestamp
+// For other modes: offset = 0
+func calculateTimestampOffset(storage *sstorage.SimpleStorage, beforeCounts map[string]int, mode string, target int64) (int64, bool) {
+	if mode != "set" {
+		return 0, false
+	}
+
+	// Find the latest timestamp among samples in range
+	var latestTimestamp int64
+	hasSamples := false
+	for name, samples := range storage.Metrics {
+		start := beforeCounts[name]
+		if start < 0 || start > len(samples) {
+			start = 0
+		}
+		for i := start; i < len(samples); i++ {
+			if !hasSamples || storage.Metrics[name][i].Timestamp > latestTimestamp {
+				latestTimestamp = storage.Metrics[name][i].Timestamp
+				hasSamples = true
+			}
+		}
+	}
+
+	if !hasSamples {
+		return 0, false
+	}
+
+	return target - latestTimestamp, true
+}
+
+// ApplyTimestampOverride updates only newly loaded samples to the given mode
+func ApplyTimestampOverride(storage *sstorage.SimpleStorage, beforeCounts map[string]int, mode string, fixed int64) {
+	// Calculate offset if needed
+	offset, _ := calculateTimestampOffset(storage, beforeCounts, mode, fixed)
+
+	// Apply timestamp updates
 	for name, samples := range storage.Metrics {
 		start := beforeCounts[name]
 		if start < 0 || start > len(samples) {
@@ -155,7 +191,55 @@ func applyTimestampOverride(storage *sstorage.SimpleStorage, beforeCounts map[st
 				// set a uniform timestamp (current time) for all samples when 'remove' mode is used
 				storage.Metrics[name][i].Timestamp = time.Now().UnixMilli()
 			case "set":
-				storage.Metrics[name][i].Timestamp = fixed
+				// offset all timestamps so that the latest one aligns with the target
+				storage.Metrics[name][i].Timestamp += offset
+			}
+		}
+	}
+}
+
+// ApplyFilteredLoad loads samples from tmp storage into target storage, applying regex filter and timestamp overrides.
+// This is used when loading metrics with a regex filter from CLI or REPL commands.
+func ApplyFilteredLoad(storage *sstorage.SimpleStorage, tmp *sstorage.SimpleStorage, re *regexp.Regexp, tsMode string, tsFixed int64) {
+	if re == nil {
+		return
+	}
+
+	// Find the latest timestamp in temp storage (for offset calculation)
+	var latestTimestamp int64
+	hasMatchingSamples := false
+	for name, samples := range tmp.Metrics {
+		for _, s := range samples {
+			seriesSig := seriesSignature(name, s.Labels)
+			if re.MatchString(seriesSig) {
+				if !hasMatchingSamples || s.Timestamp > latestTimestamp {
+					latestTimestamp = s.Timestamp
+					hasMatchingSamples = true
+				}
+			}
+		}
+	}
+
+	// Calculate offset if in "set" mode
+	var offset int64
+	if tsMode == "set" && hasMatchingSamples {
+		offset = tsFixed - latestTimestamp
+	}
+
+	// Apply samples with timestamp adjustments
+	for name, samples := range tmp.Metrics {
+		for _, s := range samples {
+			seriesSig := seriesSignature(name, s.Labels)
+			if re.MatchString(seriesSig) {
+				ts := s.Timestamp
+				switch tsMode {
+				case "remove":
+					ts = time.Now().UnixMilli()
+				case "set":
+					// offset all timestamps so that the latest one aligns with the target
+					ts += offset
+				}
+				storage.AddSample(s.Labels, s.Value, ts)
 			}
 		}
 	}
@@ -357,12 +441,12 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 		beforeSamples += len(ss)
 	}
 	// Parse optional timestamp and regex
-	tsMode, tsFixed, ok := parseTimestampArg(args)
+	tsMode, tsFixed, ok := ParseTimestampArg(args)
 	if !ok {
 		fmt.Println("Invalid timestamp specification. Use: timestamp={now|remove|<timespec>}")
 		return true
 	}
-	re, ok := parseRegexArg(args)
+	re, ok := ParseRegexArg(args)
 	if !ok {
 		fmt.Println("Invalid regex specification. Use: regex='timeseries regex' (quote if it contains spaces)")
 		return true
@@ -373,7 +457,7 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 			return true
 		}
 		if tsMode != "keep" {
-			applyTimestampOverride(storage, beforeCounts, tsMode, tsFixed)
+			ApplyTimestampOverride(storage, beforeCounts, tsMode, tsFixed)
 		}
 	} else {
 		// Load into temp storage and merge matching series only
@@ -382,6 +466,29 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 			fmt.Printf("Failed to load metrics from %s: %v\n", path, err)
 			return true
 		}
+
+		// Find the latest timestamp in temp storage (for offset calculation)
+		var latestTimestamp int64
+		hasMatchingSamples := false
+		for name, samples := range tmp.Metrics {
+			for _, s := range samples {
+				seriesSig := seriesSignature(name, s.Labels)
+				if re.MatchString(seriesSig) {
+					if !hasMatchingSamples || s.Timestamp > latestTimestamp {
+						latestTimestamp = s.Timestamp
+						hasMatchingSamples = true
+					}
+				}
+			}
+		}
+
+		// Calculate offset if in "set" mode
+		var offset int64
+		if tsMode == "set" && hasMatchingSamples {
+			offset = tsFixed - latestTimestamp
+		}
+
+		// Apply samples with timestamp adjustments
 		for name, samples := range tmp.Metrics {
 			for _, s := range samples {
 				seriesSig := seriesSignature(name, s.Labels)
@@ -391,7 +498,8 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 					case "remove":
 						ts = time.Now().UnixMilli()
 					case "set":
-						ts = tsFixed
+						// offset all timestamps so that the latest one aligns with the target
+						ts += offset
 					}
 					storage.AddSample(s.Labels, s.Value, ts)
 				}

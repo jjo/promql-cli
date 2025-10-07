@@ -1,0 +1,112 @@
+# HELP http_requests_total Total number of HTTP requests (counter for rate calculations)
+# TYPE http_requests_total counter
+http_requests_total{service="api",instance="api-1",method="GET",code="200",path="/"} 10234.0 1759792654380
+http_requests_total{service="api",instance="api-1",method="GET",code="200",path="/"} 10438.68 1759792714380
+http_requests_total{service="api",instance="api-1",method="GET",code="200",path="/"} 10643.36 1759792774380
+http_requests_total{service="api",instance="api-1",method="GET",code="200",path="/"} 10848.04 1759792834380
+http_requests_total{service="api",instance="api-1",method="GET",code="200",path="/"} 11052.72 1759792894380
+http_requests_total{service="api",instance="api-1",method="GET",code="200",path="/"} 11257.40 1759792954380
+http_requests_total{service="api",instance="api-1",method="GET",code="200",path="/"} 11462.08 1759793014380
+http_requests_total{service="api",instance="api-1",method="GET",code="404",path="/"} 123.0 1759792654380
+http_requests_total{service="api",instance="api-1",method="GET",code="404",path="/"} 125.46 1759792714380
+http_requests_total{service="api",instance="api-1",method="GET",code="404",path="/"} 127.92 1759792774380
+http_requests_total{service="api",instance="api-1",method="GET",code="404",path="/"} 130.38 1759792834380
+http_requests_total{service="api",instance="api-1",method="GET",code="404",path="/"} 132.84 1759792894380
+http_requests_total{service="api",instance="api-1",method="GET",code="404",path="/"} 135.30 1759792954380
+http_requests_total{service="api",instance="api-1",method="GET",code="404",path="/"} 137.76 1759793014380
+http_requests_total{service="api",instance="api-1",method="POST",code="500",path="/api"} 7.0 1759792654380
+http_requests_total{service="api",instance="api-1",method="POST",code="500",path="/api"} 7.14 1759792714380
+http_requests_total{service="api",instance="api-1",method="POST",code="500",path="/api"} 7.28 1759792774380
+http_requests_total{service="api",instance="api-1",method="POST",code="500",path="/api"} 7.42 1759792834380
+http_requests_total{service="api",instance="api-1",method="POST",code="500",path="/api"} 7.56 1759792894380
+http_requests_total{service="api",instance="api-1",method="POST",code="500",path="/api"} 7.70 1759792954380
+http_requests_total{service="api",instance="api-1",method="POST",code="500",path="/api"} 7.84 1759793014380
+
+# HELP http_request_duration_seconds Request duration in seconds (histogram)
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.1"} 1200.0 1759792654380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.1"} 1224.0 1759792714380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.1"} 1248.0 1759792774380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.1"} 1272.0 1759792834380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.1"} 1296.0 1759792894380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.1"} 1320.0 1759792954380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.1"} 1344.0 1759793014380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.25"} 3500.0 1759792654380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.25"} 3570.0 1759792714380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.25"} 3640.0 1759792774380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.25"} 3710.0 1759792834380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.25"} 3780.0 1759792894380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.25"} 3850.0 1759792954380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.25"} 3920.0 1759793014380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.5"} 7200.0 1759792654380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.5"} 7344.0 1759792714380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.5"} 7488.0 1759792774380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.5"} 7632.0 1759792834380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.5"} 7776.0 1759792894380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.5"} 7920.0 1759792954380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="0.5"} 8064.0 1759793014380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="1"} 9800.0 1759792654380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="1"} 9996.0 1759792714380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="1"} 10192.0 1759792774380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="1"} 10388.0 1759792834380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="1"} 10584.0 1759792894380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="1"} 10780.0 1759792954380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="1"} 10976.0 1759793014380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="+Inf"} 10234.0 1759792654380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="+Inf"} 10438.68 1759792714380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="+Inf"} 10643.36 1759792774380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="+Inf"} 10848.04 1759792834380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="+Inf"} 11052.72 1759792894380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="+Inf"} 11257.40 1759792954380
+http_request_duration_seconds_bucket{service="api",method="GET",path="/",le="+Inf"} 11462.08 1759793014380
+http_request_duration_seconds_sum{service="api",method="GET",path="/"} 3852.7 1759792654380
+http_request_duration_seconds_sum{service="api",method="GET",path="/"} 3929.754 1759792714380
+http_request_duration_seconds_sum{service="api",method="GET",path="/"} 4006.808 1759792774380
+http_request_duration_seconds_sum{service="api",method="GET",path="/"} 4083.862 1759792834380
+http_request_duration_seconds_sum{service="api",method="GET",path="/"} 4160.916 1759792894380
+http_request_duration_seconds_sum{service="api",method="GET",path="/"} 4237.970 1759792954380
+http_request_duration_seconds_sum{service="api",method="GET",path="/"} 4315.024 1759793014380
+http_request_duration_seconds_count{service="api",method="GET",path="/"} 10234.0 1759792654380
+http_request_duration_seconds_count{service="api",method="GET",path="/"} 10438.68 1759792714380
+http_request_duration_seconds_count{service="api",method="GET",path="/"} 10643.36 1759792774380
+http_request_duration_seconds_count{service="api",method="GET",path="/"} 10848.04 1759792834380
+http_request_duration_seconds_count{service="api",method="GET",path="/"} 11052.72 1759792894380
+http_request_duration_seconds_count{service="api",method="GET",path="/"} 11257.40 1759792954380
+http_request_duration_seconds_count{service="api",method="GET",path="/"} 11462.08 1759793014380
+
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds (counter)
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total{service="api",instance="api-1"} 12345.6 1759792654380
+process_cpu_seconds_total{service="api",instance="api-1"} 12592.512 1759792714380
+process_cpu_seconds_total{service="api",instance="api-1"} 12839.424 1759792774380
+process_cpu_seconds_total{service="api",instance="api-1"} 13086.336 1759792834380
+process_cpu_seconds_total{service="api",instance="api-1"} 13333.248 1759792894380
+process_cpu_seconds_total{service="api",instance="api-1"} 13580.160 1759792954380
+process_cpu_seconds_total{service="api",instance="api-1"} 13827.072 1759793014380
+process_cpu_seconds_total{service="web",instance="web-1"} 6789.1 1759792654380
+process_cpu_seconds_total{service="web",instance="web-1"} 6924.882 1759792714380
+process_cpu_seconds_total{service="web",instance="web-1"} 7060.664 1759792774380
+process_cpu_seconds_total{service="web",instance="web-1"} 7196.446 1759792834380
+process_cpu_seconds_total{service="web",instance="web-1"} 7332.228 1759792894380
+process_cpu_seconds_total{service="web",instance="web-1"} 7468.010 1759792954380
+process_cpu_seconds_total{service="web",instance="web-1"} 7603.792 1759793014380
+
+# HELP cache_hits_total Cache hits (counter for rate calculations)
+# TYPE cache_hits_total counter
+cache_hits_total{service="api",cache="redis"} 58231.0 1759792654380
+cache_hits_total{service="api",cache="redis"} 59395.62 1759792714380
+cache_hits_total{service="api",cache="redis"} 60560.24 1759792774380
+cache_hits_total{service="api",cache="redis"} 61724.86 1759792834380
+cache_hits_total{service="api",cache="redis"} 62889.48 1759792894380
+cache_hits_total{service="api",cache="redis"} 64054.10 1759792954380
+cache_hits_total{service="api",cache="redis"} 65218.72 1759793014380
+
+# HELP cache_misses_total Cache misses (counter for rate calculations)
+# TYPE cache_misses_total counter
+cache_misses_total{service="api",cache="redis"} 7421.0 1759792654380
+cache_misses_total{service="api",cache="redis"} 7569.42 1759792714380
+cache_misses_total{service="api",cache="redis"} 7717.84 1759792774380
+cache_misses_total{service="api",cache="redis"} 7866.26 1759792834380
+cache_misses_total{service="api",cache="redis"} 8014.68 1759792894380
+cache_misses_total{service="api",cache="redis"} 8163.10 1759792954380
+cache_misses_total{service="api",cache="redis"} 8311.52 1759793014380
