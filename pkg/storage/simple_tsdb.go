@@ -117,7 +117,13 @@ func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
 	}
 	data = sanitizeDirectives(data)
 
-	// Use the standard Prometheus exposition format parser
+	// First, try custom line-by-line parser for time-series data with multiple timestamps
+	if err := s.parseTimeSeriesFormat(data); err == nil {
+		// Successfully parsed as time-series format
+		return nil
+	}
+
+	// Fall back to standard Prometheus exposition format parser
 	parser := expfmt.NewTextParser(model.UTF8Validation)
 	metricFamilies, err := parser.TextToMetricFamilies(strings.NewReader(string(data)))
 	if err != nil {
@@ -158,6 +164,229 @@ func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(n
 		}
 	}
 	return s.processMetricFamilies(filtered)
+}
+
+// parseTimeSeriesFormat parses time-series data where the same metric+labels can appear
+// multiple times with different timestamps. Format: metric{labels} value timestamp
+// Returns error if the data doesn't match this format (to fall back to standard parser).
+func (s *SimpleStorage) parseTimeSeriesFormat(data []byte) error {
+	lines := strings.Split(string(data), "\n")
+	hasTimestampedSamples := false
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Skip comments and empty lines
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Try to parse as: metric{labels} value timestamp
+		// Use a simple state machine to extract components
+		metricName, labels, value, timestamp, err := parseTimeSeriesLine(line)
+		if err != nil {
+			// If any line fails to parse as time-series format, return error to fall back
+			return err
+		}
+
+		// REQUIRE timestamps for time-series format (timestamp must be > 0)
+		// This prevents false positives with standard Prometheus format
+		if timestamp == 0 {
+			return fmt.Errorf("missing timestamp (time-series format requires timestamps)")
+		}
+
+		hasTimestampedSamples = true
+
+		// Build the full label set
+		lbls := make(map[string]string)
+		for k, v := range labels {
+			lbls[k] = v
+		}
+		lbls["__name__"] = metricName
+
+		// Store the sample
+		if s.Metrics == nil {
+			s.Metrics = make(map[string][]MetricSample)
+		}
+		s.Metrics[metricName] = append(s.Metrics[metricName], MetricSample{
+			Labels:    lbls,
+			Value:     value,
+			Timestamp: timestamp,
+		})
+	}
+
+	// Only succeed if we found timestamped samples
+	if !hasTimestampedSamples {
+		return fmt.Errorf("no timestamped samples found")
+	}
+
+	return nil
+}
+
+// parseTimeSeriesLine parses a single line in format: metric{label="value",...} value timestamp
+// Returns: metricName, labels, value, timestamp, error
+func parseTimeSeriesLine(line string) (string, map[string]string, float64, int64, error) {
+	// Find the opening brace for labels
+	braceIdx := strings.IndexByte(line, '{')
+	if braceIdx == -1 {
+		// No labels, format: metric value timestamp
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			return "", nil, 0, 0, fmt.Errorf("invalid format: %s", line)
+		}
+
+		metricName := parts[0]
+		value, err := parseFloat(parts[1])
+		if err != nil {
+			return "", nil, 0, 0, fmt.Errorf("invalid value: %s", parts[1])
+		}
+
+		var timestamp int64
+		if len(parts) >= 3 {
+			ts, err := parseInt(parts[2])
+			if err != nil {
+				return "", nil, 0, 0, fmt.Errorf("invalid timestamp: %s", parts[2])
+			}
+			timestamp = ts
+		}
+
+		return metricName, make(map[string]string), value, timestamp, nil
+	}
+
+	// Extract metric name
+	metricName := strings.TrimSpace(line[:braceIdx])
+
+	// Find the closing brace
+	closeBraceIdx := strings.IndexByte(line[braceIdx:], '}')
+	if closeBraceIdx == -1 {
+		return "", nil, 0, 0, fmt.Errorf("missing closing brace")
+	}
+	closeBraceIdx += braceIdx
+
+	// Parse labels
+	labelStr := line[braceIdx+1 : closeBraceIdx]
+	labels, err := parseLabels(labelStr)
+	if err != nil {
+		return "", nil, 0, 0, err
+	}
+
+	// Parse value and timestamp
+	rest := strings.TrimSpace(line[closeBraceIdx+1:])
+	parts := strings.Fields(rest)
+	if len(parts) < 1 {
+		return "", nil, 0, 0, fmt.Errorf("missing value")
+	}
+
+	value, err := parseFloat(parts[0])
+	if err != nil {
+		return "", nil, 0, 0, fmt.Errorf("invalid value: %s", parts[0])
+	}
+
+	var timestamp int64
+	if len(parts) >= 2 {
+		ts, err := parseInt(parts[1])
+		if err != nil {
+			return "", nil, 0, 0, fmt.Errorf("invalid timestamp: %s", parts[1])
+		}
+		timestamp = ts
+	}
+
+	return metricName, labels, value, timestamp, nil
+}
+
+// parseLabels parses label pairs in format: key1="value1",key2="value2"
+func parseLabels(s string) (map[string]string, error) {
+	labels := make(map[string]string)
+	if s == "" {
+		return labels, nil
+	}
+
+	// Simple state machine for parsing labels
+	var key, value strings.Builder
+	inValue := false
+	inQuote := false
+	escaped := false
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+
+		if escaped {
+			value.WriteByte(ch)
+			escaped = false
+			continue
+		}
+
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+
+		if ch == '"' {
+			inQuote = !inQuote
+			continue
+		}
+
+		if inQuote {
+			value.WriteByte(ch)
+			continue
+		}
+
+		// Outside quotes
+		if ch == '=' {
+			inValue = true
+			continue
+		}
+
+		if ch == ',' || ch == ' ' {
+			if key.Len() > 0 && inValue {
+				labels[key.String()] = value.String()
+				key.Reset()
+				value.Reset()
+				inValue = false
+			}
+			continue
+		}
+
+		if inValue {
+			value.WriteByte(ch)
+		} else {
+			key.WriteByte(ch)
+		}
+	}
+
+	// Handle last label
+	if key.Len() > 0 && inValue {
+		labels[key.String()] = value.String()
+	}
+
+	return labels, nil
+}
+
+// parseFloat parses a float value, handling scientific notation
+func parseFloat(s string) (float64, error) {
+	s = strings.TrimSpace(s)
+	// Handle special cases
+	switch s {
+	case "NaN", "nan":
+		return 0, fmt.Errorf("NaN not supported")
+	case "+Inf", "Inf":
+		return 0, fmt.Errorf("+Inf not supported")
+	case "-Inf":
+		return 0, fmt.Errorf("-Inf not supported")
+	}
+
+	// Parse float
+	val := 0.0
+	_, err := fmt.Sscanf(s, "%f", &val)
+	return val, err
+}
+
+// parseInt parses an integer timestamp
+func parseInt(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	var val int64
+	_, err := fmt.Sscanf(s, "%d", &val)
+	return val, err
 }
 
 // processMetricFamilies processes the parsed metric families (extracted from original LoadFromReader)
@@ -331,6 +560,7 @@ type SaveOptions struct {
 	// TimestampMode controls how timestamps are written: "keep" (default), "remove", or "set" (use FixedTimestamp)
 	TimestampMode string
 	// FixedTimestamp is used when TimestampMode=="set" (milliseconds since epoch)
+	// When TimestampMode=="set", the latest timestamp is aligned to FixedTimestamp and all others are offset accordingly
 	FixedTimestamp int64
 	// SeriesRegex filters which time series to write. It matches against "name{labels}" (labels sorted, quoted), excluding value/timestamp.
 	SeriesRegex *regexp.Regexp
@@ -344,6 +574,37 @@ func (s *SimpleStorage) SaveToWriter(w io.Writer) error {
 
 // SaveToWriterWithOptions writes the store content with additional formatting options.
 func (s *SimpleStorage) SaveToWriterWithOptions(w io.Writer, opts SaveOptions) error {
+	// Calculate timestamp offset if in "set" mode
+	var timestampOffset int64
+	if opts.TimestampMode == "set" {
+		// Find the latest timestamp across all samples
+		var latestTimestamp int64
+		hasSamples := false
+		for _, samples := range s.Metrics {
+			for _, sample := range samples {
+				// Apply series filter if present
+				if opts.SeriesRegex != nil {
+					name := sample.Labels["__name__"]
+					seriesSig := name
+					labelStr := formatLabelsForLine(sample.Labels)
+					if labelStr != "" {
+						seriesSig = fmt.Sprintf("%s{%s}", name, labelStr)
+					}
+					if !opts.SeriesRegex.MatchString(seriesSig) {
+						continue
+					}
+				}
+				if !hasSamples || sample.Timestamp > latestTimestamp {
+					latestTimestamp = sample.Timestamp
+					hasSamples = true
+				}
+			}
+		}
+		if hasSamples {
+			timestampOffset = opts.FixedTimestamp - latestTimestamp
+		}
+	}
+
 	// Collect metric names
 	names := make([]string, 0, len(s.Metrics))
 	for name := range s.Metrics {
@@ -405,7 +666,8 @@ func (s *SimpleStorage) SaveToWriterWithOptions(w io.Writer, opts SaveOptions) e
 			writeTimestamp := opts.TimestampMode != "remove"
 			outTs := r.ts
 			if opts.TimestampMode == "set" {
-				outTs = opts.FixedTimestamp
+				// Apply offset to align latest timestamp to target
+				outTs = r.ts + timestampOffset
 			}
 			if labelStr != "" {
 				if writeTimestamp {

@@ -1,0 +1,114 @@
+# Example PromQL queries for example.prom
+# These queries work with instant/snapshot metrics (no time series data)
+
+# === Basic metric selection ===
+up
+
+# Filter by labels
+up{service="api"}
+
+# All services
+up{service=~".*"}
+
+
+# === Instant values ===
+
+# Memory usage in GB
+process_resident_memory_bytes / 1024 / 1024 / 1024
+
+# Disk usage percentage
+100 * disk_usage_bytes / disk_total_bytes
+
+# Database connection utilization
+database_connections{state="active"} / (database_connections{state="active"} + database_connections{state="idle"})
+
+
+# === Aggregations on instant metrics ===
+
+# Total HTTP requests (counter value, not rate)
+sum by (service) (http_requests_total)
+
+# Top 5 HTTP endpoints by total request count
+topk(5, sum by (path) (http_requests_total))
+
+# Container memory usage by namespace
+sum by (namespace) (container_memory_usage_bytes)
+
+# Active sessions across all regions
+sum(active_sessions)
+
+# Sessions by region
+sum by (region) (active_sessions)
+
+
+# === Filtering and comparisons ===
+
+# Services with failing dependencies
+service_dependencies_up == 0
+
+# SSL certificates expiring soon (less than 60 days)
+ssl_certificate_expiry_seconds < 60 * 24 * 60 * 60
+
+# High disk usage (over 80%)
+100 * disk_usage_bytes / disk_total_bytes > 80
+
+
+# === Summary quantiles (pre-calculated) ===
+
+# Database query latency quantiles (from summary metric)
+db_query_duration_seconds{quantile="0.5"}
+db_query_duration_seconds{quantile="0.9"}
+db_query_duration_seconds{quantile="0.99"}
+
+# GC pause quantiles
+gc_duration_seconds{quantile="0.99"}
+
+
+# === Multi-line queries ===
+
+# Total error counts by type (not rate)
+sum by (type) (
+  api_errors_total
+)
+
+
+# Disk space remaining percentage
+100 * (
+  disk_total_bytes - disk_usage_bytes
+) / disk_total_bytes
+
+
+# Service health check
+(
+  up == 1
+  and
+  service_dependencies_up == 1
+)
+
+
+# Queue depth by type
+sum by (queue) (
+  queue_jobs
+)
+
+
+# Worker task totals by status
+sum by (worker, status) (
+  worker_tasks_processed_total
+)
+
+
+# Container resource allocation
+sum by (pod, namespace) (
+  container_memory_usage_bytes
+)
+
+
+# Network I/O snapshot ratio
+network_transmit_bytes_total / network_receive_bytes_total
+
+
+# WebSocket connections by protocol
+sum by (protocol) (
+  websocket_connections
+)

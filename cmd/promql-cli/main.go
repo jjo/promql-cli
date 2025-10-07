@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -93,7 +94,7 @@ func main() {
 				return fmt.Errorf("load requires <file.prom>")
 			}
 			metricsFile := args[0]
-			if err := loadMetricsFromFile(storage, metricsFile); err != nil {
+			if err := loadMetricsFromFile(storage, metricsFile, "", ""); err != nil {
 				return fmt.Errorf("failed to load metrics: %w", err)
 			}
 			if !*silent {
@@ -114,6 +115,8 @@ func main() {
 	output := queryFlags.String("output", "", "output format for -q (json)")
 	initCommands := queryFlags.String("command", "", "semicolon-separated pre-commands")
 	queryFlags.StringVar(initCommands, "c", "", "shorthand for --command")
+	timestamp := queryFlags.String("timestamp", "", "timestamp override for metrics file: now|remove|<timespec>")
+	regex := queryFlags.String("regex", "", "regex filter for series when loading metrics file")
 
 	queryCmd := &ffcli.Command{
 		Name:       "query",
@@ -129,7 +132,7 @@ func main() {
 				metricsFile = args[0]
 			}
 			if metricsFile != "" {
-				if err := loadMetricsFromFile(storage, metricsFile); err != nil {
+				if err := loadMetricsFromFile(storage, metricsFile, *timestamp, *regex); err != nil {
 					return fmt.Errorf("failed to load metrics: %w", err)
 				}
 				if !*silent {
@@ -250,14 +253,63 @@ func printVersion() {
 
 // loadMetricsFromFile loads metrics from a file into the provided storage.
 // It handles file opening, reading, and error reporting.
-func loadMetricsFromFile(storage *sstorage.SimpleStorage, filename string) error {
+// Options like timestamp and regex can be provided to filter/transform the loaded data.
+func loadMetricsFromFile(storage *sstorage.SimpleStorage, filename string, timestampSpec string, regexSpec string) error {
 	file, err := os.Open(filename)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
-	return storage.LoadFromReader(file)
+	// Capture before-load counts for timestamp override
+	beforeCounts := make(map[string]int)
+	for name, ss := range storage.Metrics {
+		beforeCounts[name] = len(ss)
+	}
+
+	// Parse timestamp specification
+	var tsMode string
+	var tsFixed int64
+	if timestampSpec == "" {
+		tsMode = "keep"
+	} else {
+		args := []string{"timestamp=" + timestampSpec}
+		var ok bool
+		tsMode, tsFixed, ok = repl.ParseTimestampArg(args)
+		if !ok {
+			return fmt.Errorf("invalid timestamp specification: %s", timestampSpec)
+		}
+	}
+
+	// Parse regex filter
+	var re *regexp.Regexp
+	if regexSpec != "" {
+		args := []string{"regex=" + regexSpec}
+		var ok bool
+		re, ok = repl.ParseRegexArg(args)
+		if !ok {
+			return fmt.Errorf("invalid regex specification: %s", regexSpec)
+		}
+	}
+
+	// Load metrics
+	if re == nil {
+		if err := storage.LoadFromReader(file); err != nil {
+			return err
+		}
+		if tsMode != "keep" {
+			repl.ApplyTimestampOverride(storage, beforeCounts, tsMode, tsFixed)
+		}
+	} else {
+		// Load with regex filtering (same logic as .load command)
+		tmp := sstorage.NewSimpleStorage()
+		if err := tmp.LoadFromReader(file); err != nil {
+			return err
+		}
+		repl.ApplyFilteredLoad(storage, tmp, re, tsMode, tsFixed)
+	}
+
+	return nil
 }
 
 // printStorageInfo displays a summary of the loaded metrics.

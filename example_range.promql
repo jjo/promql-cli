@@ -1,0 +1,77 @@
+# Example PromQL queries for example_range.prom
+# These queries demonstrate rate() calculations and histogram operations
+# Load with: .load example_range.prom timestamp=now
+
+# === Basic rate() calculations ===
+
+# HTTP request rate per second
+rate(http_requests_total[5m])
+
+# HTTP request rate by status code
+sum by (code) (rate(http_requests_total[5m]))
+
+# Error rate (4xx/5xx)
+rate(http_requests_total{code=~"4..|5.."}[5m])
+
+# Error ratio (percentage)
+100 * sum(rate(http_requests_total{code=~"4..|5.."}[5m])) / sum(rate(http_requests_total[5m]))
+
+
+# === Histogram quantile calculations ===
+
+# 95th percentile latency
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+
+# 99th percentile latency
+histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))
+
+# 50th percentile (median) latency
+histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))
+
+
+# === Average calculations from histograms ===
+
+# Average request duration from histogram
+rate(http_request_duration_seconds_sum[5m]) / rate(http_request_duration_seconds_count[5m])
+
+
+# === CPU rate calculations ===
+
+# CPU usage rate per second (cores)
+rate(process_cpu_seconds_total[5m])
+
+# CPU usage rate by service
+sum by (service) (rate(process_cpu_seconds_total[5m]))
+
+
+# === Cache hit ratio with rate ===
+
+# Cache hit ratio over time
+sum(rate(cache_hits_total[5m])) / (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))
+
+# Cache hit percentage
+100 * sum(rate(cache_hits_total[5m])) / (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))
+
+
+# === Multi-line queries ===
+
+# Request rate grouped by service and code
+sum by (service, code) (
+  rate(http_requests_total[5m])
+)
+
+
+# Complex histogram quantile with labels
+histogram_quantile(0.95,
+  sum by (service, le) (
+    rate(http_request_duration_seconds_bucket[5m])
+  )
+)
+
+
+# Error rate comparison (percentage of 5xx errors)
+(
+  sum(rate(http_requests_total{code=~"5.."}[5m]))
+  /
+  sum(rate(http_requests_total[5m]))
+) * 100

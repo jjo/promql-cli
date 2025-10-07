@@ -65,4 +65,113 @@ queue_jobs{queue="images",service="api"} 5
 # TYPE active_sessions gauge
 active_sessions{service="web",region="us-east-1"} 523
 active_sessions{service="web",region="eu-west-1"} 312
+active_sessions{service="web",region="ap-south-1"} 189
 
+# HELP disk_usage_bytes Disk space used in bytes
+# TYPE disk_usage_bytes gauge
+disk_usage_bytes{service="api",instance="api-1",mount="/data",device="/dev/sda1"} 8.5e+10
+disk_usage_bytes{service="api",instance="api-1",mount="/logs",device="/dev/sda2"} 2.3e+10
+disk_usage_bytes{service="web",instance="web-1",mount="/data",device="/dev/sdb1"} 5.2e+10
+
+# HELP disk_total_bytes Total disk space in bytes
+# TYPE disk_total_bytes gauge
+disk_total_bytes{service="api",instance="api-1",mount="/data",device="/dev/sda1"} 1e+11
+disk_total_bytes{service="api",instance="api-1",mount="/logs",device="/dev/sda2"} 5e+10
+disk_total_bytes{service="web",instance="web-1",mount="/data",device="/dev/sdb1"} 1e+11
+
+# HELP network_transmit_bytes_total Network bytes transmitted
+# TYPE network_transmit_bytes_total counter
+network_transmit_bytes_total{service="api",instance="api-1",interface="eth0"} 1.234e+12
+network_transmit_bytes_total{service="web",instance="web-1",interface="eth0"} 9.876e+11
+
+# HELP network_receive_bytes_total Network bytes received
+# TYPE network_receive_bytes_total counter
+network_receive_bytes_total{service="api",instance="api-1",interface="eth0"} 8.765e+11
+network_receive_bytes_total{service="web",instance="web-1",interface="eth0"} 7.654e+11
+
+# HELP api_rate_limit_remaining Remaining API rate limit tokens
+# TYPE api_rate_limit_remaining gauge
+api_rate_limit_remaining{service="api",instance="api-1",endpoint="/v1/users"} 8500
+api_rate_limit_remaining{service="api",instance="api-1",endpoint="/v1/orders"} 9200
+
+# HELP api_errors_total Total API errors by type
+# TYPE api_errors_total counter
+api_errors_total{service="api",instance="api-1",type="validation"} 234
+api_errors_total{service="api",instance="api-1",type="timeout"} 89
+api_errors_total{service="api",instance="api-1",type="authentication"} 156
+api_errors_total{service="api",instance="api-1",type="rate_limit"} 67
+
+# HELP batch_processing_duration_seconds Batch job processing time
+# TYPE batch_processing_duration_seconds histogram
+batch_processing_duration_seconds_bucket{job="daily_report",le="60"} 5
+batch_processing_duration_seconds_bucket{job="daily_report",le="120"} 18
+batch_processing_duration_seconds_bucket{job="daily_report",le="300"} 28
+batch_processing_duration_seconds_bucket{job="daily_report",le="600"} 30
+batch_processing_duration_seconds_bucket{job="daily_report",le="+Inf"} 30
+batch_processing_duration_seconds_sum{job="daily_report"} 4521.3
+batch_processing_duration_seconds_count{job="daily_report"} 30
+
+# HELP database_connections Current database connection pool status
+# TYPE database_connections gauge
+database_connections{service="api",instance="api-1",state="active"} 23
+database_connections{service="api",instance="api-1",state="idle"} 77
+database_connections{service="api",instance="api-1",state="waiting"} 3
+
+# HELP gc_duration_seconds GC pause durations
+# TYPE gc_duration_seconds summary
+gc_duration_seconds{service="api",instance="api-1",quantile="0.5"} 0.00023
+gc_duration_seconds{service="api",instance="api-1",quantile="0.9"} 0.00156
+gc_duration_seconds{service="api",instance="api-1",quantile="0.99"} 0.00487
+gc_duration_seconds_sum{service="api",instance="api-1"} 12.45
+gc_duration_seconds_count{service="api",instance="api-1"} 8234
+
+# HELP container_cpu_usage_seconds_total Container CPU usage
+# TYPE container_cpu_usage_seconds_total counter
+container_cpu_usage_seconds_total{container="api-primary",pod="api-1",namespace="production"} 15678.9
+container_cpu_usage_seconds_total{container="api-sidecar",pod="api-1",namespace="production"} 234.5
+container_cpu_usage_seconds_total{container="web-frontend",pod="web-1",namespace="production"} 8901.2
+
+# HELP container_memory_usage_bytes Container memory usage
+# TYPE container_memory_usage_bytes gauge
+container_memory_usage_bytes{container="api-primary",pod="api-1",namespace="production"} 1.5e+09
+container_memory_usage_bytes{container="api-sidecar",pod="api-1",namespace="production"} 1.2e+08
+container_memory_usage_bytes{container="web-frontend",pod="web-1",namespace="production"} 9.8e+08
+
+# HELP ssl_certificate_expiry_seconds SSL certificate expiry time
+# TYPE ssl_certificate_expiry_seconds gauge
+ssl_certificate_expiry_seconds{service="api",domain="api.example.com"} 5.184e+06
+ssl_certificate_expiry_seconds{service="web",domain="www.example.com"} 7.776e+06
+
+# HELP backup_last_success_timestamp Last successful backup timestamp
+# TYPE backup_last_success_timestamp gauge
+backup_last_success_timestamp{service="api",type="full"} 1.704067200e+09
+backup_last_success_timestamp{service="api",type="incremental"} 1.704153600e+09
+
+# HELP request_size_bytes HTTP request sizes
+# TYPE request_size_bytes histogram
+request_size_bytes_bucket{service="api",method="POST",le="100"} 125
+request_size_bytes_bucket{service="api",method="POST",le="1000"} 450
+request_size_bytes_bucket{service="api",method="POST",le="10000"} 520
+request_size_bytes_bucket{service="api",method="POST",le="100000"} 532
+request_size_bytes_bucket{service="api",method="POST",le="+Inf"} 532
+request_size_bytes_sum{service="api",method="POST"} 1.234e+06
+request_size_bytes_count{service="api",method="POST"} 532
+
+# HELP websocket_connections Active WebSocket connections
+# TYPE websocket_connections gauge
+websocket_connections{service="web",instance="web-1",protocol="ws"} 234
+websocket_connections{service="web",instance="web-1",protocol="wss"} 456
+
+# HELP worker_tasks_processed_total Total tasks processed by workers
+# TYPE worker_tasks_processed_total counter
+worker_tasks_processed_total{worker="email",status="success"} 12456
+worker_tasks_processed_total{worker="email",status="failed"} 23
+worker_tasks_processed_total{worker="image_processing",status="success"} 8901
+worker_tasks_processed_total{worker="image_processing",status="failed"} 145
+
+# HELP service_dependencies_up Dependency health checks
+# TYPE service_dependencies_up gauge
+service_dependencies_up{service="api",dependency="postgres"} 1
+service_dependencies_up{service="api",dependency="redis"} 1
+service_dependencies_up{service="api",dependency="kafka"} 0
+service_dependencies_up{service="web",dependency="cdn"} 1

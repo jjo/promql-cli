@@ -2,6 +2,8 @@ package repl
 
 import (
 	"testing"
+
+	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
 func TestParseQueriesFromContent_SingleLine(t *testing.T) {
@@ -526,5 +528,303 @@ sum(test_metric)
 		if queries[i].query != exp {
 			t.Errorf("query %d: expected '%s', got '%s'", i, exp, queries[i].query)
 		}
+	}
+}
+
+// TestApplyTimestampOverride_SetMode tests the timestamp offsetting logic
+func TestApplyTimestampOverride_SetMode(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+
+	// Add initial samples with known timestamps
+	storage.AddSample(map[string]string{"__name__": "test_metric", "job": "a"}, 100, 1000)
+	storage.AddSample(map[string]string{"__name__": "test_metric", "job": "b"}, 200, 2000)
+	storage.AddSample(map[string]string{"__name__": "test_metric", "job": "c"}, 300, 3000)
+
+	// beforeCounts tracks initial state (empty in this case)
+	beforeCounts := make(map[string]int)
+
+	// Apply timestamp override to set latest to 10000
+	// Latest is 3000, so offset should be 10000 - 3000 = 7000
+	ApplyTimestampOverride(storage, beforeCounts, "set", 10000)
+
+	// Verify all timestamps were offset by +7000
+	samples := storage.Metrics["test_metric"]
+	if len(samples) != 3 {
+		t.Fatalf("expected 3 samples, got %d", len(samples))
+	}
+
+	expected := []int64{8000, 9000, 10000}
+	for i, expectedTs := range expected {
+		if samples[i].Timestamp != expectedTs {
+			t.Errorf("sample %d: expected timestamp %d, got %d", i, expectedTs, samples[i].Timestamp)
+		}
+	}
+}
+
+// TestApplyTimestampOverride_SetModeWithExistingSamples tests offset calculation with existing samples
+func TestApplyTimestampOverride_SetModeWithExistingSamples(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+
+	// Add initial samples
+	storage.AddSample(map[string]string{"__name__": "existing", "job": "a"}, 100, 5000)
+	storage.AddSample(map[string]string{"__name__": "existing", "job": "b"}, 200, 6000)
+
+	// Track existing counts
+	beforeCounts := map[string]int{
+		"existing":    2,
+		"new_metric":  0,
+	}
+
+	// Add new samples with different timestamps
+	storage.AddSample(map[string]string{"__name__": "new_metric", "job": "x"}, 10, 1000)
+	storage.AddSample(map[string]string{"__name__": "new_metric", "job": "y"}, 20, 2500)
+	storage.AddSample(map[string]string{"__name__": "new_metric", "job": "z"}, 30, 3000)
+
+	// Apply offset only to newly loaded samples (after beforeCounts)
+	// Latest new sample is 3000, target is 8000, offset = 8000 - 3000 = 5000
+	ApplyTimestampOverride(storage, beforeCounts, "set", 8000)
+
+	// Verify existing samples were NOT modified
+	existingSamples := storage.Metrics["existing"]
+	if existingSamples[0].Timestamp != 5000 {
+		t.Errorf("existing sample 0: expected timestamp 5000, got %d", existingSamples[0].Timestamp)
+	}
+	if existingSamples[1].Timestamp != 6000 {
+		t.Errorf("existing sample 1: expected timestamp 6000, got %d", existingSamples[1].Timestamp)
+	}
+
+	// Verify new samples were offset by +5000
+	newSamples := storage.Metrics["new_metric"]
+	expectedNew := []int64{6000, 7500, 8000}
+	for i, expectedTs := range expectedNew {
+		if newSamples[i].Timestamp != expectedTs {
+			t.Errorf("new sample %d: expected timestamp %d, got %d", i, expectedTs, newSamples[i].Timestamp)
+		}
+	}
+}
+
+// TestApplyTimestampOverride_RemoveMode tests the remove mode
+func TestApplyTimestampOverride_RemoveMode(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+
+	// Add samples with various timestamps
+	storage.AddSample(map[string]string{"__name__": "test_metric", "job": "a"}, 100, 1000)
+	storage.AddSample(map[string]string{"__name__": "test_metric", "job": "b"}, 200, 2000)
+
+	beforeCounts := make(map[string]int)
+
+	// Apply remove mode - should set all to "now" (current time)
+	ApplyTimestampOverride(storage, beforeCounts, "remove", 0)
+
+	// Verify all timestamps are set to approximately now (within 1 second)
+	samples := storage.Metrics["test_metric"]
+	for i, sample := range samples {
+		// Timestamps should be very recent (within last second)
+		if sample.Timestamp < 1000000000000 {
+			t.Errorf("sample %d: timestamp %d is too old (not set to 'now')", i, sample.Timestamp)
+		}
+	}
+}
+
+// TestApplyTimestampOverride_KeepMode tests that keep mode doesn't modify timestamps
+func TestApplyTimestampOverride_KeepMode(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+
+	originalTimestamps := []int64{1000, 2000, 3000}
+	storage.AddSample(map[string]string{"__name__": "test_metric", "job": "a"}, 100, originalTimestamps[0])
+	storage.AddSample(map[string]string{"__name__": "test_metric", "job": "b"}, 200, originalTimestamps[1])
+	storage.AddSample(map[string]string{"__name__": "test_metric", "job": "c"}, 300, originalTimestamps[2])
+
+	beforeCounts := make(map[string]int)
+
+	// Apply keep mode - should not modify timestamps
+	ApplyTimestampOverride(storage, beforeCounts, "keep", 99999)
+
+	// Verify timestamps are unchanged
+	samples := storage.Metrics["test_metric"]
+	for i, expectedTs := range originalTimestamps {
+		if samples[i].Timestamp != expectedTs {
+			t.Errorf("sample %d: expected timestamp %d (unchanged), got %d", i, expectedTs, samples[i].Timestamp)
+		}
+	}
+}
+
+// TestApplyTimestampOverride_MultipleMetrics tests offset with multiple metrics
+func TestApplyTimestampOverride_MultipleMetrics(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+
+	// Add samples for multiple metrics with different timestamps
+	storage.AddSample(map[string]string{"__name__": "metric_a", "job": "1"}, 10, 1000)
+	storage.AddSample(map[string]string{"__name__": "metric_a", "job": "2"}, 20, 2000)
+	storage.AddSample(map[string]string{"__name__": "metric_b", "job": "1"}, 30, 1500)
+	storage.AddSample(map[string]string{"__name__": "metric_b", "job": "2"}, 40, 3500) // Latest
+
+	beforeCounts := make(map[string]int)
+
+	// Target is 10000, latest is 3500, offset = 10000 - 3500 = 6500
+	ApplyTimestampOverride(storage, beforeCounts, "set", 10000)
+
+	// Verify metric_a timestamps
+	samplesA := storage.Metrics["metric_a"]
+	expectedA := []int64{7500, 8500}
+	for i, expectedTs := range expectedA {
+		if samplesA[i].Timestamp != expectedTs {
+			t.Errorf("metric_a sample %d: expected timestamp %d, got %d", i, expectedTs, samplesA[i].Timestamp)
+		}
+	}
+
+	// Verify metric_b timestamps
+	samplesB := storage.Metrics["metric_b"]
+	expectedB := []int64{8000, 10000}
+	for i, expectedTs := range expectedB {
+		if samplesB[i].Timestamp != expectedTs {
+			t.Errorf("metric_b sample %d: expected timestamp %d, got %d", i, expectedTs, samplesB[i].Timestamp)
+		}
+	}
+}
+
+// TestApplyTimestampOverride_PreservesRelativeSpacing tests that relative time spacing is preserved
+func TestApplyTimestampOverride_PreservesRelativeSpacing(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+
+	// Create samples with specific spacing: 1s, 3s, 2s gaps
+	storage.AddSample(map[string]string{"__name__": "test", "job": "a"}, 1, 1000)
+	storage.AddSample(map[string]string{"__name__": "test", "job": "b"}, 2, 2000) // +1000ms
+	storage.AddSample(map[string]string{"__name__": "test", "job": "c"}, 3, 5000) // +3000ms
+	storage.AddSample(map[string]string{"__name__": "test", "job": "d"}, 4, 7000) // +2000ms
+
+	beforeCounts := make(map[string]int)
+
+	// Apply offset
+	ApplyTimestampOverride(storage, beforeCounts, "set", 20000)
+
+	// Verify spacing is preserved
+	samples := storage.Metrics["test"]
+	if len(samples) != 4 {
+		t.Fatalf("expected 4 samples, got %d", len(samples))
+	}
+
+	// Calculate actual spacing
+	spacing := []int64{
+		samples[1].Timestamp - samples[0].Timestamp,
+		samples[2].Timestamp - samples[1].Timestamp,
+		samples[3].Timestamp - samples[2].Timestamp,
+	}
+
+	expectedSpacing := []int64{1000, 3000, 2000}
+	for i, expected := range expectedSpacing {
+		if spacing[i] != expected {
+			t.Errorf("spacing %d: expected %d, got %d", i, expected, spacing[i])
+		}
+	}
+
+	// Verify latest is at target
+	if samples[3].Timestamp != 20000 {
+		t.Errorf("latest timestamp: expected 20000, got %d", samples[3].Timestamp)
+	}
+}
+
+// TestApplyTimestampOverride_EmptyStorage tests behavior with no samples
+func TestApplyTimestampOverride_EmptyStorage(t *testing.T) {
+	storage := sstorage.NewSimpleStorage()
+	beforeCounts := make(map[string]int)
+
+	// Should not panic with empty storage
+	ApplyTimestampOverride(storage, beforeCounts, "set", 10000)
+
+	// Verify storage is still empty
+	if len(storage.Metrics) != 0 {
+		t.Errorf("expected empty storage, got %d metrics", len(storage.Metrics))
+	}
+}
+
+// TestParseTimestampArg tests timestamp argument parsing
+func TestParseTimestampArg(t *testing.T) {
+	tests := []struct {
+		name          string
+		args          []string
+		expectedMode  string
+		expectedFixed int64
+		expectedOk    bool
+	}{
+		{
+			name:          "no args returns keep mode",
+			args:          []string{},
+			expectedMode:  "keep",
+			expectedFixed: 0,
+			expectedOk:    true,
+		},
+		{
+			name:          "timestamp=remove",
+			args:          []string{"timestamp=remove"},
+			expectedMode:  "remove",
+			expectedFixed: 0,
+			expectedOk:    true,
+		},
+		{
+			name:          "timestamp=now",
+			args:          []string{"timestamp=now"},
+			expectedMode:  "set",
+			expectedFixed: -1, // Special marker: we'll just check it's > 0
+			expectedOk:    true,
+		},
+		{
+			name:          "timestamp with unix seconds",
+			args:          []string{"timestamp=1735732800"},
+			expectedMode:  "set",
+			expectedFixed: 1735732800000, // Converted to milliseconds
+			expectedOk:    true,
+		},
+		{
+			name:          "timestamp with quotes",
+			args:          []string{"timestamp='now'"},
+			expectedMode:  "set",
+			expectedFixed: -1, // Special marker
+			expectedOk:    true,
+		},
+		{
+			name:          "timestamp with double quotes",
+			args:          []string{`timestamp="remove"`},
+			expectedMode:  "remove",
+			expectedFixed: 0,
+			expectedOk:    true,
+		},
+		{
+			name:          "invalid timestamp format",
+			args:          []string{"timestamp=invalid"},
+			expectedMode:  "keep",
+			expectedFixed: 0,
+			expectedOk:    false,
+		},
+		{
+			name:          "other args ignored",
+			args:          []string{"regex=test", "timestamp=remove", "other=value"},
+			expectedMode:  "remove",
+			expectedFixed: 0,
+			expectedOk:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mode, fixed, ok := ParseTimestampArg(tt.args)
+
+			if ok != tt.expectedOk {
+				t.Errorf("expected ok=%v, got ok=%v", tt.expectedOk, ok)
+			}
+
+			if mode != tt.expectedMode {
+				t.Errorf("expected mode=%s, got mode=%s", tt.expectedMode, mode)
+			}
+
+			// For "now" tests, just verify it's a reasonable timestamp
+			if tt.expectedFixed == -1 {
+				if fixed < 1000000000000 {
+					t.Errorf("expected timestamp > 1000000000000 (now), got %d", fixed)
+				}
+			} else if fixed != tt.expectedFixed {
+				t.Errorf("expected fixed=%d, got fixed=%d", tt.expectedFixed, fixed)
+			}
+		})
 	}
 }
