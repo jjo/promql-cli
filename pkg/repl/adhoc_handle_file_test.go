@@ -571,8 +571,8 @@ func TestApplyTimestampOverride_SetModeWithExistingSamples(t *testing.T) {
 
 	// Track existing counts
 	beforeCounts := map[string]int{
-		"existing":    2,
-		"new_metric":  0,
+		"existing":   2,
+		"new_metric": 0,
 	}
 
 	// Add new samples with different timestamps
