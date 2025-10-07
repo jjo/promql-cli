@@ -82,13 +82,13 @@ docker pull ghcr.io/jjo/promql-cli:latest
 
 ```bash
 # Load a metrics file and start exploring
-promql-cli query ./example.prom
+promql-cli query ./examples/example.prom
 
 # Or scrape live metrics and start querying
 promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"
 
 # Run a single query and get JSON output
-promql-cli query -q 'up' -o json ./example.prom
+promql-cli query -q 'up' -o json ./examples/example.prom
 ```
 
 ## 🎯 Why Use promql-cli?

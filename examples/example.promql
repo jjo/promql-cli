@@ -19,10 +19,6 @@ process_resident_memory_bytes / 1024 / 1024 / 1024
 # Disk usage percentage
 100 * disk_usage_bytes / disk_total_bytes
 
-# Database connection utilization
-database_connections{state="active"} / (database_connections{state="active"} + database_connections{state="idle"})
-
-
 # === Aggregations on instant metrics ===
 
 # Total HTTP requests (counter value, not rate)
@@ -45,9 +41,6 @@ sum by (region) (active_sessions)
 
 # Services with failing dependencies
 service_dependencies_up == 0
-
-# SSL certificates expiring soon (less than 60 days)
-ssl_certificate_expiry_seconds < 60 * 24 * 60 * 60
 
 # High disk usage (over 80%)
 100 * disk_usage_bytes / disk_total_bytes > 80
