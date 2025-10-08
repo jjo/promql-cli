@@ -1,0 +1,29 @@
+# Example Prometheus rules for promql-cli
+#
+# Use with:
+#   promql-cli query --rules ./example-rules.yaml ./examples/example_range.prom
+# or interactively:
+#   promql-cli query --rules ./example-rules.yaml
+#
+# Notes:
+# - Recording rules write results back into the in-memory store at evaluation time.
+# - Alerting rules are evaluated and printed to stdout (no alertmanager integration).
+# - You can combine this with a preloaded metrics file (e.g., SampleMetrics or your own).
+
+groups:
+  - name: example
+    rules:
+      # Recording rule: derive a series that aggregates http_requests_total by code.
+      - record: http_requests_total_by_code
+        expr: sum by (code) (http_requests_total)
+
+      - record: node_count
+        expr: count({__name__=~"node_.*"})
+
+      # Alerting rule: fire when any 5xx rate is observed over the last 5m.
+      - alert: HighErrorRatioRate
+        expr: sum(rate(http_requests_total{code=~"5.."}[5m])) / sum(rate(http_requests_total{}[5m])) > 1e-4
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP 5xx rate observed"
