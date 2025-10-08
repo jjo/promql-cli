@@ -300,7 +300,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			keyUp            = rune(16) // readline CharPrev (Ctrl-P)
 			keyCtrlY         = rune(25) // Ctrl-Y (Yank/paste AI clipboard)
 			keyCtrlW         = rune(23) // Ctrl-W (delete previous word with PromQL boundaries)
-			keyCtrlBackspace = rune(-4) // Ctrl-Backspace (delete previous word, terminal-dependent)
+			keyCtrlBackspace = rune(-4) // Ctrl-Backspace (readline internal code)
 			keyCtrlX         = rune(24) // Ctrl-X (start chord Ctrl-X Ctrl-E)
 			keyCtrlE         = rune(5)  // Ctrl-E (end-of-line or chord with Ctrl-X)
 			keyESC           = rune(27) // ESC (start of Alt- bindings)
@@ -359,8 +359,10 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		}
 
 		// Ctrl-W and Ctrl-Backspace: PromQL-aware delete previous word
-		// Readline processes these BEFORE calling this listener, often clearing the whole line
-		// So we detect this by checking if line is empty but prevLine wasn't
+		// Readline's Ctrl-W and Ctrl-Backspace have a bug where they clear the whole line
+		// instead of just one word when deleting the last word.
+		// We detect this by checking if line is empty but prevLine wasn't, then apply our own logic.
+		// Note: ESC+Backspace (when sent as separate keys) is handled in the ESC sequence handler below.
 		if key == keyCtrlW || key == keyCtrlBackspace {
 			// If readline cleared the line (its bug), use the previous state
 			if len(line) == 0 && len(prevLine) > 0 {
@@ -369,11 +371,10 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				prevPos = np
 				return nl, np, true
 			}
-			// Otherwise use current line (shouldn't happen with readline's bug, but just in case)
-			nl, np := deletePrevWord(line, pos)
-			prevLine = append(prevLine[:0], nl...)
-			prevPos = np
-			return nl, np, true
+			// Otherwise, readline handled it correctly - just update prevLine and return as-is
+			prevLine = append(prevLine[:0], line...)
+			prevPos = pos
+			return copyRunes(line), pos, true
 		}
 
 		// Ctrl-X: begin chord (for Ctrl-X Ctrl-E external editor)
@@ -477,7 +478,18 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				}
 				// ESC+Backspace/DEL: Delete word backward (Ctrl-Backspace in some terminals)
 				if key == 127 || key == 8 { // DEL or Backspace
+					// Check if readline already deleted a word via BackEscapeWord()
+					// Compare with prevLine (state before ESC was pressed)
+					if len(prevLine) > 0 && len(line) < len(prevLine) {
+						// Readline already handled deletion - just consume the event
+						prevLine = append(prevLine[:0], line...)
+						prevPos = pos
+						return copyRunes(line), pos, true
+					}
+					// Readline didn't handle it; apply our deletion
 					nl, np := deletePrevWord(line, pos)
+					prevLine = append(prevLine[:0], nl...)
+					prevPos = np
 					return nl, np, true
 				}
 				if key == '.' || key == '>' || key == ',' || (altDotRune != 0 && key == altDotRune) {
