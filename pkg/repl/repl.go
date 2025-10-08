@@ -359,7 +359,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		}
 
 		// Ctrl-W and Ctrl-Backspace: PromQL-aware delete previous word
-		// Readline's Ctrl-W and Ctrl-Backspace have a bug where they clear the whole line
+		// Readline's Ctrl-W and Ctrl-Backspace have a behavior where they clear the whole line
 		// instead of just one word when deleting the last word.
 		// We detect this by checking if line is empty but prevLine wasn't, then apply our own logic.
 		// Note: ESC+Backspace (when sent as separate keys) is handled in the ESC sequence handler below.
