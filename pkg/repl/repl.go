@@ -1285,6 +1285,20 @@ func (pac *PrometheusAutoCompleter) getMetricNameCompletions(prefix string) []st
 		}
 	}
 
+	// Add recording rule names
+	for _, rn := range GetRecordingRuleNames() {
+		if strings.HasPrefix(strings.ToLower(rn), strings.ToLower(prefix)) {
+			completions = append(completions, rn)
+		}
+	}
+
+	// Add alert names
+	for _, ar := range GetAlertingRules() {
+		if strings.HasPrefix(strings.ToLower(ar.Name), strings.ToLower(prefix)) {
+			completions = append(completions, ar.Name)
+		}
+	}
+
 	sort.Strings(completions)
 	return completions
 }
@@ -1987,6 +2001,10 @@ func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line str
 				query = strings.TrimPrefix(query, ".at "+parts[1]+" ")
 			}
 		}
+	}
+	// Expand alert names to their expressions
+	if alertExpr := GetAlertExpr(strings.TrimSpace(query)); alertExpr != "" {
+		query = alertExpr
 	}
 	// Normalize @<unix_ms> to seconds with decimals for PromQL @ modifier
 	query = normalizeAtModifierTimestamps(query)

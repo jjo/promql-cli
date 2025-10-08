@@ -1614,6 +1614,13 @@ func fetchMetrics() {
 					seen[rn] = true
 				}
 			}
+			// Include alert names as suggestions (without duplicates)
+			for _, ar := range GetAlertingRules() {
+				if !seen[ar.Name] {
+					metrics = append(metrics, ar.Name)
+					seen[ar.Name] = true
+				}
+			}
 			return
 		}
 	}

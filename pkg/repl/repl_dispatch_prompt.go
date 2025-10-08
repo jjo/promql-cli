@@ -67,6 +67,13 @@ func runPromptREPL(engine *promql.Engine, storage *sstorage.SimpleStorage, silen
 					seen[rn] = true
 				}
 			}
+			// Add alert names for completion (without duplicates)
+			for _, ar := range GetAlertingRules() {
+				if !seen[ar.Name] {
+					metrics = append(metrics, ar.Name)
+					seen[ar.Name] = true
+				}
+			}
 			metricsHelp = s.MetricsHelp
 
 			// Clear the cached metrics in fetchMetrics to force re-fetch
@@ -96,6 +103,13 @@ func runPromptREPL(engine *promql.Engine, storage *sstorage.SimpleStorage, silen
 			if !seen[rn] {
 				metrics = append(metrics, rn)
 				seen[rn] = true
+			}
+		}
+		// Add alert names for completion (without duplicates)
+		for _, ar := range GetAlertingRules() {
+			if !seen[ar.Name] {
+				metrics = append(metrics, ar.Name)
+				seen[ar.Name] = true
 			}
 		}
 	}
