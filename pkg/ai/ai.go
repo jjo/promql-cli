@@ -340,6 +340,10 @@ func postAndExtractAISuggestions(ctx context.Context, url, bearer string, body a
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		// Check if the error is due to context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -373,6 +377,10 @@ func postAndExtractAISuggestionsAnthropic(ctx context.Context, url, apiKey strin
 	req.Header.Set("anthropic-version", "2023-06-01")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		// Check if the error is due to context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()

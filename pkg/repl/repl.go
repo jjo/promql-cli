@@ -699,6 +699,13 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		line, err := rl.Readline()
 		if err != nil {
 			if err == readline.ErrInterrupt {
+				// On Ctrl-C, cancel any in-flight AI request first
+				if aiInProgress && aiCancelRequest != nil {
+					aiCancelRequest()
+					aiInProgress = false
+					aiCancelRequest = nil
+					continue
+				}
 				// On Ctrl-C during multi-line, cancel accumulation
 				mlActive = false
 				mlParts = nil

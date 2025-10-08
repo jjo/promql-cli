@@ -130,15 +130,39 @@ func handleAdhocAI(query string, storage *sstorage.SimpleStorage) bool {
 	aiInProgress = true
 	fmt.Println("Asking AI... (press Ctrl-C to cancel)")
 	go func(intent string) {
+		// Track if we've already cleared flags (e.g., due to cancellation)
+		flagsCleared := false
 		defer func() {
-			aiInProgress = false
-			aiCancelRequest = nil
+			if !flagsCleared {
+				aiInProgress = false
+				aiCancelRequest = nil
+			}
 			cancel()
 		}()
 		suggestions, err := ai.AISuggestQueriesCtx(ctx, storage, intent)
+
+		// Check if we were canceled (flags cleared by signal handler)
+		if flagsCleared || aiCancelRequest == nil {
+			if !flagsCleared {
+				flagsCleared = true
+			}
+			return
+		}
+
+		// Check if context was canceled even if no error was returned
+		if ctx.Err() != nil {
+			aiInProgress = false
+			aiCancelRequest = nil
+			flagsCleared = true
+			return
+		}
+
 		if err != nil {
 			if errors.Is(err, context.Canceled) || strings.Contains(strings.ToLower(err.Error()), "context canceled") || strings.Contains(strings.ToLower(err.Error()), "request canceled") {
-				fmt.Println("AI request canceled")
+				// Clear flags immediately before printing message so prompt updates
+				aiInProgress = false
+				aiCancelRequest = nil
+				flagsCleared = true
 				return
 			}
 			fmt.Printf("AI error: %v\n", err)
