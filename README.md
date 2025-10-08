@@ -47,6 +47,8 @@ promql-cli query -f queries.promql metrics.prom > results.txt
 promql-cli query -q 'rate(http_requests_total[5m])' -o json metrics.prom | jq
 ```
 
+📖 **Want more examples?** Check out [README_examples.md](README_examples.md) for comprehensive tutorials using the included `examples/*.prom` and `examples/*.promql` files.
+
 ## 🏃‍♂️ Quick Start
 
 ### Try Without Installing (Docker)
