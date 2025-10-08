@@ -213,8 +213,8 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 			lbls["alertstate"] = "firing"
 			lbls["__name__"] = "ALERTS"
 
-			// Write ALERTS metric to storage
-			storage.AddSample(lbls, smpl.F, t.UnixMilli())
+			// Write ALERTS metric to storage (always value=1 when firing)
+			storage.AddSample(lbls, 1.0, t.UnixMilli())
 
 			if printFn != nil {
 				printFn(fmt.Sprintf("ALERT %s firing labels=%v value=%v", r.Alert, lbls, smpl.F))
@@ -233,7 +233,8 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 			for k, v := range r.Labels {
 				lbls[k] = v
 			}
-			storage.AddSample(lbls, v.V, t.UnixMilli())
+			// Write ALERTS metric to storage (always value=1 when firing)
+			storage.AddSample(lbls, 1.0, t.UnixMilli())
 
 			if printFn != nil {
 				printFn(fmt.Sprintf("ALERT %s firing (scalar) value=%v", r.Alert, v.V))

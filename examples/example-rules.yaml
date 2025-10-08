@@ -34,3 +34,10 @@ groups:
           severity: warning
         annotations:
           summary: "High CPU usage on instance {{ $labels.instance }}"
+      # Alerting rule: fire when CPU usage is above 4 cores over the last 5m.
+      - alert: NotAnAlert
+        expr: vector(1) == 0
+        labels:
+          severity: dumb
+        annotations:
+          summary: "Should not fire"
