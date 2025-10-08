@@ -197,21 +197,44 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 				continue
 			}
 			fires++
-			if printFn != nil {
-				// Build labels string with applied rule labels
-				lbls := make(map[string]string)
-				smpl.Metric.Range(func(l labels.Label) {
+			// Build labels with alert metadata
+			lbls := make(map[string]string)
+			smpl.Metric.Range(func(l labels.Label) {
+				if l.Name != "__name__" {
 					lbls[l.Name] = l.Value
-				})
-				for k, v := range r.Labels {
-					lbls[k] = v
 				}
+			})
+			// Add rule labels
+			for k, v := range r.Labels {
+				lbls[k] = v
+			}
+			// Add alert metadata
+			lbls["alertname"] = r.Alert
+			lbls["alertstate"] = "firing"
+			lbls["__name__"] = "ALERTS"
+
+			// Write ALERTS metric to storage
+			storage.AddSample(lbls, smpl.F, t.UnixMilli())
+
+			if printFn != nil {
 				printFn(fmt.Sprintf("ALERT %s firing labels=%v value=%v", r.Alert, lbls, smpl.F))
 			}
 		}
 	case promql.Scalar:
 		if v.V != 0 && !math.IsNaN(v.V) {
 			fires++
+			// Create ALERTS metric for scalar alert
+			lbls := map[string]string{
+				"__name__":   "ALERTS",
+				"alertname":  r.Alert,
+				"alertstate": "firing",
+			}
+			// Add rule labels
+			for k, v := range r.Labels {
+				lbls[k] = v
+			}
+			storage.AddSample(lbls, v.V, t.UnixMilli())
+
 			if printFn != nil {
 				printFn(fmt.Sprintf("ALERT %s firing (scalar) value=%v", r.Alert, v.V))
 			}

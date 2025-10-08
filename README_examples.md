@@ -211,7 +211,35 @@ promql-cli query --timestamp=now examples/example_range.prom -c ".pinat now"
 > histogram_quantile(0.95, sum by (service, le) (rate(http_request_duration_seconds_bucket[5m])))
 ```
 
-### Workflow 5: Building Complex Multi-line Queries
+### Workflow 5: Testing Alert and Recording Rules
+
+**Goal:** Load and test Prometheus alert rules with time-series data.
+
+```bash
+# Load rules with time-series data
+promql-cli query --rules ./examples/example-rules.yaml --timestamp=now ./examples/example_range.prom
+```
+
+**In the REPL:**
+
+```promql
+# 1. Show loaded recording and alerting rules
+> .rules
+
+# 2. List all alerting rules
+> .alerts
+
+# 3. Execute alert by name (autocompletes with TAB)
+> HighErrorRatioRate
+
+# 4. Recording rules are automatically available as metrics
+> http_requests_total_by_code
+> node_count
+```
+
+**Expected output:** Rules are evaluated at load time, recording rules add metrics to storage, and alert expressions can be executed directly by name.
+
+### Workflow 6: Building Complex Multi-line Queries
 
 **Goal:** Practice writing readable, complex PromQL expressions.
 

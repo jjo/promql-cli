@@ -24,6 +24,13 @@ groups:
       - alert: HighErrorRatioRate
         expr: sum(rate(http_requests_total{code=~"5.."}[5m])) / sum(rate(http_requests_total{}[5m])) > 1e-4
         labels:
-          severity: warning
+          severity: critical
         annotations:
           summary: "High HTTP 5xx rate observed"
+      # Alerting rule: fire when CPU usage is above 4 cores over the last 5m.
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) > 4
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on instance {{ $labels.instance }}"
