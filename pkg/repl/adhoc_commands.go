@@ -48,6 +48,11 @@ var AdHocCommands = []AdHocCommand{
 		},
 	},
 	{
+		Command:     ".alerts",
+		Description: "Show alerting rules from active rule files",
+		Usage:       ".alerts",
+	},
+	{
 		Command:     ".timestamps",
 		Description: "Summarize timestamps for a metric",
 		Usage:       ".timestamps <metric>",

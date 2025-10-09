@@ -107,12 +107,15 @@ func main() {
 
 	// query subcommand
 	queryFlags := flag.NewFlagSet("query", flag.ContinueOnError)
+	querySilent := queryFlags.Bool("silent", false, "suppress startup output")
+	queryFlags.BoolVar(querySilent, "s", false, "shorthand for --silent")
 	oneOffQuery := queryFlags.String("query", "", "one-off query expr; exit")
 	queryFlags.StringVar(oneOffQuery, "q", "", "shorthand for --query")
 	queryFile := queryFlags.String("file", "", "file containing PromQL expressions (one per line)")
 	queryFlags.StringVar(queryFile, "f", "", "shorthand for --file")
 	rulesSpec := queryFlags.String("rules", "", "Prometheus rules: directory of .yml/.yaml or a glob (e.g., /path/*.yaml)")
 	output := queryFlags.String("output", "", "output format for -q (json)")
+	queryFlags.StringVar(output, "o", "", "shorthand for --output")
 	initCommands := queryFlags.String("command", "", "semicolon-separated pre-commands")
 	queryFlags.StringVar(initCommands, "c", "", "shorthand for --command")
 	timestamp := queryFlags.String("timestamp", "", "timestamp override for metrics file: now|remove|<timespec>")
@@ -135,7 +138,7 @@ func main() {
 				if err := loadMetricsFromFile(storage, metricsFile, *timestamp, *regex); err != nil {
 					return fmt.Errorf("failed to load metrics: %w", err)
 				}
-				if !*silent {
+				if !*querySilent {
 					fmt.Printf("Loaded metrics from %s\n", metricsFile)
 					printStorageInfo(storage)
 					fmt.Println()
@@ -143,7 +146,7 @@ func main() {
 			}
 
 			if *initCommands != "" {
-				repl.RunInitCommands(engine, storage, *initCommands, *silent)
+				repl.RunInitCommands(engine, storage, *initCommands, *querySilent)
 			}
 
 			// Load and evaluate rules if provided
@@ -153,11 +156,11 @@ func main() {
 					return fmt.Errorf("rules: %w", err)
 				}
 				if len(files) == 0 {
-					if !*silent {
+					if !*querySilent {
 						fmt.Printf("No rule files matched %q\n", *rulesSpec)
 					}
 				} else {
-					if !*silent {
+					if !*querySilent {
 						fmt.Printf("Evaluating %d rule file(s)\n", len(files))
 					}
 					now := time.Now()
@@ -167,7 +170,7 @@ func main() {
 					if err != nil {
 						return fmt.Errorf("rules evaluation failed: %w", err)
 					}
-					if !*silent {
+					if !*querySilent {
 						fmt.Printf("Rules evaluated at %s: added %d samples; %d alerts\n", now.UTC().Format(time.RFC3339), added, alerts)
 						// Show store totals
 						tm := len(storage.Metrics)
@@ -210,7 +213,7 @@ func main() {
 			}
 
 			// Interactive REPL
-			repl.RunInteractiveQueriesDispatch(engine, storage, *silent, *replBackend)
+			repl.RunInteractiveQueriesDispatch(engine, storage, *querySilent, *replBackend)
 			return nil
 		},
 	}

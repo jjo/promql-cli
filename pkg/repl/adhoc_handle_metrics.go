@@ -374,6 +374,20 @@ func handleAdhocRules(query string, storage *sstorage.SimpleStorage) bool {
 	return true
 }
 
+// .alerts command: shows alerting rules from active rule files
+func handleAdhocAlerts(query string, storage *sstorage.SimpleStorage) bool {
+	alerts := GetAlertingRules()
+	if len(alerts) == 0 {
+		fmt.Println("Alerts: none")
+		return true
+	}
+	fmt.Printf("Alerting rules (%d):\n", len(alerts))
+	for _, a := range alerts {
+		fmt.Printf("  %s: %s\n", a.Name, a.Expr)
+	}
+	return true
+}
+
 // Seed historical samples for a metric
 func handleAdhocSeed(query string, storage *sstorage.SimpleStorage) bool {
 	args := strings.Fields(query)

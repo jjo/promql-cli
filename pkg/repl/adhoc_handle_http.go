@@ -1,13 +1,17 @@
 package repl
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
@@ -80,16 +84,49 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 		}
 	}
 
+	// Create a context that can be canceled by Ctrl-C
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handler to cancel scraping
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+
+	go func() {
+		select {
+		case <-sigChan:
+			fmt.Println("\nScraping interrupted")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	client := &http.Client{Timeout: 60 * time.Second}
 	for i := 0; i < count; i++ {
+		// Check if context was canceled
+		if ctx.Err() != nil {
+			break
+		}
+
 		beforeMetrics := len(storage.Metrics)
 		beforeSamples := 0
 		for _, ss := range storage.Metrics {
 			beforeSamples += len(ss)
 		}
 
-		resp, err := client.Get(uri)
+		req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
 		if err != nil {
+			fmt.Printf("Failed to create request for %s: %v\n", uri, err)
+			return true
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				// Context was canceled, stop silently
+				break
+			}
 			fmt.Printf("Failed to scrape %s: %v\n", uri, err)
 			return true
 		}
@@ -124,7 +161,12 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 		}
 
 		if i < count-1 && delay > 0 {
-			time.Sleep(delay)
+			// Sleep with context awareness
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				break
+			}
 		}
 	}
 
@@ -163,9 +205,32 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 		delay = 0
 	}
 
+	// Create a context that can be canceled by Ctrl-C
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handler
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+
+	go func() {
+		select {
+		case <-sigChan:
+			fmt.Println("\nProm scrape interrupted")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	client := &http.Client{Timeout: 60 * time.Second}
 	endpoint := buildPromQueryEndpoint(uri)
 	for i := 0; i < count; i++ {
+		// Check if context was canceled
+		if ctx.Err() != nil {
+			break
+		}
+
 		// Build GET request to /api/v1/query?query=...
 		u, err := url.Parse(endpoint)
 		if err != nil {
@@ -175,11 +240,15 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 		qv := u.Query()
 		qv.Set("query", q)
 		u.RawQuery = qv.Encode()
-		req, _ := http.NewRequest("GET", u.String(), nil)
+		req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 		// Apply auth
 		applyPromAuth(req, authMode, user, pass, orgID, apiKey)
 		resp, err := client.Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				// Context was canceled
+				break
+			}
 			fmt.Printf("Prometheus API request failed: %v\n", err)
 			return true
 		}
@@ -226,7 +295,12 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 		}()
 
 		if i < count-1 && delay > 0 {
-			time.Sleep(delay)
+			// Sleep with context awareness
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				break
+			}
 		}
 	}
 
@@ -537,9 +611,32 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 		delay = 0
 	}
 
+	// Create a context that can be canceled by Ctrl-C
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handler
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+
+	go func() {
+		select {
+		case <-sigChan:
+			fmt.Println("\nProm scrape range interrupted")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	client := &http.Client{Timeout: 120 * time.Second}
 	endpoint := buildPromQueryRangeEndpoint(uri)
 	for i := 0; i < count; i++ {
+		// Check if context was canceled
+		if ctx.Err() != nil {
+			break
+		}
+
 		u, err := url.Parse(endpoint)
 		if err != nil {
 			fmt.Printf("Invalid PROM_API_URI %q: %v\n", uri, err)
@@ -551,10 +648,14 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 		qv.Set("end", end.UTC().Format(time.RFC3339))
 		qv.Set("step", step.String())
 		u.RawQuery = qv.Encode()
-		req, _ := http.NewRequest("GET", u.String(), nil)
+		req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 		applyPromAuth(req, authMode, user, pass, orgID, apiKey)
 		resp, err := client.Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				// Context was canceled
+				break
+			}
 			fmt.Printf("Prometheus API request failed: %v\n", err)
 			return true
 		}
@@ -600,7 +701,12 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 		}()
 
 		if i < count-1 && delay > 0 {
-			time.Sleep(delay)
+			// Sleep with context awareness
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				break
+			}
 		}
 	}
 

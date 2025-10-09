@@ -1007,7 +1007,12 @@ func (r *promptREPL) Run() error {
 			<-sigChan
 			// If an AI request is in-flight, cancel it instead of exiting
 			if aiCancelRequest != nil {
-				aiCancelRequest()
+				// Clear flags immediately in signal handler to update prompt
+				aiInProgress = false
+				cancelFunc := aiCancelRequest
+				aiCancelRequest = nil
+				cancelFunc()
+				fmt.Println("\nAI request canceled")
 				continue
 			}
 			// Otherwise exit cleanly
@@ -1607,6 +1612,13 @@ func fetchMetrics() {
 				if !seen[rn] {
 					metrics = append(metrics, rn)
 					seen[rn] = true
+				}
+			}
+			// Include alert names as suggestions (without duplicates)
+			for _, ar := range GetAlertingRules() {
+				if !seen[ar.Name] {
+					metrics = append(metrics, ar.Name)
+					seen[ar.Name] = true
 				}
 			}
 			return

@@ -44,7 +44,7 @@ promql-cli query ./metrics.prom
 promql-cli query -f queries.promql metrics.prom > results.txt
 
 # Quick one-shot query with JSON output
-promql-cli query -q 'rate(http_requests_total[5m])' -o json metrics.prom | jq
+promql-cli query -s -q 'rate(http_requests_total[5m])' -o json --timestamp=now examples/example_range.prom | jq
 ```
 
 📖 **Want more examples?** Check out [README_examples.md](README_examples.md) for comprehensive tutorials using the included `examples/*.prom` and `examples/*.promql` files.
@@ -65,7 +65,8 @@ docker run --rm -it -v "$PWD":/data xjjo/promql-cli:latest query /data/metrics.p
 
 # One-shot query with JSON output
 docker run --rm -v "$PWD":/data xjjo/promql-cli:latest query \
-  -q 'rate(http_requests_total[5m])' -o json /data/metrics.prom | jq
+  -s -q 'rate(http_requests_total[5m])' -o json \
+  --timestamp=now /data/examples/example_range.prom | jq
 ```
 
 ### Installation
@@ -90,7 +91,7 @@ promql-cli query ./examples/example.prom
 promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"
 
 # Run a single query and get JSON output
-promql-cli query -q 'up' -o json ./examples/example.prom
+promql-cli query -s -q 'up' -o json examples/example.prom
 ```
 
 ## 🎯 Why Use promql-cli?
@@ -170,7 +171,7 @@ docker rm -f node-exporter
 **CI/CD Integration** - Validate exporter metrics in your CI pipeline:
 
 ```bash
-docker run --rm promql-cli:latest query \
+docker run --rm xjjo/promql-cli:latest query \
   -c ".scrape http://test-exporter:8080/metrics" \
   -q "up{job='test-exporter'} == 1" \
   -o json | jq '.data.result | length > 0'
@@ -364,6 +365,8 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 
 | Command | What it does | Example |
 |---------|--------------|---------|
+| `.rules [file/dir/glob]` | Load and evaluate alerting/recording rules | `.rules examples/example-rules.yaml` |
+| `.alerts` | Show alerting rules (can execute by name) | `.alerts` |
 | `.seed <metric> [steps] [interval]` | Generate test data history | `.seed http_requests_total 20 30s` |
 | `.pinat <time>` | Lock evaluation time (for testing) | `.pinat now-1h` |
 | `.at <time> <query>` | Run query at specific time | `.at now-5m rate(cpu[1m])` |

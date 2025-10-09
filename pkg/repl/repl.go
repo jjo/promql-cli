@@ -699,6 +699,13 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		line, err := rl.Readline()
 		if err != nil {
 			if err == readline.ErrInterrupt {
+				// On Ctrl-C, cancel any in-flight AI request first
+				if aiInProgress && aiCancelRequest != nil {
+					aiCancelRequest()
+					aiInProgress = false
+					aiCancelRequest = nil
+					continue
+				}
 				// On Ctrl-C during multi-line, cancel accumulation
 				mlActive = false
 				mlParts = nil
@@ -1275,6 +1282,20 @@ func (pac *PrometheusAutoCompleter) getMetricNameCompletions(prefix string) []st
 	for metricName := range pac.storage.Metrics {
 		if strings.HasPrefix(strings.ToLower(metricName), strings.ToLower(prefix)) {
 			completions = append(completions, metricName)
+		}
+	}
+
+	// Add recording rule names
+	for _, rn := range GetRecordingRuleNames() {
+		if strings.HasPrefix(strings.ToLower(rn), strings.ToLower(prefix)) {
+			completions = append(completions, rn)
+		}
+	}
+
+	// Add alert names
+	for _, ar := range GetAlertingRules() {
+		if strings.HasPrefix(strings.ToLower(ar.Name), strings.ToLower(prefix)) {
+			completions = append(completions, ar.Name)
 		}
 	}
 
@@ -1980,6 +2001,10 @@ func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line str
 				query = strings.TrimPrefix(query, ".at "+parts[1]+" ")
 			}
 		}
+	}
+	// Expand alert names to their expressions
+	if alertExpr := GetAlertExpr(strings.TrimSpace(query)); alertExpr != "" {
+		query = alertExpr
 	}
 	// Normalize @<unix_ms> to seconds with decimals for PromQL @ modifier
 	query = normalizeAtModifierTimestamps(query)
