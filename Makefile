@@ -73,9 +73,9 @@ test-gofumpt:
 		exit 1; \
 	fi
 
-test-examples:
-	@# Test code examples in documentation
-	grep -E ^promql-cli README_examples.md | sed -e 's,$$, </dev/null,' -e 's/--repl=prompt //' -e 's/query/query -s/' | grep -v EOF | bash -x >/dev/null
+test-examples: build-binary
+	@# Test code examples in documentation: nuke stdin, don't use repl=prompt, and set silent query mode
+	grep -E ^promql-cli README_examples.md | sed -e 's,^promql-cli,bin/$(APP),' -e 's,$$, </dev/null,' -e 's/--repl=prompt //' -e 's/query/query -s/' | grep -v EOF | bash -x >/dev/null
 
 tidy:
 	go mod tidy
