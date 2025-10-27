@@ -49,7 +49,7 @@ vet:
 
 _test_pkgs := $(shell go list ./... 2>/dev/null)
 
-test: test-unit test-gofumpt test-lint
+test: test-unit test-gofumpt test-lint test-examples
 
 test-unit:
 	@go test -v ./...
@@ -72,6 +72,10 @@ test-gofumpt:
 		echo "Run: make gofumpt"; \
 		exit 1; \
 	fi
+
+test-examples: build-binary
+	@# Test code examples in documentation: nuke stdin, don't use repl=prompt, and set silent query mode
+	grep -E ^promql-cli README_examples.md | sed -e 's,^promql-cli,bin/$(APP),' -e 's,$$, </dev/null,' -e 's/--repl=prompt //' -e 's/query/query -s/' | grep -v EOF | bash -x >/dev/null
 
 tidy:
 	go mod tidy
