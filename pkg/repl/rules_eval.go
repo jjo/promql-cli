@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/rulefmt"
 	"github.com/prometheus/prometheus/promql"
@@ -111,7 +112,7 @@ func loadRuleGroups(files []string) ([]rulefmt.RuleGroup, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", file, err)
 		}
-		rgs, errs := rulefmt.Parse(b, false)
+		rgs, errs := rulefmt.Parse(b, false, model.UTF8Validation)
 		if len(errs) > 0 {
 			return nil, fmt.Errorf("%s: %v", file, errs)
 		}
