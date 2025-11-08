@@ -283,23 +283,7 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 
 🎉 **Congratulations!** You now know the basics. Check out the sections below for advanced features.
 
-## 🔄 promql-cli vs Alternatives
-
-| Feature / Task | promql-cli | Prometheus + Grafana | promtool |
-|----------------|------------|----------------------|----------|
-| **Setup time** | < 1 minute | 15-30 minutes | < 1 minute |
-| **Query metrics file** | ✅ Native | ❌ Need import | ✅ Limited |
-| **Interactive REPL** | ✅ Rich w/ autocomplete | ➖ Web UI only | ❌ No |
-| **AI query assistance** | ✅ Built-in | ❌ No | ❌ No |
-| **Offline usage** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Generate test data** | ✅ `.seed` command | ➖ Manual | ❌ No |
-| **Scrape live endpoints** | ✅ `.scrape` command | ✅ Config required | ❌ No |
-| **Test alert rules** | ✅ `--rules` flag | ✅ Full featured | ✅ Limited |
-| **JSON output** | ✅ `-o json` | ✅ API | ✅ Yes |
-| **Multi-line queries** | ✅ Native | ✅ Yes | ❌ No |
-| **Visualization** | ❌ No | ✅ Graphs/dashboards | ❌ No |
-| **Time-series storage** | ➖ In-memory only | ✅ Persistent | ❌ No |
-| **Best for** | Dev/debug/learn | Production monitoring | CI/CD validation |
+## 🔄 promql-cli use-cases
 
 **When to use promql-cli:**
 - 🚀 Developing/testing Prometheus exporters
@@ -308,7 +292,7 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 - 🧪 Testing queries before deploying to production
 - 💻 Quick metric analysis without infrastructure
 
-**When to use Prometheus + Grafana:**
+**When to use Prometheus/Mimir + Grafana:**
 - 📈 Production monitoring with alerts
 - 📊 Visual dashboards and graphs
 - 🗄️ Long-term metric storage
