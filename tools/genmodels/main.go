@@ -1,3 +1,4 @@
+// Package main provides a tool to generate model information for AI providers.
 package main
 
 import (
@@ -83,7 +84,7 @@ func main() {
 
 func fetchOpenAI(c *http.Client, key, base string) ([]ModelInfo, error) {
 	base = strings.TrimRight(orDefault(base, "https://api.openai.com/v1"), "/")
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", base+"/models", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := c.Do(req)
 	if err != nil {
@@ -109,7 +110,7 @@ func fetchOpenAI(c *http.Client, key, base string) ([]ModelInfo, error) {
 
 func fetchOpenAICompat(c *http.Client, key, base string) ([]ModelInfo, error) {
 	base = strings.TrimRight(base, "/")
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", base+"/models", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := c.Do(req)
 	if err != nil {
@@ -163,7 +164,7 @@ func fetchOllama(host string, c *http.Client) ([]ModelInfo, error) {
 
 func fetchAnthropic(c *http.Client, apiKey, base string) ([]ModelInfo, error) {
 	base = strings.TrimRight(base, "/")
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", base+"/models", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, base+"/models", nil)
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	resp, err := c.Do(req)

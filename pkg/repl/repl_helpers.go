@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// PromQL-aware word separators used for word boundary detection
-const PromQLSeparators = "(){}[]\" \t\n,="
+// PromQLSeparators defines PromQL-aware word separators used for word boundary detection.
+const PromQLSeparators = " (){},=!~\"\t\n+-*/^%"
 
 // getEditorCommand returns the user's preferred editor from environment variables,
 // falling back to nano as default.

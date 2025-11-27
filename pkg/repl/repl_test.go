@@ -28,7 +28,7 @@ func newTestEngine() *promql.Engine {
 		LookbackDelta:            5 * time.Minute,
 		EnableAtModifier:         true,
 		EnableNegativeOffset:     true,
-		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
+		NoStepSubqueryIntervalFn: func(_ int64) int64 { return 60 * 1000 },
 	})
 }
 
@@ -49,7 +49,7 @@ func TestExecuteOne_AtModifierWithMillis_Works(t *testing.T) {
 		LookbackDelta:            5 * time.Minute,
 		EnableAtModifier:         true,
 		EnableNegativeOffset:     true,
-		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
+		NoStepSubqueryIntervalFn: func(_ int64) int64 { return 60 * 1000 },
 	})
 
 	q := "cloudcost_azure_aks_storage_by_location_usd_per_gibyte_hour @1700000000000"

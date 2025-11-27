@@ -8,7 +8,7 @@ import (
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
 
-func handleAdhocPinAt(query string, storage *sstorage.SimpleStorage) bool {
+func handleAdhocPinAt(query string, _ *sstorage.SimpleStorage) bool {
 	arg := strings.TrimSpace(strings.TrimPrefix(query, ".pinat"))
 	arg = strings.Trim(arg, " \"'")
 	if arg == "" {

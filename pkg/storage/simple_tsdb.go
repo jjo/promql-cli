@@ -1,3 +1,4 @@
+// Package simple_storage provides an in-memory time series storage implementation for PromQL.
 package simple_storage
 
 import (
@@ -734,7 +735,7 @@ type SimpleQuerier struct {
 	mint, maxt int64
 }
 
-func (q *SimpleQuerier) Select(ctx context.Context, sortSeries bool, hints *storage.SelectHints, matchers ...*labels.Matcher) storage.SeriesSet {
+func (q *SimpleQuerier) Select(_ context.Context, sortSeries bool, hints *storage.SelectHints, matchers ...*labels.Matcher) storage.SeriesSet {
 	var series []storage.Series
 
 	// Find matching metrics
@@ -775,7 +776,7 @@ func (q *SimpleQuerier) Select(ctx context.Context, sortSeries bool, hints *stor
 	return &SimpleSeriesSet{series: series, index: -1}
 }
 
-func (q *SimpleQuerier) LabelValues(ctx context.Context, name string, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
+func (q *SimpleQuerier) LabelValues(_ context.Context, name string, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
 	values := make(map[string]struct{})
 	for _, samples := range q.storage.Metrics {
 		for _, sample := range samples {
@@ -794,7 +795,7 @@ func (q *SimpleQuerier) LabelValues(ctx context.Context, name string, hints *sto
 	return result, nil, nil
 }
 
-func (q *SimpleQuerier) LabelNames(ctx context.Context, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
+func (q *SimpleQuerier) LabelNames(_ context.Context, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
 	names := make(map[string]struct{})
 	for _, samples := range q.storage.Metrics {
 		for _, sample := range samples {
@@ -847,7 +848,7 @@ func (s *SimpleSeries) Labels() labels.Labels {
 	return s.labels
 }
 
-func (s *SimpleSeries) Iterator(iterator chunkenc.Iterator) chunkenc.Iterator {
+func (s *SimpleSeries) Iterator(_ chunkenc.Iterator) chunkenc.Iterator {
 	return &SimpleIterator{samples: s.samples, index: -1}
 }
 

@@ -115,7 +115,7 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 			beforeSamples += len(ss)
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 		if err != nil {
 			fmt.Printf("Failed to create request for %s: %v\n", uri, err)
 			return true
@@ -240,7 +240,7 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 		qv := u.Query()
 		qv.Set("query", q)
 		u.RawQuery = qv.Encode()
-		req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		// Apply auth
 		applyPromAuth(req, authMode, user, pass, orgID, apiKey)
 		resp, err := client.Do(req)
@@ -648,7 +648,7 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 		qv.Set("end", end.UTC().Format(time.RFC3339))
 		qv.Set("step", step.String())
 		u.RawQuery = qv.Encode()
-		req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		applyPromAuth(req, authMode, user, pass, orgID, apiKey)
 		resp, err := client.Do(req)
 		if err != nil {
@@ -777,7 +777,7 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 	startStr := rest[sStart:i]
 	start, err = parseEvalTime(startStr)
 	if err != nil {
-		err = fmt.Errorf("invalid start time %q: %v", startStr, err)
+		err = fmt.Errorf("invalid start time %q: %w", startStr, err)
 		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	skipSpaces()
@@ -793,7 +793,7 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 	endStr := rest[eStart:i]
 	end, err = parseEvalTime(endStr)
 	if err != nil {
-		err = fmt.Errorf("invalid end time %q: %v", endStr, err)
+		err = fmt.Errorf("invalid end time %q: %w", endStr, err)
 		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	skipSpaces()
@@ -809,7 +809,7 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 	stepStr := rest[stStart:i]
 	step, err = time.ParseDuration(stepStr)
 	if err != nil {
-		err = fmt.Errorf("invalid step duration %q: %v", stepStr, err)
+		err = fmt.Errorf("invalid step duration %q: %w", stepStr, err)
 		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	skipSpaces()

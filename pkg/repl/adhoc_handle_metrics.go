@@ -27,7 +27,7 @@ func handleAdhocStats(_ string, storage *sstorage.SimpleStorage) bool {
 	return true
 }
 
-func handleAdhocMetrics(query string, storage *sstorage.SimpleStorage) bool {
+func handleAdhocMetrics(_ string, storage *sstorage.SimpleStorage) bool {
 	if len(storage.Metrics) == 0 {
 		fmt.Println("No metrics loaded")
 		return true
@@ -375,7 +375,7 @@ func handleAdhocRules(query string, storage *sstorage.SimpleStorage) bool {
 }
 
 // .alerts command: shows alerting rules from active rule files
-func handleAdhocAlerts(query string, storage *sstorage.SimpleStorage) bool {
+func handleAdhocAlerts(_ string, storage *sstorage.SimpleStorage) bool {
 	alerts := GetAlertingRules()
 	if len(alerts) == 0 {
 		fmt.Println("Alerts: none")

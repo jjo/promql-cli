@@ -3,6 +3,7 @@ package repl
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -384,12 +385,13 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			nl := copyRunes(line)
 			// Remove ^X at or near cursor if present
 			const ctrlXRune = rune(0x18)
-			if pos > 0 && pos-1 < len(nl) && nl[pos-1] == ctrlXRune {
+			switch {
+			case pos > 0 && pos-1 < len(nl) && nl[pos-1] == ctrlXRune:
 				nl = append(nl[:pos-1], nl[pos:]...)
 				pos--
-			} else if pos < len(nl) && nl[pos] == ctrlXRune {
+			case pos < len(nl) && nl[pos] == ctrlXRune:
 				nl = append(nl[:pos], nl[pos+1:]...)
-			} else if len(nl) > 0 && nl[len(nl)-1] == ctrlXRune {
+			case len(nl) > 0 && nl[len(nl)-1] == ctrlXRune:
 				// Sometimes control rune lands at end
 				nl = nl[:len(nl)-1]
 				if pos > len(nl) {
@@ -406,8 +408,8 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				clean := stripCtrl(append([]rune(nil), line...))
 				edited := rlLaunchExternalEditorForReadline(string(clean))
 				if edited != "" {
-					new := []rune(edited)
-					return new, len(new), true
+					newRune := []rune(edited)
+					return newRune, len(newRune), true
 				}
 				// If editor failed or empty, keep sanitized current line and consume
 				cur := clean
@@ -698,7 +700,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		line, err := rl.Readline()
 		if err != nil {
-			if err == readline.ErrInterrupt {
+			if errors.Is(err, readline.ErrInterrupt) {
 				// On Ctrl-C, cancel any in-flight AI request first
 				if aiInProgress && aiCancelRequest != nil {
 					aiCancelRequest()
@@ -710,7 +712,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 				mlActive = false
 				mlParts = nil
 				continue
-			} else if err == io.EOF {
+			} else if errors.Is(err, io.EOF) {
 				break
 			}
 			fmt.Printf("Error reading input: %v\n", err)
@@ -781,8 +783,6 @@ func loadHistoryFromFile(path string) []string {
 	return out
 }
 
-// PrometheusAutoCompleter provides dynamic auto-completion for PromQL queries
-// based on the loaded metrics data, similar to the Prometheus UI experience.
 // AutoCompleteOptions controls optional completion behaviors, configurable via env vars.
 type AutoCompleteOptions struct {
 	AutoBrace       bool // when completing a metric name uniquely, append '{'
@@ -790,13 +790,15 @@ type AutoCompleteOptions struct {
 	AutoCloseQuote  bool // when completing a label value, append closing '"'
 }
 
+// PrometheusAutoCompleter provides dynamic auto-completion for PromQL queries
+// based on the loaded metrics data, similar to the Prometheus UI experience.
 type PrometheusAutoCompleter struct {
 	storage *sstorage.SimpleStorage
 	opts    AutoCompleteOptions
 }
 
 // getFilePathCompletions returns filesystem path candidates for a given path string and current last-segment word.
-func (pac *PrometheusAutoCompleter) getFilePathCompletions(pathSoFar, currentWord string) []string {
+func (pac *PrometheusAutoCompleter) getFilePathCompletions(pathSoFar, _ string) []string {
 	// Expand ~ to home
 	expandTilde := func(p string) string {
 		if strings.HasPrefix(p, "~") {
@@ -824,7 +826,7 @@ func (pac *PrometheusAutoCompleter) getFilePathCompletions(pathSoFar, currentWor
 			continue
 		}
 		if e.IsDir() {
-			name = name + "/"
+			name += "/"
 		}
 		out = append(out, name)
 	}
@@ -890,8 +892,7 @@ func (pac *PrometheusAutoCompleter) Do(line []rune, pos int) (newLine [][]rune, 
 								// clone base remainder
 								base := make([]rune, len(cr[len(cw):]))
 								copy(base, cr[len(cw):])
-								cand := append(base, op...)
-								suffixes = append(suffixes, cand)
+								suffixes = append(suffixes, append(base, op...))
 							}
 						}
 					case "label_value":
@@ -1043,12 +1044,12 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 					rest = strings.TrimSpace(after[len("edit "):])
 				}
 				prefixNum := rest
-				max := len(lastAISuggestions)
-				if max > 20 {
-					max = 20
+				maxCnt := len(lastAISuggestions)
+				if maxCnt > 20 {
+					maxCnt = 20
 				}
 				var out []string
-				for i := 1; i <= max; i++ {
+				for i := 1; i <= maxCnt; i++ {
 					n := fmt.Sprintf("%d", i)
 					if prefixNum == "" || strings.HasPrefix(n, prefixNum) {
 						out = append(out, n)
@@ -1072,11 +1073,12 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 		if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") || strings.HasPrefix(trimmed, ".source ") {
 			// Extract the path substring after the command token
 			var pathSoFar string
-			if strings.HasPrefix(trimmed, ".load ") {
+			switch {
+			case strings.HasPrefix(trimmed, ".load "):
 				pathSoFar = trimmed[len(".load "):]
-			} else if strings.HasPrefix(trimmed, ".save ") {
+			case strings.HasPrefix(trimmed, ".save "):
 				pathSoFar = trimmed[len(".save "):]
-			} else {
+			default:
 				pathSoFar = trimmed[len(".source "):]
 			}
 			return pac.getFilePathCompletions(pathSoFar, currentWord)
@@ -1650,7 +1652,7 @@ func rlLaunchExternalEditorForReadline(current string) string {
 	editor := getEditorCommand()
 
 	// Safely quote path
-	shQuote := func(s string) string { return shellQuote(s) }
+	shQuote := shellQuote
 
 	// Pause readline input so it won't intercept keys intended for the editor
 	if rlInputGate != nil {
@@ -2136,7 +2138,7 @@ func RunInitCommands(engine *promql.Engine, storage *sstorage.SimpleStorage, com
 	}
 }
 
-func handleAdhocHistory(query string, storage *sstorage.SimpleStorage) bool {
+func handleAdhocHistory(query string, _ *sstorage.SimpleStorage) bool {
 	fields := strings.Fields(query)
 	n := -1
 	if len(fields) == 2 {

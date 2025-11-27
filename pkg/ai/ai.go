@@ -1,3 +1,4 @@
+// Package ai provides AI-powered PromQL query suggestions using various LLM providers.
 package ai
 
 import (
@@ -330,7 +331,7 @@ func postAndExtractAISuggestions(ctx context.Context, url, bearer string, body a
 	if err := json.NewEncoder(buf).Encode(body); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", url, buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +369,7 @@ func postAndExtractAISuggestionsAnthropic(ctx context.Context, url, apiKey strin
 	if err := json.NewEncoder(buf).Encode(body); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", url, buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, buf)
 	if err != nil {
 		return nil, err
 	}
