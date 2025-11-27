@@ -187,7 +187,7 @@ up 1
 foo_total{code="200"} 5
 foo_total{code="500"} 1
 `
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		if _, err := io.Copy(w, strings.NewReader(payload)); err != nil {
 			return

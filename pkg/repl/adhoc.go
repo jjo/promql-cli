@@ -1,3 +1,4 @@
+// Package repl provides an interactive REPL (Read-Eval-Print Loop) for PromQL queries.
 package repl
 
 import (

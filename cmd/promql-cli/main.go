@@ -1,7 +1,9 @@
+// Package main provides the promql-cli command-line tool for executing PromQL queries.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -78,7 +80,7 @@ func main() {
 		LookbackDelta:            5 * time.Minute,
 		EnableAtModifier:         true,
 		EnableNegativeOffset:     true,
-		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
+		NoStepSubqueryIntervalFn: func(_ int64) int64 { return 60 * 1000 },
 	})
 
 	// load subcommand
@@ -87,7 +89,7 @@ func main() {
 		Name:       "load",
 		ShortUsage: "promql-cli [--repl=...] load <file.prom>",
 		FlagSet:    loadFlags,
-		Exec: func(ctx context.Context, args []string) error {
+		Exec: func(_ context.Context, args []string) error {
 			// Apply AI configuration (composite/env/profile)
 			ai.ConfigureAIComposite(map[string]string(aiConfig))
 			if len(args) != 1 {
@@ -125,7 +127,7 @@ func main() {
 		Name:       "query",
 		ShortUsage: "promql-cli [--repl=...] query [flags] [<file.prom>]",
 		FlagSet:    queryFlags,
-		Exec: func(ctx context.Context, args []string) error {
+		Exec: func(_ context.Context, args []string) error {
 			// Apply AI configuration (composite/env/profile)
 			ai.ConfigureAIComposite(map[string]string(aiConfig))
 
@@ -221,7 +223,7 @@ func main() {
 	// version subcommand
 	versionCmd := &ffcli.Command{
 		Name: "version",
-		Exec: func(ctx context.Context, _ []string) error { printVersion(); return nil },
+		Exec: func(_ context.Context, _ []string) error { printVersion(); return nil },
 	}
 
 	root := &ffcli.Command{
@@ -231,14 +233,14 @@ func main() {
 		Subcommands: []*ffcli.Command{
 			loadCmd, queryCmd, versionCmd,
 		},
-		Exec: func(ctx context.Context, _ []string) error { return flag.ErrHelp },
+		Exec: func(_ context.Context, _ []string) error { return flag.ErrHelp },
 	}
 
 	// Normalize GNU-style long options ("--long") to stdlib format ("-long")
 	norm := normalizeLongOpts(os.Args[1:])
 	// Parse args and run
 	if err := root.ParseAndRun(context.Background(), norm); err != nil {
-		if err == flag.ErrHelp {
+		if errors.Is(err, flag.ErrHelp) {
 			root.FlagSet.Usage()
 			os.Exit(1)
 		}

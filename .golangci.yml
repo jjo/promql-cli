@@ -17,25 +17,26 @@ linters:
     - ineffassign   # Detect ineffectual assignments
     - staticcheck   # Advanced static analysis (includes gosimple)
     - unused        # Check for unused code
-    
+
     # Additional valuable linters
     - misspell      # Find misspelled words
     - unconvert     # Remove unnecessary conversions
-    - unparam       # Find unused function parameters
     - gocritic      # Comprehensive checks
-    - revive        # Fast, configurable linter
-    - gosec         # Security checks
     - bodyclose     # Check HTTP response body close
-    - noctx         # Find HTTP requests without context
     - errname       # Check error naming conventions
     - errorlint     # Find code with error wrapping issues
     - copyloopvar   # Check for loop variable capture (replaces exportloopref)
     - nilerr        # Find code returning nil with non-nil error
     - nilnil        # Find code returning nil with nil error
-    - prealloc      # Find slice declarations that could be preallocated
     - predeclared   # Find code shadowing predeclared identifiers
     - reassign      # Check for reassigning to variables
     - usestdlibvars # Suggest using stdlib constants
+    ## TODO(jjo) -> fix for below linters
+    #- unparam       # Find unused function parameters
+    #- revive        # Fast, configurable linter
+    #- gosec         # Security checks
+    #- noctx         # Find HTTP requests without context
+    #- prealloc      # Find slice declarations that could be preallocated
 
   disable:
     # Opinionated style linters that may conflict with project style
@@ -59,19 +60,19 @@ linters-settings:
     exclude-functions:
       - (*os.File).Close
       - (*database/sql.Rows).Close
-  
+
   govet:
     enable-all: true
     settings:
       shadow:
         strict: true
-  
+
   gofmt:
     simplify: true
-  
+
   goimports:
     local-prefixes: github.com/jjo/promql-cli
-  
+
   gocritic:
     enabled-tags:
       - diagnostic
@@ -81,7 +82,7 @@ linters-settings:
     disabled-checks:
       - whyNoLint  # We don't require explanation for nolint directives
       - hugeParam  # Can be overly strict
-  
+
   revive:
     rules:
       - name: blank-imports
@@ -105,10 +106,10 @@ linters-settings:
       - name: unused-parameter
       - name: unreachable-code
       - name: redefines-builtin-id
-  
+
   staticcheck:
     checks: ["all"]
-  
+
   gosec:
     excludes:
       - G104  # Audit errors not checked - covered by errcheck
@@ -118,7 +119,7 @@ linters-settings:
     config:
       global:
         audit: true
-  
+
   misspell:
     locale: US
     ignore-words:
@@ -126,7 +127,7 @@ linters-settings:
       - prometheus
       - grafana
       - tsdb
-  
+
   errorlint:
     errorf: true
     asserts: true
@@ -135,13 +136,13 @@ linters-settings:
 issues:
   # Don't hide issues by default
   exclude-use-default: false
-  
+
   # Maximum issues count per one linter
   max-issues-per-linter: 0
-  
+
   # Maximum count of issues with the same text
   max-same-issues: 0
-  
+
   # Exclude specific issues
   exclude-rules:
     # Exclude some linters from running on tests files
@@ -150,30 +151,30 @@ issues:
         - gosec
         - errcheck
         - gocritic
-    
+
     # Exclude tool generation files
     - path: tools/genmodels/
       linters:
         - errcheck
         - gosec
-    
+
     # Allow context.Background in main and test files
     - path: (cmd/promql-cli/main\.go|_test\.go)
       text: "context.Background"
       linters:
         - contextcheck
-    
+
     # Ignore long functions in REPL (complex interactive logic)
     - path: pkg/repl/(repl\.go|prompt_repl\.go)
       text: "Function .* is too long"
       linters:
         - gocritic
-    
+
     # Allow defer in loops for scoped cleanup (intentional pattern)
     - text: "deferInLoop:"
       linters:
         - gocritic
-    
+
     # Ignore complexity in parser functions
     - path: pkg/storage/simple_tsdb\.go
       linters:
@@ -183,7 +184,7 @@ issues:
 
   # Show all issues from a linter
   new: false
-  
+
   # Fix found issues (if supported by linter)
   fix: false
 

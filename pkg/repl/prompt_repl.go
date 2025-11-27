@@ -127,11 +127,11 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 				}
 				prefixNum := rest // may be empty; show all indices if empty
 				var sugg []prompt.Suggest
-				max := len(lastAISuggestions)
-				if max > 20 {
-					max = 20
+				maxCnt := len(lastAISuggestions)
+				if maxCnt > 20 {
+					maxCnt = 20
 				}
-				for i := 1; i <= max; i++ {
+				for i := 1; i <= maxCnt; i++ {
 					num := fmt.Sprintf("%d", i)
 					if prefixNum == "" || strings.HasPrefix(num, prefixNum) {
 						desc := "suggestion"
@@ -576,7 +576,7 @@ func getMetricSuggests(prefix string) []prompt.Suggest {
 }
 
 // getRangeDurationSuggests returns range duration completions
-func getRangeDurationSuggests(prefix string, metricName string) []prompt.Suggest {
+func getRangeDurationSuggests(prefix string, _ string) []prompt.Suggest {
 	// Common duration suggestions
 	durations := []prompt.Suggest{
 		{Text: "5s]", Description: "5 seconds"},
@@ -1058,7 +1058,7 @@ func (r *promptREPL) Run() error {
 		// Track when user explicitly opens the dropdown via Tab
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.Tab,
-			Fn: func(buf *prompt.Buffer) {
+			Fn: func(_ *prompt.Buffer) {
 				dropdownActive = true
 			},
 		}),
@@ -1159,7 +1159,7 @@ func (r *promptREPL) Run() error {
 		// Ctrl-X: start chord timer for Ctrl-X Ctrl-E to open external editor
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlX,
-			Fn: func(buf *prompt.Buffer) {
+			Fn: func(_ *prompt.Buffer) {
 				lastCtrlX = time.Now()
 			},
 		}),
@@ -1308,10 +1308,9 @@ func (r *promptREPL) Run() error {
 					saveHistory()
 					fmt.Println("\nExiting...")
 					os.Exit(0)
-				} else {
-					// Delete character under cursor
-					buf.Delete(1)
 				}
+				// Delete character under cursor
+				buf.Delete(1)
 			},
 		}),
 		// Alt-D: Delete word to the right (ESC+d)
@@ -1436,7 +1435,7 @@ func (r *promptREPL) Run() error {
 		// Ctrl-L: Clear screen
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlL,
-			Fn: func(buf *prompt.Buffer) {
+			Fn: func(_ *prompt.Buffer) {
 				// Clear screen by printing ANSI escape codes
 				fmt.Print("\033[2J\033[H") // Clear screen and move cursor to home
 			},
