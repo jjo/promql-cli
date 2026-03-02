@@ -901,6 +901,10 @@ func (it *SimpleIterator) AtT() int64 {
 	return it.samples[it.index].Timestamp
 }
 
+func (it *SimpleIterator) AtST() int64 {
+	return it.AtT()
+}
+
 func (it *SimpleIterator) Err() error {
 	return nil
 }
