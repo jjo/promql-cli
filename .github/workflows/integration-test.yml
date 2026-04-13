@@ -1,0 +1,144 @@
+name: Integration Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+
+    services:
+      node-exporter:
+        image: prom/node-exporter:latest
+        ports:
+          - 9100:9100
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        run: make build-binary
+
+      - name: Start Prometheus
+        run: |
+          cat > /tmp/prometheus.yml <<'EOF'
+          global:
+            scrape_interval: 5s
+          scrape_configs:
+            - job_name: node-exporter
+              static_configs:
+                - targets: ['localhost:9100']
+            - job_name: prometheus
+              static_configs:
+                - targets: ['localhost:9090']
+          EOF
+          docker run -d --name prometheus --network host \
+            -v /tmp/prometheus.yml:/etc/prometheus/prometheus.yml \
+            prom/prometheus:latest \
+            --config.file=/etc/prometheus/prometheus.yml \
+            --web.listen-address=:9090
+          # Wait for Prometheus to be ready
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9090/-/ready >/dev/null 2>&1; then
+              echo "Prometheus ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:9090/-/ready || { echo "Prometheus failed to start"; docker logs prometheus; exit 1; }
+
+      - name: Wait for scrape targets
+        run: |
+          # Wait until Prometheus has scraped node-exporter at least once
+          for i in $(seq 1 60); do
+            count=$(curl -sf 'http://localhost:9090/api/v1/query?query=up' | jq '.data.result | length')
+            if [ "$count" -ge 2 ]; then
+              echo "All targets up after ${i}s (count=$count)"
+              break
+            fi
+            sleep 1
+          done
+          # Verify both targets are up
+          curl -sf 'http://localhost:9090/api/v1/query?query=up' | jq .
+
+      - name: "Test: .scrape from node-exporter"
+        run: |
+          output=$(bin/promql-cli -s query \
+            -c '.scrape http://localhost:9100/metrics' \
+            -q 'count(node_cpu_seconds_total)' -o json)
+          echo "$output"
+          value=$(echo "$output" | grep '^{' | jq -r '.data.result[0].value[1]')
+          echo "node_cpu_seconds_total series count: $value"
+          test "$value" -ge 1 || { echo "FAIL: expected at least 1 cpu series"; exit 1; }
+
+      - name: "Test: .prom_scrape from Prometheus API"
+        run: |
+          output=$(bin/promql-cli -s query \
+            -c '.prom_scrape http://localhost:9090 up' \
+            -q 'count(up)' -o json)
+          echo "$output"
+          value=$(echo "$output" | grep '^{' | jq -r '.data.result[0].value[1]')
+          echo "up series count: $value"
+          test "$value" -ge 2 || { echo "FAIL: expected at least 2 up targets"; exit 1; }
+
+      - name: "Test: query node-exporter metrics via Prometheus"
+        run: |
+          output=$(bin/promql-cli -s query \
+            -c '.prom_scrape http://localhost:9090 node_load1' \
+            -q 'node_load1' -o json)
+          echo "$output"
+          count=$(echo "$output" | grep '^{' | jq '.data.result | length')
+          echo "node_load1 result count: $count"
+          test "$count" -ge 1 || { echo "FAIL: expected node_load1 metric"; exit 1; }
+
+      - name: "Test: PromQL aggregation on live data"
+        run: |
+          output=$(bin/promql-cli -s query \
+            -c '.prom_scrape http://localhost:9090 node_cpu_seconds_total' \
+            -q 'sum by (mode) (node_cpu_seconds_total)' -o json)
+          echo "$output"
+          count=$(echo "$output" | grep '^{' | jq '.data.result | length')
+          echo "CPU modes count: $count"
+          test "$count" -ge 2 || { echo "FAIL: expected at least 2 cpu modes"; exit 1; }
+
+      - name: "Test: scrape with regex filter"
+        run: |
+          output=$(bin/promql-cli -s query \
+            -c '.scrape http://localhost:9100/metrics ^node_memory_(MemTotal|MemAvailable)_bytes$' \
+            -q 'node_memory_MemTotal_bytes > 0' -o json)
+          echo "$output"
+          count=$(echo "$output" | grep '^{' | jq '.data.result | length')
+          echo "MemTotal results: $count"
+          test "$count" -ge 1 || { echo "FAIL: expected MemTotal metric"; exit 1; }
+
+      - name: "Test: Prometheus self-metrics"
+        run: |
+          output=$(bin/promql-cli -s query \
+            -c '.prom_scrape http://localhost:9090 prometheus_build_info' \
+            -q 'prometheus_build_info' -o json)
+          echo "$output"
+          version=$(echo "$output" | grep '^{' | jq -r '.data.result[0].metric.version')
+          echo "Prometheus version: $version"
+          test -n "$version" && test "$version" != "null" || { echo "FAIL: expected prometheus version label"; exit 1; }
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f prometheus 2>/dev/null || true
