@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	promparser "github.com/prometheus/prometheus/promql/parser"
-
 	ai "github.com/jjo/promql-cli/pkg/ai"
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
@@ -179,7 +177,7 @@ func handleAdhocAI(query string, storage *sstorage.SimpleStorage) bool {
 			if q == "" {
 				continue
 			}
-			if _, err := promparser.ParseExpr(q); err == nil {
+			if _, err := promParser.ParseExpr(q); err == nil {
 				validQ = append(validQ, q)
 				validE = append(validE, strings.TrimSpace(sug.Explain))
 			}

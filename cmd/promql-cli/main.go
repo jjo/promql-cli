@@ -29,7 +29,7 @@ var (
 
 func init() {
 	// Enable experimental PromQL functions (equivalent to --enable-feature=promql-experimental-functions)
-	promparser.EnableExperimentalFunctions = true
+	repl.InitParser(promparser.Options{EnableExperimentalFunctions: true})
 }
 
 // normalizeLongOpts converts GNU-style "--long" options to stdlib-flag style "-long".
