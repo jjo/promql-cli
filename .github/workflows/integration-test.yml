@@ -121,8 +121,9 @@ jobs:
 
       - name: "Test: scrape with regex filter"
         run: |
+          regex='^node_memory_(MemTotal|MemAvailable)_bytes$'
           output=$(bin/promql-cli -s query \
-            -c '.scrape http://localhost:9100/metrics ^node_memory_(MemTotal|MemAvailable)_bytes$' \
+            -c ".scrape http://localhost:9100/metrics $regex" \
             -q 'node_memory_MemTotal_bytes > 0' -o json)
           echo "$output"
           count=$(echo "$output" | grep '^{' | jq '.data.result | length')
