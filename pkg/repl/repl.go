@@ -30,6 +30,15 @@ var lastExecutedCommand string
 
 var replTimeout = 60 * time.Second
 
+// promParser is a package-level PromQL parser instance, initialised by InitParser.
+// Falls back to a default parser (with experimental functions enabled) if not explicitly set.
+var promParser promparser.Parser = promparser.NewParser(promparser.Options{EnableExperimentalFunctions: true})
+
+// InitParser creates the package-level PromQL parser with the given options.
+func InitParser(opts promparser.Options) {
+	promParser = promparser.NewParser(opts)
+}
+
 // altDotMarker is a private Unicode character (U+E000) used to mark Alt+. sequences
 // that have been converted from ESC+. at the byte level before readline processes them.
 // This allows us to distinguish between a literal "." typed by the user and Alt+.
@@ -1370,11 +1379,7 @@ func (pac *PrometheusAutoCompleter) getLabelValueCompletions(metricName, labelNa
 // getFunctionCompletions returns PromQL function names.
 func (pac *PrometheusAutoCompleter) getFunctionCompletions(prefix string) []string {
 	var names []string
-	for name, fn := range promparser.Functions {
-		// Skip experimental functions if not enabled.
-		if fn.Experimental && !promparser.EnableExperimentalFunctions {
-			continue
-		}
+	for name := range promparser.Functions {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -1469,10 +1474,7 @@ func getAggregatorCompletions(prefix string) []string {
 	base := []string{
 		"sum", "avg", "min", "max", "count", "group", "stddev", "stdvar",
 		"topk", "bottomk", "quantile", "count_values",
-	}
-	// Experimental aggregators
-	if promparser.EnableExperimentalFunctions {
-		base = append(base, "limitk", "limit_ratio")
+		"limitk", "limit_ratio",
 	}
 	var out []string
 	low := strings.ToLower(prefix)

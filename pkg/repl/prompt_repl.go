@@ -20,7 +20,6 @@ import (
 
 	"github.com/c-bata/go-prompt"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
-	"github.com/prometheus/prometheus/promql/parser"
 	"golang.org/x/sys/unix"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
@@ -1708,7 +1707,7 @@ func analyzePromQLContext(text string) PromQLContext {
 
 	// Try to parse what we have so far
 	// Even if incomplete, the parser can give us useful information
-	_, err := parser.ParseExpr(text)
+	_, err := promParser.ParseExpr(text)
 
 	// Check for specific patterns that indicate context
 	// Look for unclosed brackets (range selector)

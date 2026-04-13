@@ -13,7 +13,6 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/rulefmt"
 	"github.com/prometheus/prometheus/promql"
-	promparser "github.com/prometheus/prometheus/promql/parser"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
@@ -112,7 +111,7 @@ func loadRuleGroups(files []string) ([]rulefmt.RuleGroup, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", file, err)
 		}
-		rgs, errs := rulefmt.Parse(b, false, model.UTF8Validation)
+		rgs, errs := rulefmt.Parse(b, false, model.UTF8Validation, promParser)
 		if len(errs) > 0 {
 			return nil, fmt.Errorf("%s: %v", file, errs)
 		}
@@ -127,7 +126,7 @@ func evalRecordingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r
 	}
 	expr := r.Expr
 	// Parse expression to ensure it's valid (promql.Engine will also parse, but this provides early error)
-	if _, err := promparser.ParseExpr(expr); err != nil {
+	if _, err := promParser.ParseExpr(expr); err != nil {
 		return 0, fmt.Errorf("recording rule %q: parse error: %w", r.Record, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), replTimeout)
@@ -177,7 +176,7 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 		return 0, nil
 	}
 	expr := r.Expr
-	if _, err := promparser.ParseExpr(expr); err != nil {
+	if _, err := promParser.ParseExpr(expr); err != nil {
 		return 0, fmt.Errorf("alerting rule %q: parse error: %w", r.Alert, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), replTimeout)
