@@ -131,7 +131,7 @@ func buildAIPrompt(ctx promptContext, intent string) string {
 	b.WriteString("You are an expert in monitoring and observability that writes PromQL queries which provide useful insights.\n")
 	b.WriteString("Use only the listed metrics and their labels. Prefer rate() for *_total counters.\n")
 	b.WriteString("Return valid PromQL. Output JSON as {\"answers\":[{\"query\":\"...\",\"explain\":\"one short sentence\"}, ...]}. Return up to ")
-	b.WriteString(fmt.Sprintf("%d", ctx.NumAns))
+	fmt.Fprintf(&b, "%d", ctx.NumAns)
 	b.WriteString(" concise answers.\n\n")
 	b.WriteString("Current time: ")
 	b.WriteString(ctx.NowRFC)
