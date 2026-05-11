@@ -342,7 +342,8 @@ func getTimeCompletions(prefix string) []prompt.Suggest {
 	// Add unix timestamp examples
 	unixSec := now.Unix()
 	unixMs := now.UnixMilli()
-	timeOptions = append(timeOptions,
+	timeOptions = append(
+		timeOptions,
 		prompt.Suggest{Text: fmt.Sprintf("%d", unixSec), Description: "unix seconds"},
 		prompt.Suggest{Text: fmt.Sprintf("%d", unixMs), Description: "unix milliseconds"},
 	)
@@ -902,7 +903,8 @@ func runAIPicker(validQ []string, validE []string) bool {
 			}
 			preview = preview + " — " + ex
 		}
-		items = append(items,
+		items = append(
+			items,
 			prompt.Suggest{Text: fmt.Sprintf("edit %d", i+1), Description: preview},
 		)
 	}
@@ -919,7 +921,8 @@ func runAIPicker(validQ []string, validE []string) bool {
 			}
 			preview = preview + " — " + ex
 		}
-		items = append(items,
+		items = append(
+			items,
 			prompt.Suggest{Text: fmt.Sprintf("run %d", i+1), Description: preview},
 		)
 	}
