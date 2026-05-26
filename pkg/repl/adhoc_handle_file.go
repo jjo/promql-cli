@@ -313,7 +313,7 @@ func parseQueriesFromContent(content string) []queryWithLineNum {
 	lineNum := 0
 	inContinuation := false
 
-	for _, rawLine := range strings.Split(content, "\n") {
+	for rawLine := range strings.SplitSeq(content, "\n") {
 		lineNum++
 		line := strings.TrimRight(rawLine, "\r")
 

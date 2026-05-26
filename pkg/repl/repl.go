@@ -206,7 +206,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	}
 
 	// Helper: debug key output
-	debugKey := func(format string, args ...interface{}) {
+	debugKey := func(format string, args ...any) {
 		if os.Getenv("PROMQL_CLI_DEBUG_KEYS") == "1" {
 			fmt.Printf(format, args...)
 		}
@@ -640,7 +640,12 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 	// This is necessary because readline intercepts ESC sequences before the listener sees them
 	rlInputGate.escSeqTransformers = append(rlInputGate.escSeqTransformers, func(data []byte) []byte {
 		result := make([]byte, 0, len(data))
-		for i := 0; i < len(data); i++ {
+		skipNext := false
+		for i := range len(data) {
+			if skipNext {
+				skipNext = false
+				continue
+			}
 			if data[i] == 0x1B && i+1 < len(data) {
 				next := data[i+1]
 				if next == '.' || next == ',' || next == '>' {
@@ -648,7 +653,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 					var buf [4]byte
 					n := utf8.EncodeRune(buf[:], altDotMarker)
 					result = append(result, buf[:n]...)
-					i++ // skip the trigger char
+					skipNext = true
 					continue
 				}
 			}
@@ -782,7 +787,7 @@ func loadHistoryFromFile(path string) []string {
 		return nil
 	}
 	var out []string
-	for _, ln := range strings.Split(string(data), "\n") {
+	for ln := range strings.SplitSeq(string(data), "\n") {
 		ln = strings.TrimRight(ln, "\r")
 		ln = strings.TrimSpace(ln)
 		if ln != "" {
