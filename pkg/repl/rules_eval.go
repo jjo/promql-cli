@@ -193,7 +193,9 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 	switch v := res.Value.(type) {
 	case promql.Vector:
 		for _, smpl := range v {
-			if smpl.F == 0 || math.IsNaN(smpl.F) {
+			// Prometheus semantics: alert fires for any series present in the result vector,
+			// regardless of value. Skip only NaN (treated as "no data").
+			if math.IsNaN(smpl.F) {
 				continue
 			}
 			fires++
@@ -221,7 +223,7 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 			}
 		}
 	case promql.Scalar:
-		if v.V != 0 && !math.IsNaN(v.V) {
+		if !math.IsNaN(v.V) {
 			fires++
 			// Create ALERTS metric for scalar alert
 			lbls := map[string]string{

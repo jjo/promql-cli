@@ -171,10 +171,9 @@ func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(n
 // multiple times with different timestamps. Format: metric{labels} value timestamp
 // Returns error if the data doesn't match this format (to fall back to standard parser).
 func (s *SimpleStorage) parseTimeSeriesFormat(data []byte) error {
-	lines := strings.Split(string(data), "\n")
 	hasTimestampedSamples := false
 
-	for _, line := range lines {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 
 		// Skip comments and empty lines
@@ -308,7 +307,7 @@ func parseLabels(s string) (map[string]string, error) {
 	inQuote := false
 	escaped := false
 
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		ch := s[i]
 
 		if escaped {
@@ -672,21 +671,21 @@ func (s *SimpleStorage) SaveToWriterWithOptions(w io.Writer, opts SaveOptions) e
 			}
 			if labelStr != "" {
 				if writeTimestamp {
-					if _, err := io.WriteString(w, fmt.Sprintf("%s{%s} %v %d\n", name, labelStr, r.value, outTs)); err != nil {
+					if _, err := fmt.Fprintf(w, "%s{%s} %v %d\n", name, labelStr, r.value, outTs); err != nil {
 						return err
 					}
 				} else {
-					if _, err := io.WriteString(w, fmt.Sprintf("%s{%s} %v\n", name, labelStr, r.value)); err != nil {
+					if _, err := fmt.Fprintf(w, "%s{%s} %v\n", name, labelStr, r.value); err != nil {
 						return err
 					}
 				}
 			} else {
 				if writeTimestamp {
-					if _, err := io.WriteString(w, fmt.Sprintf("%s %v %d\n", name, r.value, outTs)); err != nil {
+					if _, err := fmt.Fprintf(w, "%s %v %d\n", name, r.value, outTs); err != nil {
 						return err
 					}
 				} else {
-					if _, err := io.WriteString(w, fmt.Sprintf("%s %v\n", name, r.value)); err != nil {
+					if _, err := fmt.Fprintf(w, "%s %v\n", name, r.value); err != nil {
 						return err
 					}
 				}
@@ -761,9 +760,15 @@ func (q *SimpleQuerier) Select(_ context.Context, sortSeries bool, hints *storag
 			labelGroups[key] = append(labelGroups[key], sample)
 		}
 
-		// Create a series for each unique label set
+		// Create a series for each unique label set.
+		// Sort samples by timestamp: the Prometheus chunkenc.Iterator contract requires
+		// ascending order for both Next() and Seek(), and labelGroups is built from
+		// map iteration so input order is undefined.
 		for _, groupSamples := range labelGroups {
 			if len(groupSamples) > 0 {
+				sort.Slice(groupSamples, func(i, j int) bool {
+					return groupSamples[i].Timestamp < groupSamples[j].Timestamp
+				})
 				lbls := labels.FromMap(groupSamples[0].Labels)
 				series = append(series, &SimpleSeries{
 					labels:  lbls,

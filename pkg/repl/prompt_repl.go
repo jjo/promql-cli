@@ -37,7 +37,7 @@ var (
 	recordingRuleSet map[string]bool
 	replHistory      []string
 	executeOneFunc   func(string) // Function pointer to executeOne
-	globalStorage    interface{}  // Storage for accessing metrics metadata
+	globalStorage    any          // Storage for accessing metrics metadata
 	dropdownActive   bool         // true if user opened completion with Tab
 	lastCtrlX        time.Time    // timestamp of last Ctrl-X to detect Ctrl-X Ctrl-E chord
 )

@@ -63,7 +63,7 @@ func TestPromQL_SumByCode(t *testing.T) {
 		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	q, err := engine.NewInstantQuery(ctx, store, nil, "sum(http_requests_total) by (code)", time.Now())
@@ -112,7 +112,7 @@ func TestPromQL_SumByMethod(t *testing.T) {
 		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	q, err := engine.NewInstantQuery(ctx, store, nil, "sum(http_requests_total) by (method)", time.Now())
@@ -154,7 +154,7 @@ func TestPromQL_SelectorByLabel(t *testing.T) {
 		NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 { return 60 * 1000 },
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	q, err := engine.NewInstantQuery(ctx, store, nil, "http_requests_total{code=\"404\"}", time.Now())

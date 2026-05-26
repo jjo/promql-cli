@@ -35,7 +35,7 @@ func (a *AIConfig) Set(s string) error {
 
 func mergeKV(dst map[string]string, s string) {
 	// Split on commas first, then allow spaces; preserve quoted values.
-	for _, chunk := range strings.Split(s, ",") {
+	for chunk := range strings.SplitSeq(s, ",") {
 		chunk = strings.TrimSpace(chunk)
 		if chunk == "" {
 			continue

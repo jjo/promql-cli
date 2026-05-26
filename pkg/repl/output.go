@@ -63,15 +63,15 @@ func PrintUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 func PrintResultJSON(result *promql.Result) error {
 	type sampleJSON struct {
 		Metric map[string]string `json:"metric"`
-		Value  [2]interface{}    `json:"value"` // [timestamp(sec), value]
+		Value  [2]any            `json:"value"` // [timestamp(sec), value]
 	}
 	type seriesJSON struct {
 		Metric map[string]string `json:"metric"`
-		Values [][2]interface{}  `json:"values"`
+		Values [][2]any          `json:"values"`
 	}
 	type dataJSON struct {
-		ResultType string      `json:"resultType"`
-		Result     interface{} `json:"result"`
+		ResultType string `json:"resultType"`
+		Result     any    `json:"result"`
 	}
 	type respJSON struct {
 		Status string   `json:"status"`
@@ -85,7 +85,7 @@ func PrintResultJSON(result *promql.Result) error {
 		for _, s := range v {
 			arr = append(arr, sampleJSON{
 				Metric: labelsToMap(s.Metric),
-				Value:  [2]interface{}{float64(s.T) / 1000.0, s.F},
+				Value:  [2]any{float64(s.T) / 1000.0, s.F},
 			})
 		}
 		out.Data.Result = arr
@@ -99,7 +99,7 @@ func PrintResultJSON(result *promql.Result) error {
 		return nil
 	case promql.Scalar:
 		out := respJSON{Status: "success", Data: dataJSON{ResultType: "scalar"}}
-		out.Data.Result = [2]interface{}{float64(v.T) / 1000.0, v.V}
+		out.Data.Result = [2]any{float64(v.T) / 1000.0, v.V}
 		b, err := json.Marshal(out)
 		if err != nil {
 			return err
@@ -112,9 +112,9 @@ func PrintResultJSON(result *promql.Result) error {
 		out := respJSON{Status: "success", Data: dataJSON{ResultType: "matrix"}}
 		var arr []seriesJSON
 		for _, series := range v {
-			var values [][2]interface{}
+			var values [][2]any
 			for _, p := range series.Floats {
-				values = append(values, [2]interface{}{float64(p.T) / 1000.0, p.F})
+				values = append(values, [2]any{float64(p.T) / 1000.0, p.F})
 			}
 			arr = append(arr, seriesJSON{
 				Metric: labelsToMap(series.Metric),

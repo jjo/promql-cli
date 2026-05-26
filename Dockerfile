@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- build stage ---
-FROM golang:1.25 AS build
+FROM golang:1.26 AS build
 WORKDIR /app
 
 # Leverage go mod cache
