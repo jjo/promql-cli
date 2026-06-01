@@ -3,6 +3,7 @@ package repl
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -111,7 +112,7 @@ func loadRuleGroups(files []string) ([]rulefmt.RuleGroup, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", file, err)
 		}
-		rgs, errs := rulefmt.Parse(b, false, model.UTF8Validation, promParser)
+		rgs, errs := rulefmt.Parse(b, false, model.UTF8Validation, promParser, slog.Default())
 		if len(errs) > 0 {
 			return nil, fmt.Errorf("%s: %v", file, errs)
 		}
