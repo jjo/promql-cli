@@ -164,6 +164,13 @@ issues:
       linters:
         - contextcheck
 
+    # govet stdmethods flags Seek(t int64) on chunkenc.Iterator impl;
+    # signature differs from io.Seeker but matches Prometheus interface
+    - path: pkg/storage/simple_tsdb\.go
+      text: "Seek\\(t int64\\)"
+      linters:
+        - govet
+
     # Ignore long functions in REPL (complex interactive logic)
     - path: pkg/repl/(repl\.go|prompt_repl\.go)
       text: "Function .* is too long"
