@@ -465,6 +465,45 @@ promql-cli query examples/example.prom
 > http_requests_total
 ```
 
+## 🔌 MCP Server Testing
+
+The `mcp` subcommand starts a Model Context Protocol server for AI agent integration. These examples demonstrate testing the MCP server programmatically.
+
+### MCP Server Quick Test
+
+```bash
+# Start MCP server with example data and run demo
+python3 scripts/mcp-client.py examples/example.prom
+```
+
+### MCP Tools Test
+
+```bash
+# Test tools/list, tools/call, and ping via MCP
+python3 scripts/test_mcp_tools.py
+```
+
+### MCP Resources Test
+
+```bash
+# Test resources/list and resources/read
+python3 scripts/test_mcp_resources.py
+```
+
+### MCP Prompts Test
+
+```bash
+# Test prompts/list and prompts/get with arguments
+python3 scripts/test_mcp_prompts.py
+```
+
+### MCP Logging Test
+
+```bash
+# Test logging/setLevel
+python3 scripts/test_mcp_logging.py
+```
+
 ## 💡 Tips and Best Practices
 
 1. **Always use `.pinat now`** when working with `example_range.prom` to align evaluation time with the data

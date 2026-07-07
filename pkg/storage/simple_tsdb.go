@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -64,6 +65,8 @@ func sanitizeDirectives(data []byte) []byte {
 	}
 	seenHelp := make(map[string]bool)
 	seenType := make(map[string]bool)
+	removedHelp := 0
+	removedType := 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if strings.HasPrefix(line, "# HELP ") {
@@ -75,6 +78,7 @@ func sanitizeDirectives(data []byte) []byte {
 			name := fields[0]
 			if seenHelp[name] {
 				include[i] = false
+				removedHelp++
 			} else {
 				seenHelp[name] = true
 			}
@@ -89,11 +93,15 @@ func sanitizeDirectives(data []byte) []byte {
 			name := fields[0]
 			if seenType[name] {
 				include[i] = false
+				removedType++
 			} else {
 				seenType[name] = true
 			}
 			continue
 		}
+	}
+	if removedHelp > 0 || removedType > 0 {
+		slog.Debug("sanitized duplicate directives", "removedHelp", removedHelp, "removedType", removedType)
 	}
 	// Reassemble preserving original order
 	var b strings.Builder
@@ -116,11 +124,13 @@ func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
 	if rerr != nil {
 		return fmt.Errorf("failed to read metrics: %w", rerr)
 	}
+	slog.Debug("LoadFromReader", "bytes", len(data))
 	data = sanitizeDirectives(data)
 
 	// First, try custom line-by-line parser for time-series data with multiple timestamps
 	if err := s.parseTimeSeriesFormat(data); err == nil {
 		// Successfully parsed as time-series format
+		slog.Debug("LoadFromReader — parsed as time-series format", "series", len(s.Metrics), "samples", totalSamples(s))
 		return nil
 	}
 
@@ -132,6 +142,7 @@ func (s *SimpleStorage) LoadFromReader(reader io.Reader) error {
 		if len(metricFamilies) == 0 {
 			return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
 		}
+		slog.Debug("LoadFromReader — partial parse", "families", len(metricFamilies), "err", err)
 	}
 
 	// Process the parsed metric families
@@ -145,6 +156,7 @@ func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(n
 	if rerr != nil {
 		return fmt.Errorf("failed to read metrics: %w", rerr)
 	}
+	slog.Debug("LoadFromReaderWithFilter", "bytes", len(data))
 	data = sanitizeDirectives(data)
 
 	parser := expfmt.NewTextParser(model.UTF8Validation)
@@ -154,6 +166,7 @@ func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(n
 		if len(metricFamilies) == 0 {
 			return fmt.Errorf("failed to parse metrics with Prometheus parser: %w", err)
 		}
+		slog.Debug("LoadFromReaderWithFilter — partial parse", "families", len(metricFamilies), "err", err)
 	}
 	if filter == nil {
 		return s.processMetricFamilies(metricFamilies)
@@ -164,6 +177,7 @@ func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(n
 			filtered[name] = mf
 		}
 	}
+	slog.Debug("LoadFromReaderWithFilter — filtered", "total", len(metricFamilies), "kept", len(filtered))
 	return s.processMetricFamilies(filtered)
 }
 
@@ -172,12 +186,14 @@ func (s *SimpleStorage) LoadFromReaderWithFilter(reader io.Reader, filter func(n
 // Returns error if the data doesn't match this format (to fall back to standard parser).
 func (s *SimpleStorage) parseTimeSeriesFormat(data []byte) error {
 	hasTimestampedSamples := false
+	lineCount := 0
 
 	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 
 		// Skip comments and empty lines
 		if line == "" || strings.HasPrefix(line, "#") {
+			lineCount++
 			continue
 		}
 
@@ -196,6 +212,7 @@ func (s *SimpleStorage) parseTimeSeriesFormat(data []byte) error {
 		}
 
 		hasTimestampedSamples = true
+		lineCount++
 
 		// Build the full label set
 		lbls := make(map[string]string)
@@ -220,6 +237,7 @@ func (s *SimpleStorage) parseTimeSeriesFormat(data []byte) error {
 		return fmt.Errorf("no timestamped samples found")
 	}
 
+	slog.Debug("parseTimeSeriesFormat", "lines", lineCount, "series", len(s.Metrics), "samples", totalSamples(s))
 	return nil
 }
 
@@ -394,6 +412,8 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 	// Use a consistent base timestamp for all samples loaded in this call
 	baseTimestamp := time.Now().UnixMilli()
 
+	beforeTotal := totalSamples(s)
+
 	// Convert each metric family to individual samples
 	for _, mf := range metricFamilies {
 		metricName := mf.GetName()
@@ -506,6 +526,8 @@ func (s *SimpleStorage) processMetricFamilies(metricFamilies map[string]*dto.Met
 		}
 	}
 
+	afterTotal := totalSamples(s)
+	slog.Debug("processMetricFamilies", "families", len(metricFamilies), "addedSamples", afterTotal-beforeTotal, "totalSamples", afterTotal)
 	return nil
 }
 
@@ -526,6 +548,7 @@ func (s *SimpleStorage) AddSample(labels map[string]string, value float64, times
 	// Ensure __name__ is present
 	lbls["__name__"] = name
 	s.Metrics[name] = append(s.Metrics[name], MetricSample{Labels: lbls, Value: value, Timestamp: timestampMillis})
+	slog.Debug("AddSample", "name", name, "value", value, "ts", timestampMillis)
 }
 
 // RenameMetric renames all series with oldName to newName
@@ -552,6 +575,7 @@ func (s *SimpleStorage) RenameMetric(oldName, newName string) error {
 		s.MetricsHelp[newName] = help
 		delete(s.MetricsHelp, oldName)
 	}
+	slog.Debug("RenameMetric", "old", oldName, "new", newName, "samples", len(samples))
 	return nil
 }
 
@@ -564,6 +588,15 @@ type SaveOptions struct {
 	FixedTimestamp int64
 	// SeriesRegex filters which time series to write. It matches against "name{labels}" (labels sorted, quoted), excluding value/timestamp.
 	SeriesRegex *regexp.Regexp
+}
+
+// totalSamples returns the total number of samples across all metrics.
+func totalSamples(s *SimpleStorage) int {
+	n := 0
+	for _, samples := range s.Metrics {
+		n += len(samples)
+	}
+	return n
 }
 
 // SaveToWriter writes the store content in Prometheus text exposition (line) format.
@@ -692,6 +725,7 @@ func (s *SimpleStorage) SaveToWriterWithOptions(w io.Writer, opts SaveOptions) e
 			}
 		}
 	}
+	slog.Debug("SaveToWriterWithOptions", "metrics", len(names), "timestampMode", opts.TimestampMode, "seriesRegex", opts.SeriesRegex != nil)
 	return nil
 }
 

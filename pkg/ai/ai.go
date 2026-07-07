@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -60,21 +61,32 @@ func AISuggestQueriesCtx(ctx context.Context, storage *sstorage.SimpleStorage, i
 	if provider == "" {
 		provider = "ollama"
 	}
+	start := time.Now()
 	pctx := buildAIPromptContext(storage)
 	prompt := buildAIPrompt(pctx, intent)
+	slog.Debug("AISuggestQueriesCtx", "provider", provider, "intent", intent, "promptLen", len(prompt), "metrics", len(storage.Metrics))
 
+	var sug []AISuggestion
+	var err error
 	switch provider {
 	case "ollama":
-		return aiOllama(ctx, prompt)
+		sug, err = aiOllama(ctx, prompt)
 	case "openai":
-		return aiOpenAI(ctx, prompt)
+		sug, err = aiOpenAI(ctx, prompt)
 	case "claude":
-		return aiClaude(ctx, prompt)
+		sug, err = aiClaude(ctx, prompt)
 	case "grok":
-		return aiGrok(ctx, prompt)
+		sug, err = aiGrok(ctx, prompt)
 	default:
 		return nil, fmt.Errorf("unknown AI provider: %s", provider)
 	}
+	elapsed := time.Since(start)
+	if err != nil {
+		slog.Debug("AISuggestQueriesCtx — failed", "provider", provider, "elapsed", elapsed, "err", err)
+		return nil, err
+	}
+	slog.Debug("AISuggestQueriesCtx — succeeded", "provider", provider, "elapsed", elapsed, "suggestions", len(sug))
+	return sug, nil
 }
 
 type promptContext struct {
@@ -184,12 +196,13 @@ func aiOllama(ctx context.Context, prompt string) ([]AISuggestion, error) {
 		model = "llama3.1"
 	}
 	url := strings.TrimRight(host, "/") + "/api/chat"
-	reqBody := map[string]any{
+	start := time.Now()
+	slog.Debug("aiOllama", "model", model, "url", url)
+	sug, err := postAndExtractAISuggestions(ctx, url, "", map[string]any{
 		"model":    model,
 		"messages": []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"stream":   false,
-	}
-	return postAndExtractAISuggestions(ctx, url, "", reqBody, func(r io.Reader) (string, error) {
+	}, func(r io.Reader) (string, error) {
 		var resp struct {
 			Message struct {
 				Content string `json:"content"`
@@ -200,6 +213,8 @@ func aiOllama(ctx context.Context, prompt string) ([]AISuggestion, error) {
 		}
 		return resp.Message.Content, nil
 	})
+	slog.Debug("aiOllama — done", "model", model, "elapsed", time.Since(start), "suggestions", len(sug), "err", err)
+	return sug, err
 }
 
 // Provider: OpenAI-compatible
@@ -224,12 +239,13 @@ func aiOpenAI(ctx context.Context, prompt string) ([]AISuggestion, error) {
 	}
 	url := strings.TrimRight(base, "/") + "/chat/completions"
 	head := "Bearer " + apiKey
-	reqBody := map[string]any{
+	start := time.Now()
+	slog.Debug("aiOpenAI", "model", model, "base", base)
+	sug, err := postAndExtractAISuggestions(ctx, url, head, map[string]any{
 		"model":       model,
 		"messages":    []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"temperature": 0.2,
-	}
-	return postAndExtractAISuggestions(ctx, url, head, reqBody, func(r io.Reader) (string, error) {
+	}, func(r io.Reader) (string, error) {
 		var resp struct {
 			Choices []struct {
 				Message struct {
@@ -245,6 +261,8 @@ func aiOpenAI(ctx context.Context, prompt string) ([]AISuggestion, error) {
 		}
 		return resp.Choices[0].Message.Content, nil
 	})
+	slog.Debug("aiOpenAI — done", "model", model, "elapsed", time.Since(start), "suggestions", len(sug), "err", err)
+	return sug, err
 }
 
 // Provider: Claude (Anthropic)
@@ -269,15 +287,18 @@ func aiClaude(ctx context.Context, prompt string) ([]AISuggestion, error) {
 	}
 	url := strings.TrimRight(base, "/") + "/messages"
 	head := apiKey // special header form used below
-	reqBody := map[string]any{
+	start := time.Now()
+	slog.Debug("aiClaude", "model", model, "base", base)
+	sug, err := postAndExtractAISuggestionsAnthropic(ctx, url, head, map[string]any{
 		"model":      model,
 		"max_tokens": 800,
 		"messages": []map[string]any{{
 			"role":    "user",
 			"content": []map[string]string{{"type": "text", "text": prompt}},
 		}},
-	}
-	return postAndExtractAISuggestionsAnthropic(ctx, url, head, reqBody)
+	})
+	slog.Debug("aiClaude — done", "model", model, "elapsed", time.Since(start), "suggestions", len(sug), "err", err)
+	return sug, err
 }
 
 // Provider: Grok (xAI) — OpenAI-compatible style
@@ -302,12 +323,13 @@ func aiGrok(ctx context.Context, prompt string) ([]AISuggestion, error) {
 	}
 	url := strings.TrimRight(base, "/") + "/chat/completions"
 	head := "Bearer " + apiKey
-	reqBody := map[string]any{
+	start := time.Now()
+	slog.Debug("aiGrok", "model", model, "base", base)
+	sug, err := postAndExtractAISuggestions(ctx, url, head, map[string]any{
 		"model":       model,
 		"messages":    []map[string]string{{"role": "system", "content": "You write PromQL."}, {"role": "user", "content": prompt}},
 		"temperature": 0.2,
-	}
-	return postAndExtractAISuggestions(ctx, url, head, reqBody, func(r io.Reader) (string, error) {
+	}, func(r io.Reader) (string, error) {
 		var resp struct {
 			Choices []struct {
 				Message struct {
@@ -323,6 +345,8 @@ func aiGrok(ctx context.Context, prompt string) ([]AISuggestion, error) {
 		}
 		return resp.Choices[0].Message.Content, nil
 	})
+	slog.Debug("aiGrok — done", "model", model, "elapsed", time.Since(start), "suggestions", len(sug), "err", err)
+	return sug, err
 }
 
 // Helpers
@@ -357,9 +381,8 @@ func postAndExtractAISuggestions(ctx context.Context, url, bearer string, body a
 		return nil, err
 	}
 	sug := parseAISuggestions(text)
-	if len(sug) == 0 && os.Getenv("PROMQL_CLI_AI_DEBUG") == "true" {
-		fmt.Fprintln(os.Stderr, "AI raw response:")
-		fmt.Fprintln(os.Stderr, text)
+	if len(sug) == 0 {
+		slog.Debug("AI raw response — no suggestions parsed", "raw", text)
 	}
 	return sug, nil
 }

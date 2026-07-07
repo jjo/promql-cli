@@ -22,7 +22,8 @@ GOFLAGS :=
 LDFLAGS := -s -w \
 	-X main.version=$(GIT_VERSION) \
 	-X main.commit=$(GIT_COMMIT) \
-	-X main.date=$(BUILD_DATE)
+	-X main.date=$(BUILD_DATE) \
+	-X github.com/jjo/promql-cli/pkg/mcp.serverVersion=$(GIT_VERSION)
 
 .PHONY: all build build-binary run test test-% fmt vet tidy clean docker-build docker-run docker-push version help gofumpt demos
 
@@ -49,7 +50,7 @@ vet:
 
 _test_pkgs := $(shell go list ./... 2>/dev/null)
 
-test: test-unit test-gofumpt test-lint test-examples
+test: test-unit test-gofumpt test-lint test-examples test-mcp
 
 test-unit:
 	@go test -v ./...
@@ -76,6 +77,16 @@ test-gofumpt:
 test-examples: build-binary
 	@# Test code examples in documentation: nuke stdin, don't use repl=prompt, and set silent query mode
 	grep -E ^promql-cli README_examples.md | sed -e 's,^promql-cli,bin/$(APP),' -e 's,$$, </dev/null,' -e 's/--repl=prompt //' -e 's/query/query -s/' | grep -v EOF | bash -x >/dev/null
+
+test-mcp: build-binary
+	@# Test MCP server functionality
+	@python3 scripts/mcp-client.py examples/example.prom >/dev/null && echo "✅ mcp-client demo passed"
+	@python3 scripts/test_mcp_tools.py
+	@python3 scripts/test_mcp_resources.py
+	@python3 scripts/test_mcp_prompts.py
+	@python3 scripts/test_mcp_logging.py
+	@python3 scripts/test_mcp_notifications.py
+	@python3 scripts/test_mcp_streaming.py
 
 tidy:
 	go mod tidy
