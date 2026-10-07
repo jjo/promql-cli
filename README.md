@@ -538,7 +538,7 @@ After saving, `mcporter list promql-cli-live` shows the same 6 tools available t
 | `.rules [file/dir/glob]` | Load and evaluate alerting/recording rules | `.rules examples/example-rules.yaml` |
 | `.alerts` | Show alerting rules (can execute by name) | `.alerts` |
 | `.seed <metric> [steps] [interval]` | Generate test data history | `.seed http_requests_total 20 30s` |
-| `.pinat <time>` | Lock evaluation time (for testing) | `.pinat now-1h` |
+| `.pinat <time\|selector>` | Lock evaluation time (for testing); a metric selector pins to its latest sample | `.pinat now-1h`, `.pinat node_load1` |
 | `.at <time> <query>` | Run query at specific time | `.at now-5m rate(cpu[1m])` |
 
 #### **Managing Metrics**

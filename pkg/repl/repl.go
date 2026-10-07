@@ -1052,6 +1052,19 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 							out = append(out, p)
 						}
 					}
+					// .pinat also accepts a metric selector (it pins the evaluation
+					// time to that selector's newest sample), so offer the loaded
+					// metric names alongside the time presets.
+					seen := make(map[string]bool, len(out))
+					for _, p := range out {
+						seen[p] = true
+					}
+					for _, m := range pac.getMetricNameCompletions(currentWord) {
+						if !seen[m] {
+							seen[m] = true
+							out = append(out, m)
+						}
+					}
 					return out
 				}
 			}
