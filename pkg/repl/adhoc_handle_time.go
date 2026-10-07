@@ -69,7 +69,7 @@ func latestSampleTime(storage *sstorage.SimpleStorage, selector string) (time.Ti
 	if err != nil {
 		return time.Time{}, 0, err
 	}
-	defer q.Close()
+	defer func() { _ = q.Close() }()
 
 	set := q.Select(context.Background(), false, nil, matchers...)
 	var (
