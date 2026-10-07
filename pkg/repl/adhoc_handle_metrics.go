@@ -365,7 +365,12 @@ func handleAdhocRules(query string, storage *sstorage.SimpleStorage) bool {
 	SetActiveRules(files, spec)
 	fmt.Printf("Rules set: %d file(s) from %q\n", len(files), spec)
 	// Optionally evaluate immediately to populate store with recordings
-	if added, alerts, err := EvaluateActiveRules(storage); err == nil && (added > 0 || alerts > 0) {
+	added, alerts, err := EvaluateActiveRules(storage)
+	if err != nil {
+		fmt.Printf("Rules evaluation failed: %v\n", err)
+		return true
+	}
+	if added > 0 || alerts > 0 {
 		fmt.Printf("Rules: added %d samples; %d alerts\n", added, alerts)
 		if refreshMetricsCache != nil {
 			refreshMetricsCache(storage)

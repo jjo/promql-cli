@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/common/model"
@@ -85,7 +87,7 @@ func PrintResultJSON(result *promql.Result) error {
 		for _, s := range v {
 			arr = append(arr, sampleJSON{
 				Metric: labelsToMap(s.Metric),
-				Value:  [2]any{float64(s.T) / 1000.0, s.F},
+				Value:  [2]any{float64(s.T) / 1000.0, jsonFloat(s.F)},
 			})
 		}
 		out.Data.Result = arr
@@ -99,7 +101,7 @@ func PrintResultJSON(result *promql.Result) error {
 		return nil
 	case promql.Scalar:
 		out := respJSON{Status: "success", Data: dataJSON{ResultType: "scalar"}}
-		out.Data.Result = [2]any{float64(v.T) / 1000.0, v.V}
+		out.Data.Result = [2]any{float64(v.T) / 1000.0, jsonFloat(v.V)}
 		b, err := json.Marshal(out)
 		if err != nil {
 			return err
@@ -114,7 +116,7 @@ func PrintResultJSON(result *promql.Result) error {
 		for _, series := range v {
 			var values [][2]any
 			for _, p := range series.Floats {
-				values = append(values, [2]any{float64(p.T) / 1000.0, p.F})
+				values = append(values, [2]any{float64(p.T) / 1000.0, jsonFloat(p.F)})
 			}
 			arr = append(arr, seriesJSON{
 				Metric: labelsToMap(series.Metric),
@@ -142,6 +144,15 @@ func PrintResultJSON(result *promql.Result) error {
 		}
 		return nil
 	}
+}
+
+// jsonFloat keeps finite values as JSON numbers; NaN and ±Inf, which encoding/json
+// rejects, are rendered as strings the way the Prometheus HTTP API does ("NaN", "+Inf", "-Inf").
+func jsonFloat(f float64) any {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	return f
 }
 
 func labelsToMap(l labels.Labels) map[string]string {

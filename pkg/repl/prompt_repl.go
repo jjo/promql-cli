@@ -213,8 +213,12 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 					}
 				}
 
-				// Show time completions
-				return getTimeCompletions(strings.TrimSpace(afterCmd))
+				// .pinat takes a time or a metric selector; .at only a time.
+				arg := strings.TrimSpace(afterCmd)
+				if strings.HasPrefix(trimmedText, ".pinat") {
+					return pinatCompletions(arg)
+				}
+				return getTimeCompletions(arg)
 			}
 			return emptySuggestions
 		}
@@ -374,6 +378,29 @@ func getTimeCompletions(prefix string) []prompt.Suggest {
 		return []prompt.Suggest{}
 	}
 	return filtered
+}
+
+// pinatCompletions returns the completions for `.pinat <arg>`: the time presets
+// it accepts, plus the metric selectors it also accepts (a selector pins the
+// evaluation time to that selector's newest sample, ms-exact).
+//
+// Presets come first - typing `now` is far more common than a metric that
+// starts with it - and nothing is suggested twice. With no storage loaded the
+// metric list is simply empty, so completion still works.
+func pinatCompletions(prefix string) []prompt.Suggest {
+	sugg := getTimeCompletions(prefix)
+	seen := make(map[string]bool, len(sugg))
+	for _, s := range sugg {
+		seen[s.Text] = true
+	}
+	for _, s := range getMetricSuggests(prefix) {
+		if seen[s.Text] {
+			continue
+		}
+		seen[s.Text] = true
+		sugg = append(sugg, s)
+	}
+	return sugg
 }
 
 // getFileCompletions returns file/directory completions

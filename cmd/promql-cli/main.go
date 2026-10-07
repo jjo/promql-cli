@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	promparser "github.com/prometheus/prometheus/promql/parser"
 
 	ai "github.com/jjo/promql-cli/pkg/ai"
+	mcp "github.com/jjo/promql-cli/pkg/mcp"
 	repl "github.com/jjo/promql-cli/pkg/repl"
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
@@ -57,14 +59,73 @@ func normalizeLongOpts(args []string) []string {
 	return out
 }
 
+// extractLogFlags returns -log.level and -log.format values from os.Args
+// before the flag set is parsed, so we can initialise logging early.
+func extractLogFlags() (level, format string) {
+	level = "info"
+	format = "text"
+	for _, a := range os.Args[1:] {
+		if a == "--" {
+			break
+		}
+		switch {
+		case a == "-log.level" || a == "--log.level":
+			// no value given, ignore
+		case strings.HasPrefix(a, "-log.level=") || strings.HasPrefix(a, "--log.level="):
+			level = a[strings.IndexByte(a, '=')+1:]
+		case a == "-log.format" || a == "--log.format":
+		case strings.HasPrefix(a, "-log.format=") || strings.HasPrefix(a, "--log.format="):
+			format = a[strings.IndexByte(a, '=')+1:]
+		}
+	}
+	return level, format
+}
+
+// initLogging configures the global slog logger from the extracted flags.
+func initLogging(level, format string) {
+	var l slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		l = slog.LevelDebug
+	case "info":
+		l = slog.LevelInfo
+	case "warn":
+		l = slog.LevelWarn
+	case "error":
+		l = slog.LevelError
+	default:
+		l = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{Level: l}
+
+	var h slog.Handler
+	switch strings.ToLower(format) {
+	case "json":
+		h = slog.NewJSONHandler(os.Stderr, opts)
+	default:
+		h = slog.NewTextHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(h))
+}
+
 // main is the entry point of the application.
 // It provides a command-line interface for loading metrics and executing PromQL queries.
 func main() {
+	// Initialise logging before any output
+	initLogging(extractLogFlags())
+
 	// Root (global) flags
 	rootFlags := flag.NewFlagSet("promql-cli", flag.ContinueOnError)
 	replBackend := rootFlags.String("repl", "readline", "REPL backend: prompt|readline")
 	silent := rootFlags.Bool("silent", false, "suppress startup output")
 	rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
+
+	// Logging flags — consumed by initLogging above; registered here so flag parser doesn't reject them
+	logLevel := rootFlags.String("log.level", "info", "log level (debug|info|warn|error)")
+	logFormat := rootFlags.String("log.format", "text", "log format (text|json)")
+	_ = logLevel
+	_ = logFormat
 
 	// Composite AI flag (preferred)
 	var aiConfig ai.AIConfig
@@ -81,6 +142,8 @@ func main() {
 		EnableAtModifier:         true,
 		EnableNegativeOffset:     true,
 		NoStepSubqueryIntervalFn: func(_ int64) int64 { return 60 * 1000 },
+		// Without an explicit parser the engine defaults to one with experimental functions disabled.
+		Parser: promparser.NewParser(promparser.Options{EnableExperimentalFunctions: true}),
 	})
 
 	// load subcommand
@@ -226,12 +289,54 @@ func main() {
 		Exec: func(_ context.Context, _ []string) error { printVersion(); return nil },
 	}
 
+	// mcp subcommand: MCP server over stdio
+	mcpCmd := &ffcli.Command{
+		Name:       "mcp",
+		ShortUsage: "promql-cli mcp [<file.prom>]",
+		ShortHelp:  "Start an MCP server over stdio (JSON-RPC) for AI agent integration",
+		Exec: func(_ context.Context, args []string) error {
+			// Keep the real stdout exclusively for protocol frames: anything else
+			// printed from here on (storage info, init command output, stray
+			// prints) goes to stderr.
+			protoOut := os.Stdout
+			os.Stdout = os.Stderr
+
+			// Apply AI configuration (composite/env/profile)
+			ai.ConfigureAIComposite(map[string]string(aiConfig))
+
+			// Optional positional metrics file
+			if len(args) > 0 {
+				metricsFile := args[0]
+				if err := loadMetricsFromFile(storage, metricsFile, "", ""); err != nil {
+					return fmt.Errorf("failed to load metrics: %w", err)
+				}
+				if !*silent {
+					fmt.Fprintf(os.Stderr, "Loaded metrics from %s\n", metricsFile)
+					printStorageInfo(storage)
+				}
+			}
+
+			// PROMQL_CLI_INIT_COMMANDS: semicolon-separated REPL init commands
+			// (e.g. ".scrape http://...", ".prom_scrape http://prom:9090 'up'")
+			// run at startup as if passed via -c. Works regardless of file arg.
+			initCmds := strings.TrimSpace(os.Getenv("PROMQL_CLI_INIT_COMMANDS"))
+			if initCmds != "" {
+				slog.Debug("PROMQL_CLI_INIT_COMMANDS", "commands", initCmds)
+				repl.RunInitCommands(engine, storage, initCmds, *silent)
+			}
+
+			// Create and run the MCP server on stdin/stdout.
+			server := mcp.NewServerWithIO(engine, storage, os.Stdin, protoOut)
+			return server.Run(context.Background())
+		},
+	}
+
 	root := &ffcli.Command{
 		Name:       "promql-cli",
 		ShortUsage: "promql-cli [--repl=prompt|readline] <subcommand> [flags]",
 		FlagSet:    rootFlags,
 		Subcommands: []*ffcli.Command{
-			loadCmd, queryCmd, versionCmd,
+			loadCmd, queryCmd, versionCmd, mcpCmd,
 		},
 		Exec: func(_ context.Context, _ []string) error { return flag.ErrHelp },
 	}
@@ -244,7 +349,7 @@ func main() {
 			root.FlagSet.Usage()
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stderr, err)
+		slog.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }

@@ -21,6 +21,7 @@ debugging metrics, and learning PromQL.
 - 📊 **Querying** with the upstream Prometheus engine
 - 🚨 **Rules support** with alerting and recording rules
 - 🤖 **AI assistance** for query suggestions (OpenAI, Claude, Grok, Ollama)
+- 🔌 **MCP server mode** for AI agent integration (Claude Desktop, Cline, VS Code, etc.)
 - 📊 **Live metric scraping** from HTTP endpoints with filtering
 - 🕒 **Time manipulation** with pinned evaluation times
 - 💾 **Data persistence** with load/save functionality
@@ -311,6 +312,7 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 |---------|-------------|
 | `promql-cli query [file.prom]` | Start interactive REPL (optionally load metrics file) |
 | `promql-cli load <file.prom>` | Parse and load metrics file (shows summary) |
+| `promql-cli mcp [file.prom]` | Start MCP server over stdio for AI agent integration |
 | `promql-cli version` | Show version information |
 
 ### CLI Options
@@ -323,8 +325,192 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 | `-c, --command "cmds"` | Run commands before REPL/query | Automating data loading, setup | `-c ".scrape http://localhost:9100/metrics"` |
 | `-s, --silent` | Suppress startup output | Scripts, clean output | `-s -c ".load data.prom"` |
 | `--rules {dir/,fileglob.yml}` | Load alerting/recording rules | Testing alert rules | `--rules example-rules.yml` |
-| `--repl {prompt\|readline}` | Choose REPL backend | Use `prompt` for autocompletion | `--repl prompt` |
+| `--repl {prompt|readline}` | Choose REPL backend | Use `prompt` for autocompletion | `--repl prompt` |
 | `--ai "key=value,..."` | Configure AI settings in one flag | Query suggestions, learning PromQL | `--ai "provider=claude,model=opus"` |
+| `--log.level {debug,info,warn,error}` | Set log verbosity | Debugging, quiet CI runs | `--log.level=debug` |
+| `--log.format {text,json}` | Set log output format | Structured logging, log aggregation | `--log.format=json` |
+
+### 🔌 MCP Server Mode
+
+The `mcp` subcommand implements a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server over stdio, exposing the loaded PromQL engine as tools for any MCP-capable client.
+
+**Use cases:**
+- Integrate PromQL queries into AI coding assistants (Claude Desktop, Cline, VS Code, etc.)
+- Let AI agents explore metric names, labels, and values interactively
+- Replace ad-hoc `.ai` REPL prompts with structured tool calls
+
+```bash
+# Start server with pre-loaded data
+promql-cli mcp ./metrics.prom
+
+# Start server with live scraping (via -c in the REPL, then mcp)
+promql-cli query -c ".scrape http://localhost:9090/metrics; .save /tmp/snapshot.prom"
+promql-cli mcp /tmp/snapshot.prom
+
+# From an MCP host, any client can then call these tools:
+#   tools/list → 6 tools
+#   tools/call query_instant {"promql": "rate(http_requests_total[5m])"}
+#   tools/call list_metrics {"prefix": "http_"}
+#   tools/call execute_line {"line": ".scrape http://localhost:9100/metrics"}
+#   tools/call execute_line {"line": ".seed http_requests_total 20 1m; rate(http_requests_total[5m])"}
+```
+
+**Exposed tools:**
+
+| Tool | Description | Arguments |
+|------|-------------|-----------|
+| `query_instant` | Execute a PromQL instant query | `promql` (req), `timestamp` (opt) |
+| `query_range` | Execute a PromQL range query | `promql` (req), `start`, `end` (req), `step` (opt) |
+| `list_metrics` | List metric names in the loaded dataset | `prefix` (opt) |
+| `list_labels` | List label names for a metric | `metric_name` (opt), `prefix` (opt) |
+| `load_metrics` | Load exposition-format metrics dynamically | `data` (req) |
+| `execute_line` | Run any REPL command with full engine support | `line` (req) |
+
+**MCP Capabilities advertised:** `tools`, `resources`, `prompts`, `logging` — all four are announced in `initialize`, so clients can discover and use them.
+
+**Resources** (`resources/list`, `resources/read`):
+- `promql://metrics` — human-readable metric list with help text (text/plain)
+- `promql://metrics/list` — bare metric names, one per line (text/plain)
+- `promql://labels` — all label names with sample values (text/plain)
+- `promql://metrics/<name>` — JSON samples for a single metric (application/json)
+
+**Prompts** (`prompts/list`, `prompts/get`): parameterized PromQL templates:
+| Prompt | Description | Required Args |
+|--------|-------------|---------------|
+| `error-rate-by-service` | Calculate error rate (5xx) grouped by service | `window` (e.g. `5m`) |
+| `top-errors` | Top N endpoints by error rate | `window`; optional `n` (default 10) |
+| `latency-percentiles` | p50/p90/p99 latency for a histogram metric | `metric` (e.g. `http_request_duration_seconds`), `window` |
+| `saturation-analysis` | Resource saturation (cpu/memory/disk/network) | `resource` (`cpu\|memory\|disk\|network`), `window` |
+
+**Logging** (`logging/setLevel`): adjust slog verbosity at runtime — levels: `debug`, `info`, `warn`, `error`.
+
+**Subscriptions** (`resources/subscribe`, `resources/unsubscribe`): clients can subscribe to resource URIs and receive `notifications/resources/updated` whenever the dataset changes (after `load_metrics`, or `execute_line` running `.scrape`/`.load`/`.seed`/`.drop`). The server advertises `subscribe: true` and `listChanged: true` in capabilities and emits notifications for the list-level resources (`promql://metrics`, `promql://metrics/list`, `promql://labels`) on every mutation — clients re-list to discover new per-metric resources.
+
+**Streaming Execution** (`executionStreaming` capability): the `execute_line` tool accepts an optional `stream` boolean parameter. When `stream: true`, the server delivers tool output via `notifications/execute_line_output` instead of the `tools/call` response. This allows clients to receive incremental results as they are produced.
+- The server advertises `executionStreaming: {}` in capabilities.
+- The `tools/call` response for a streaming call returns empty JSON `{}`; output arrives in one or more `notifications/execute_line_output` notifications.
+- Each notification contains:
+  ```json
+  {
+    "event": "execute_line_output",
+    "chunks": [{"text": "...", "is_final": false, "is_complete": false}],
+    "is_final": false
+  }
+  ```
+- A notification with `is_final: true` signals the end of output.
+- Non-streaming calls (`stream: false` or omitted) continue to return results directly in the `tools/call` response.
+
+**Example MCP client configuration (Claude Desktop `claude_desktop_config.json`):**
+
+```json
+{
+  "mcpServers": {
+    "promql-cli": {
+      "command": "promql-cli",
+      "args": ["mcp", "/path/to/metrics.prom"]
+    }
+  }
+}
+```
+
+**Or: Start empty and live-scrape on the first request.** When the file isn't supplied at startup, the MCP server boots with no metrics loaded — clients can then use the `execute_line` tool to run `.scrape` and bring endpoints in on demand:
+
+```bash
+# Initial snapshot capture (one-off)
+promql-cli query -c ".scrape http://localhost:9100/metrics; .save /tmp/node.prom" </dev/null
+```
+
+```json
+{
+  "mcpServers": {
+    "promql-cli-node": {
+      "command": "promql-cli",
+      "args": ["mcp", "/tmp/node.prom"]
+    },
+    "promql-cli-prom": {
+      "command": "promql-cli",
+      "args": ["mcp", "/tmp/prom.prom"]
+    }
+  }
+}
+```
+
+Or for a single server that loads whatever clients send, omit the file:
+
+```json
+{
+  "mcpServers": {
+    "promql-cli-live": {
+      "command": "promql-cli",
+      "args": ["mcp"],
+      "env": {
+        "PROMQL_CLI_INIT_COMMANDS": ".scrape http://localhost:9100/metrics; .prom_scrape http://prometheus:9090 'up'"
+      }
+    }
+  }
+}
+```
+
+`PROMQL_CLI_INIT_COMMANDS` is a semicolon-separated list of REPL commands (e.g. `.scrape`, `.prom_scrape`, `.load`) executed at startup — works whether or not a metrics file was given.
+
+**Live scraping at runtime.** AI agents can also pull data on demand via the `execute_line` tool. After the client calls `tools/call execute_line` with `{"line": ".scrape http://..."}` or `{"line": ".prom_scrape http://prom:9090 'up'"}`, the response includes a metric summary, and subsequent `query_instant` / `query_range` calls operate on the freshly-loaded data. All `.scrape` arguments are supported: regex filter, count, delay, and auth (basic, Mimir tenant). Because `execute_line` carries `destructiveHint: true` and `openWorldHint: true`, MCP clients surface a confirmation prompt before invoking it.
+
+Typical agent workflow:
+
+```text
+1. resources/read promql://metrics/list        → discover loaded metric names
+2. execute_line .scrape <new_url>           → bring in fresh data (user confirms)
+3. query_instant {promql: "up"}             → query the updated dataset
+```
+
+**Example: calling promql-cli MCP via [mcporter](https://mcporter.sh/).** mcporter can connect ad-hoc to any stdio MCP server without config — useful for scripting and one-off invocations:
+
+```bash
+# List the 6 tools exposed by promql-cli
+npx mcporter list --stdio "promql-cli mcp /path/to/metrics.prom" --name promql
+
+# Run an instant PromQL query from the terminal
+npx mcporter call promql.query_instant promql='up' --output json
+
+# Live-scrape a fresh endpoint, then query it (chained with semicolons)
+npx mcporter call promql.execute_line line='.scrape http://localhost:9100/metrics; up' --output json
+
+# Import existing data and pull time-range from a remote Prometheus API
+npx mcporter call promql.execute_line \
+  line=".load examples/example.prom; .prom_scrape http://prom:9090 'rate(http_requests_total[5m])'" --output json
+
+# Or register persistently (adds to ./config/mcporter.json):
+mcporter config add promql-cli --command "promql-cli" --args "mcp /path/to/metrics.prom"
+```
+
+Or register promql-cli persistently in mcporter's config (`./config/mcporter.json` or `~/.mcporter/mcporter.json`):
+
+```json
+{
+  "mcpServers": {
+    "promql-cli": {
+      "command": "promql-cli",
+      "args": ["mcp", "/path/to/metrics.prom"]
+    },
+    "promql-cli-live": {
+      "command": "promql-cli",
+      "args": ["mcp"],
+      "env": {
+        "PROMQL_CLI_INIT_COMMANDS": ".scrape http://localhost:9100/metrics; .prom_scrape http://prom:9090 'up'"
+      }
+    }
+  }
+}
+```
+
+After saving, `mcporter list promql-cli-live` shows the same 6 tools available to call directly.
+
+**Protocol details:**
+- Transport: stdio with Content-Length framing
+- Protocol version: `2024-11-05`
+- The server loads metrics from the provided file at startup; the `load_metrics` tool can load additional data at runtime.
+- Use `execute_line` with `.scrape`, `.load`, or `.prom_scrape` to pull from live endpoints at runtime.
+- Timestamp format: RFC3339, Unix seconds/millis, or `now[+/-duration]`.
 
 ### 🤖 REPL Commands (Grouped by Workflow)
 
@@ -352,7 +538,7 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 | `.rules [file/dir/glob]` | Load and evaluate alerting/recording rules | `.rules examples/example-rules.yaml` |
 | `.alerts` | Show alerting rules (can execute by name) | `.alerts` |
 | `.seed <metric> [steps] [interval]` | Generate test data history | `.seed http_requests_total 20 30s` |
-| `.pinat <time>` | Lock evaluation time (for testing) | `.pinat now-1h` |
+| `.pinat <time\|selector>` | Lock evaluation time (for testing); a metric selector pins to its latest sample | `.pinat now-1h`, `.pinat node_load1` |
 | `.at <time> <query>` | Run query at specific time | `.at now-5m rate(cpu[1m])` |
 
 #### **Managing Metrics**
@@ -926,8 +1112,7 @@ echo $XAI_API_KEY           # For Grok
 promql-cli query --ai "provider=claude" metrics.prom
 
 # 3. Test with debug mode
-export PROMQL_CLI_AI_DEBUG=1
-promql-cli query --ai "provider=claude" metrics.prom
+promql-cli --log.level=debug query --ai "provider=claude" metrics.prom
 ```
 
 **Common causes:**

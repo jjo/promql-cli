@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -137,6 +138,7 @@ func handleAdhocAI(query string, storage *sstorage.SimpleStorage) bool {
 			}
 			cancel()
 		}()
+		slog.Debug("AI adhoc request", "intent", intent, "metrics", len(storage.Metrics))
 		suggestions, err := ai.AISuggestQueriesCtx(ctx, storage, intent)
 
 		// Check if we were canceled (flags cleared by signal handler)
@@ -144,6 +146,7 @@ func handleAdhocAI(query string, storage *sstorage.SimpleStorage) bool {
 			if !flagsCleared {
 				flagsCleared = true
 			}
+			slog.Debug("AI adhoc — cancelled", "intent", intent)
 			return
 		}
 
@@ -152,6 +155,7 @@ func handleAdhocAI(query string, storage *sstorage.SimpleStorage) bool {
 			aiInProgress = false
 			aiCancelRequest = nil
 			flagsCleared = true
+			slog.Debug("AI adhoc — context cancelled", "intent", intent)
 			return
 		}
 
@@ -161,9 +165,11 @@ func handleAdhocAI(query string, storage *sstorage.SimpleStorage) bool {
 				aiInProgress = false
 				aiCancelRequest = nil
 				flagsCleared = true
+				slog.Debug("AI adhoc — cancelled by ctx", "intent", intent)
 				return
 			}
 			fmt.Printf("AI error: %v\n", err)
+			slog.Debug("AI adhoc — error", "intent", intent, "err", err)
 			return
 		}
 		var validQ []string
@@ -182,6 +188,7 @@ func handleAdhocAI(query string, storage *sstorage.SimpleStorage) bool {
 				validE = append(validE, strings.TrimSpace(sug.Explain))
 			}
 		}
+		slog.Debug("AI adhoc — done", "intent", intent, "rawSuggestions", len(suggestions), "validSuggestions", len(validQ))
 		if len(validQ) == 0 {
 			fmt.Println("AI returned no valid PromQL suggestions.")
 			return

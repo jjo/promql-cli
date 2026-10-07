@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,14 +14,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	"github.com/chzyer/readline"
 	"github.com/prometheus/prometheus/promql"
 	promparser "github.com/prometheus/prometheus/promql/parser"
-	"golang.org/x/sys/unix"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
 )
@@ -39,101 +38,6 @@ func InitParser(opts promparser.Options) {
 	promParser = promparser.NewParser(opts)
 }
 
-// altDotMarker is a private Unicode character (U+E000) used to mark Alt+. sequences
-// that have been converted from ESC+. at the byte level before readline processes them.
-// This allows us to distinguish between a literal "." typed by the user and Alt+.
-const altDotMarker = rune(0xE000)
-
-// rlInputGate gates stdin to readline so we can pause input while running an external editor.
-var rlInputGate *inputGate
-
-// inputGate proxies bytes from a real source (os.Stdin) to a pipe that readline consumes.
-// When paused, it stops reading from the source so the editor can read directly from the TTY.
-type inputGate struct {
-	src                *os.File
-	r                  *io.PipeReader
-	w                  *io.PipeWriter
-	paused             uint32 // atomic 0/1
-	stop               chan struct{}
-	escSeqTransformers []func([]byte) []byte // transformers for ESC sequences
-}
-
-func newInputGate(src *os.File) *inputGate {
-	pr, pw := io.Pipe()
-	g := &inputGate{src: src, r: pr, w: pw, stop: make(chan struct{})}
-	go g.loop()
-	return g
-}
-
-func (g *inputGate) Reader() io.ReadCloser { return g.r }
-func (g *inputGate) Pause()                { atomic.StoreUint32(&g.paused, 1) }
-func (g *inputGate) Resume()               { atomic.StoreUint32(&g.paused, 0) }
-func (g *inputGate) Closed() bool          { return atomic.LoadUint32(&g.paused) == 2 }
-func (g *inputGate) Close() {
-	select {
-	case <-g.stop:
-		// already closed
-	default:
-		close(g.stop)
-	}
-	_ = g.r.Close()
-	_ = g.w.Close()
-	atomic.StoreUint32(&g.paused, 2)
-}
-
-func (g *inputGate) loop() {
-	buf := make([]byte, 4096)
-	for {
-		if atomic.LoadUint32(&g.paused) == 1 {
-			select {
-			case <-g.stop:
-				return
-			case <-time.After(10 * time.Millisecond):
-				continue
-			}
-		}
-		select {
-		case <-g.stop:
-			return
-		default:
-		}
-		n, err := g.src.Read(buf)
-		if n > 0 {
-			data := buf[:n]
-			// Apply any ESC sequence transformers
-			for _, transform := range g.escSeqTransformers {
-				data = transform(data)
-			}
-			_, _ = g.w.Write(data)
-		}
-		if err != nil {
-			_ = g.w.CloseWithError(err)
-			return
-		}
-	}
-}
-
-// Flush drains any immediately available bytes from the real stdin (TTY) without forwarding them.
-func (g *inputGate) Flush() {
-	if g == nil || g.src == nil {
-		return
-	}
-	fd := int(g.src.Fd())
-	_ = unix.SetNonblock(fd, true)
-	defer func() { _ = unix.SetNonblock(fd, false) }()
-	buf := make([]byte, 8192)
-	for {
-		n, err := unix.Read(fd, buf)
-		if n <= 0 {
-			if err == nil || err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-				break
-			}
-			break
-		}
-		// Continue until empty
-	}
-}
-
 // runInteractiveQueries starts an interactive query session using readline for enhanced UX.
 // It allows users to execute PromQL queries against the loaded metrics with history and completion.
 func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorage, silent bool) {
@@ -144,6 +48,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		fmt.Println("Enter PromQL queries (or 'quit' to exit):")
 		fmt.Println()
 	}
+	slog.Debug("REPL starting", "backend", "readline", "silent", silent)
 
 	// Configure readline
 	// History prefix-search on Up/Down is implemented via a custom Listener that
@@ -671,6 +576,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		Stdin:           rlInputGate.Reader(),
 	})
 	if err != nil {
+		slog.Warn("readline init failed, falling back to basic input", "err", err)
 		fmt.Printf("Warning: Could not initialize readline, falling back to basic input: %v\n", err)
 		runBasicInteractiveQueries(engine, storage, silent)
 		return
@@ -774,10 +680,12 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 
 		// Track last executed command for Alt+.
 		lastExecutedCommand = query
+		slog.Debug("REPL executing", "query", query)
 
 		// Delegate full-line execution (ad-hoc, !cmd, query, pipes) to executeOne
 		executeOne(engine, storage, query)
 	}
+	slog.Debug("REPL exiting")
 }
 
 // loadHistoryFromFile reads non-empty lines from the given history file path.
@@ -1142,6 +1050,19 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 						// Show all presets when currentWord is empty or filter if typing
 						if currentWord == "" || strings.HasPrefix(strings.ToLower(p), strings.ToLower(currentWord)) {
 							out = append(out, p)
+						}
+					}
+					// .pinat also accepts a metric selector (it pins the evaluation
+					// time to that selector's newest sample), so offer the loaded
+					// metric names alongside the time presets.
+					seen := make(map[string]bool, len(out))
+					for _, p := range out {
+						seen[p] = true
+					}
+					for _, m := range pac.getMetricNameCompletions(currentWord) {
+						if !seen[m] {
+							seen[m] = true
+							out = append(out, m)
 						}
 					}
 					return out
@@ -1525,6 +1446,14 @@ func splitQueryAndPipe(line string) (string, string, bool) {
 	return line, "", false
 }
 
+// HasShellPipe reports whether line contains a top-level '|' (outside
+// double-quoted strings), i.e. the same condition under which executeOne pipes
+// output to a shell command.
+func HasShellPipe(line string) bool {
+	_, _, ok := splitQueryAndPipe(line)
+	return ok
+}
+
 func getBracketedRangeTemplates() []string {
 	return []string{"[30s]", "[1m]", "[5m]", "[10m]", "[1h]", "[6h]", "[24h]"}
 }
@@ -1729,6 +1658,10 @@ func parseEvalTime(tok string) (time.Time, error) {
 			return time.Now(), nil
 		}
 		op := tok[3]
+		if op != '+' && op != '-' {
+			// e.g. a metric named now_5m: not a time, let callers try a selector.
+			return time.Time{}, fmt.Errorf("unsupported time format: %s", tok)
+		}
 		durStr := strings.TrimSpace(tok[4:])
 		d, err := time.ParseDuration(durStr)
 		if err != nil {
@@ -1882,6 +1815,7 @@ func runBasicInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleS
 	if !silent {
 		fmt.Println("Using basic input mode (readline unavailable)")
 	}
+	slog.Debug("REPL starting", "backend", "basic", "silent", silent)
 
 	for {
 		if pinnedEvalTime != nil {
@@ -1917,6 +1851,16 @@ func ExecuteQueryLine(engine *promql.Engine, storage *sstorage.SimpleStorage, li
 	executeOne(engine, storage, line)
 }
 
+// CaptureQueryLine evaluates a single PromQL expression or command and returns the
+// captured output as a string.  Like ExecuteQueryLine but returns rather than prints.
+// This is exported for use by the MCP server and any caller that needs the text result.
+func CaptureQueryLine(engine *promql.Engine, storage *sstorage.SimpleStorage, line string) string {
+	result, _ := captureOutput(func() {
+		executeOne(engine, storage, line)
+	})
+	return result
+}
+
 // executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
 func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line string) {
 	orig := strings.TrimSpace(line)
@@ -1926,12 +1870,14 @@ func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line str
 
 	// Comment: lines starting with # are no-ops
 	if strings.HasPrefix(orig, "#") {
+		slog.Debug("executeOne — comment, skipping", "line", orig)
 		return
 	}
 
 	// Shell bang: execute external command and show stdout/stderr
 	if strings.HasPrefix(orig, "!") {
 		cmdStr := strings.TrimSpace(orig[1:])
+		slog.Debug("executeOne — shell command", "cmd", cmdStr)
 		if cmdStr == "" {
 			fmt.Println("Usage: !<command>")
 			return
@@ -1952,6 +1898,7 @@ func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line str
 
 	// Ad-hoc commands (support piping for their printed output)
 	if strings.HasPrefix(query, ".") {
+		slog.Debug("executeOne — adhoc command", "cmd", query, "hasPipe", hasPipe)
 		if hasPipe {
 			captured, _ := captureOutput(func() {
 				_ = handleAdHocFunction(query, storage)
@@ -2021,17 +1968,22 @@ func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line str
 	ctx, cancel := context.WithTimeout(context.Background(), replTimeout)
 	defer cancel()
 
+	start := time.Now()
 	q, err := engine.NewInstantQuery(ctx, storage, nil, query, evalTime)
 	if err != nil {
+		slog.Debug("executeOne — query creation failed", "query", query, "elapsed", time.Since(start), "err", err)
 		fmt.Printf("Error creating query: %v\n", err)
 		return
 	}
 
 	result := q.Exec(ctx)
+	elapsed := time.Since(start)
 	if result.Err != nil {
+		slog.Debug("executeOne — query execution failed", "query", query, "elapsed", elapsed, "err", result.Err)
 		fmt.Printf("Error: %v\n", result.Err)
 		return
 	}
+	slog.Debug("executeOne — PromQL query succeeded", "query", query, "elapsed", elapsed)
 
 	if hasPipe {
 		// Capture the normal printed output and feed it to the pipe command
@@ -2110,6 +2062,9 @@ func getHistoryFilePath() string {
 func RunInitCommands(engine *promql.Engine, storage *sstorage.SimpleStorage, commands string, silent bool) {
 	// Set global references for adhoc commands
 	replEngine = engine
+	// Pre-commands run before the REPL starts: wire the rules engine here too,
+	// or .rules/.load/.scrape in -c would silently skip rule evaluation.
+	SetEvalEngine(engine)
 
 	if strings.TrimSpace(commands) == "" {
 		return

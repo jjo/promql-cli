@@ -159,12 +159,14 @@ var AdHocCommands = []AdHocCommand{
 	},
 	{
 		Command:     ".pinat",
-		Description: "Pin evaluation time for all future queries",
-		Usage:       ".pinat [time|now|remove]",
+		Description: "Pin evaluation time for all future queries (a metric selector pins to its latest sample)",
+		Usage:       ".pinat [time|now|<metric selector>|remove]",
 		Examples: []string{
 			".pinat",
 			".pinat now",
 			".pinat 2025-09-16T20:40:00Z",
+			".pinat node_load1",
+			`.pinat up{job="node"}`,
 			".pinat remove",
 		},
 	},
