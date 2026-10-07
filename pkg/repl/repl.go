@@ -2050,6 +2050,9 @@ func getHistoryFilePath() string {
 func RunInitCommands(engine *promql.Engine, storage *sstorage.SimpleStorage, commands string, silent bool) {
 	// Set global references for adhoc commands
 	replEngine = engine
+	// Pre-commands run before the REPL starts: wire the rules engine here too,
+	// or .rules/.load/.scrape in -c would silently skip rule evaluation.
+	SetEvalEngine(engine)
 
 	if strings.TrimSpace(commands) == "" {
 		return

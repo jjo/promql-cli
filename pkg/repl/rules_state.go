@@ -1,6 +1,7 @@
 package repl
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -58,8 +59,11 @@ func GetAlertExpr(alertName string) string {
 // EvaluateActiveRules evaluates currently active rule files (if any) over the provided storage.
 // Uses pinnedEvalTime when set, else time.Now(). Prints a brief summary.
 func EvaluateActiveRules(storage *sstorage.SimpleStorage) (added int, alerts int, err error) {
-	if evalEngine == nil || len(activeRuleFiles) == 0 {
+	if len(activeRuleFiles) == 0 {
 		return 0, 0, nil
+	}
+	if evalEngine == nil {
+		return 0, 0, errors.New("rules are active but no query engine is set for evaluating them")
 	}
 	t := time.Now()
 	if pinnedEvalTime != nil {
