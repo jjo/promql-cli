@@ -95,3 +95,11 @@ func TestEvaluateActiveRules_NoRulesIsANoop(t *testing.T) {
 		t.Fatalf("expected a silent no-op without rules, got added=%d alerts=%d err=%v", added, alerts, err)
 	}
 }
+
+func TestAdhocRules_NoEngineReportsError(t *testing.T) {
+	resetRulesState(t)
+	out := captureStdout(t, func() { _ = handleAdHocFunction(".rules "+writeAlertRule(t), sstorage.NewSimpleStorage()) })
+	if !strings.Contains(out, "Rules evaluation failed") || !strings.Contains(out, "no query engine") {
+		t.Fatalf("expected .rules to report the missing engine, got: %s", out)
+	}
+}

@@ -18,6 +18,7 @@ func pinatStore() *sstorage.SimpleStorage {
 	s.AddSample(map[string]string{"__name__": "node_load1", "instance": "b"}, 2, 1791401843000)
 	s.AddSample(map[string]string{"__name__": "other_metric"}, 1, 1791409999000)
 	s.AddSample(map[string]string{"__name__": "nowcast_total"}, 1, 1791400000123)
+	s.AddSample(map[string]string{"__name__": "now_5m"}, 1, 1791400000456)
 	return s
 }
 
@@ -33,6 +34,7 @@ func TestAdhoc_Pinat_MetricSelector(t *testing.T) {
 		{"quoted selector", `'node_load1{instance="b"}'`, 1791401843000, "1 series"},
 		{"bare matcher selector", `{__name__=~"node_.+"}`, 1791401844972, "2 series"},
 		{"metric named like now", "nowcast_total", 1791400000123, "nowcast_total"},
+		{"metric named like now-offset", "now_5m", 1791400000456, "now_5m"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -93,5 +95,18 @@ func TestAdhoc_Pinat_TimeFormatsTakePrecedence(t *testing.T) {
 	_ = captureStdout(t, func() { _ = handleAdHocFunction(".pinat 2025-09-16T20:40:00Z", store) })
 	if want := time.Date(2025, 9, 16, 20, 40, 0, 0, time.UTC); pinnedEvalTime == nil || !pinnedEvalTime.Equal(want) {
 		t.Fatalf("RFC3339 must still parse as a time, got %v", pinnedEvalTime)
+	}
+}
+
+func TestParseEvalTime_NowOffsets(t *testing.T) {
+	for _, tok := range []string{"now+5m", "now-5m"} {
+		if _, err := parseEvalTime(tok); err != nil {
+			t.Fatalf("parseEvalTime(%q) failed: %v", tok, err)
+		}
+	}
+	for _, tok := range []string{"now_5m", "nowx1h", "now 5m"} {
+		if _, err := parseEvalTime(tok); err == nil {
+			t.Fatalf("parseEvalTime(%q) must fail: only + and - are offsets", tok)
+		}
 	}
 }

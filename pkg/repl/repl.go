@@ -1650,6 +1650,10 @@ func parseEvalTime(tok string) (time.Time, error) {
 			return time.Now(), nil
 		}
 		op := tok[3]
+		if op != '+' && op != '-' {
+			// e.g. a metric named now_5m: not a time, let callers try a selector.
+			return time.Time{}, fmt.Errorf("unsupported time format: %s", tok)
+		}
 		durStr := strings.TrimSpace(tok[4:])
 		d, err := time.ParseDuration(durStr)
 		if err != nil {
