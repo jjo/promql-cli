@@ -142,6 +142,8 @@ func main() {
 		EnableAtModifier:         true,
 		EnableNegativeOffset:     true,
 		NoStepSubqueryIntervalFn: func(_ int64) int64 { return 60 * 1000 },
+		// Without an explicit parser the engine defaults to one with experimental functions disabled.
+		Parser: promparser.NewParser(promparser.Options{EnableExperimentalFunctions: true}),
 	})
 
 	// load subcommand
