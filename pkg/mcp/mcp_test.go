@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -828,5 +829,153 @@ func BenchmarkDispatch(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		srv.dispatch(req)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Transport framing
+// ---------------------------------------------------------------------------
+
+const initializeLine = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`
+
+func TestNewlineDelimitedInitialize(t *testing.T) {
+	h := newMCPTestHarness(t, newTestEngine(), newTestStorage(t))
+	defer h.waitDone()
+
+	if _, err := io.WriteString(h.stdin, initializeLine+"\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	line, err := h.recvReader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read response line: %v", err)
+	}
+	if strings.HasPrefix(line, "Content-Length") {
+		t.Fatalf("expected newline-delimited response, got %q", line)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		t.Fatalf("unmarshal %q: %v", line, err)
+	}
+	assertNoError(t, resp)
+	if resp["result"] == nil {
+		t.Fatalf("missing result: %v", resp)
+	}
+}
+
+func TestContentLengthInitializeKeepsContentLengthResponse(t *testing.T) {
+	h := newMCPTestHarness(t, newTestEngine(), newTestStorage(t))
+	defer h.waitDone()
+
+	msg := fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(initializeLine), initializeLine)
+	if _, err := io.WriteString(h.stdin, msg); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	first, err := h.recvReader.Peek(len("Content-Length:"))
+	if err != nil {
+		t.Fatalf("peek: %v", err)
+	}
+	if string(first) != "Content-Length:" {
+		t.Fatalf("expected Content-Length framed response, got %q", first)
+	}
+	resp := h.recv()
+	assertNoError(t, resp)
+}
+
+func TestReadMessageRejectsBadContentLength(t *testing.T) {
+	for _, hdr := range []string{
+		"Content-Length: -5\r\n\r\n",
+		"Content-Length: 0\r\n\r\n",
+		"Content-Length: 99999999999\r\n\r\n",
+		"Content-Length: abc\r\n\r\n",
+	} {
+		s := NewServerWithIO(newTestEngine(), nil, strings.NewReader(hdr), io.Discard)
+		if _, err := s.readMessage(); err == nil {
+			t.Errorf("expected error for %q", hdr)
+		}
+	}
+}
+
+func TestReadMessageRejectsOversizedLine(t *testing.T) {
+	line := strings.Repeat("x", maxMessageSize+1) // never a newline
+	s := NewServerWithIO(newTestEngine(), nil, strings.NewReader(line), io.Discard)
+	if _, err := s.readMessage(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected an oversize error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// execute_line guard
+// ---------------------------------------------------------------------------
+
+func TestExecuteLineGuard(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		h := newMCPTestHarness(t, newTestEngine(), newTestStorage(t))
+		id := 1
+		call := func(line string) map[string]any {
+			id++
+			h.send(map[string]any{
+				"jsonrpc": "2.0", "id": id, "method": "tools/call",
+				"params": map[string]any{
+					"name":      "execute_line",
+					"arguments": map[string]any{"line": line, "stream": stream},
+				},
+			})
+			for {
+				resp := h.recv()
+				// Skip streaming notifications (no id).
+				if resp["id"] != nil {
+					return resp
+				}
+			}
+		}
+
+		for _, tc := range []struct{ line, want string }{
+			{"vector(1) | id -un", "pipes"},
+			{".ai hi", ".ai"},
+			{".aifoo", ".ai"},
+			{".source x", ".source"},
+			{".edit", ".edit"},
+			{"!id", "shell commands"},
+		} {
+			resp := call(tc.line)
+			assertIsError(t, resp)
+			if text := extractText(t, resp); !strings.Contains(text, tc.want) {
+				t.Errorf("stream=%v line=%q: error %q does not mention %q", stream, tc.line, text, tc.want)
+			}
+		}
+
+		// A '|' inside a double-quoted string is not a shell pipe.
+		resp := call(`up{job=~"a|b"}`)
+		assertNotError(t, resp)
+
+		h.waitDone()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Stdout hygiene
+// ---------------------------------------------------------------------------
+
+// TestProtocolWriterIgnoresStdoutSwap verifies protocol frames go to the
+// injected writer even while os.Stdout is swapped (as captureOutput does).
+func TestProtocolWriterIgnoresStdoutSwap(t *testing.T) {
+	var buf strings.Builder
+	s := NewServerWithIO(newTestEngine(), newTestStorage(t), strings.NewReader(""), &buf)
+
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	werr := s.writeMessage([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	os.Stdout = orig
+	_ = w.Close()
+	_ = r.Close()
+	if werr != nil {
+		t.Fatalf("writeMessage: %v", werr)
+	}
+	if got := buf.String(); got != `{"jsonrpc":"2.0","id":1,"result":{}}`+"\n" {
+		t.Fatalf("unexpected protocol output: %q", got)
 	}
 }

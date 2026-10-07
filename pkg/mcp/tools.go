@@ -162,7 +162,7 @@ var tools = []toolEntry{
 	{
 		def: toolDefinition{
 			Name:        "execute_line",
-			Description: "Execute any REPL command line — PromQL queries, ad-hoc commands (.scrape, .load, .seed, .save, .drop, .keep, .rename, etc.), or piped queries. Full REPL engine (shell !commands are blocked; .save/.drop/.scrape can mutate state or reach external systems).",
+			Description: "Execute any REPL command line — PromQL queries, ad-hoc commands (.scrape, .load, .seed, .save, .drop, .keep, .rename, etc.), or queries. Full REPL engine Blocked: shell !commands, shell pipes (|) outside quoted strings, and the .ai, .edit and .source commands. Note .save/.drop/.scrape can mutate state or reach external systems.",
 			InputSchema: rawJSON(`{
 				"type": "object",
 				"properties": {
@@ -479,6 +479,28 @@ type executeLineArgs struct {
 	Stream bool   `json:"stream,omitempty"`
 }
 
+// checkExecuteLine rejects lines that would run shell commands, spawn async
+// AI work, open an editor, or source arbitrary files — MCP clients are
+// remote/code-originated.
+func checkExecuteLine(line string) error {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "!") {
+		return fmt.Errorf("shell commands (!) are not allowed via MCP")
+	}
+	if repl.HasShellPipe(trimmed) {
+		return fmt.Errorf("shell pipes (|) are not allowed via MCP")
+	}
+	// Match by prefix, like the REPL dispatcher (strings.HasPrefix(line, ".ai")),
+	// so variants such as ".aifoo" can't slip past the guard.
+	lower := strings.ToLower(trimmed)
+	for _, cmd := range []string{".ai", ".edit", ".source"} {
+		if strings.HasPrefix(lower, cmd) {
+			return fmt.Errorf("%s is not allowed via MCP", cmd)
+		}
+	}
+	return nil
+}
+
 func handleExecuteLine(srv *Server, params json.RawMessage) (json.RawMessage, error) {
 	var args executeLineArgs
 	if err := json.Unmarshal(params, &args); err != nil {
@@ -488,9 +510,8 @@ func handleExecuteLine(srv *Server, params json.RawMessage) (json.RawMessage, er
 		return nil, fmt.Errorf("line is required")
 	}
 
-	// Block shell commands (!) for security — MCP clients are remote/code-originated.
-	if strings.HasPrefix(strings.TrimSpace(args.Line), "!") {
-		return nil, fmt.Errorf("shell commands (!) are not allowed via MCP")
+	if err := checkExecuteLine(args.Line); err != nil {
+		return nil, err
 	}
 
 	// Handle streaming mode
@@ -512,6 +533,9 @@ func handleExecuteLine(srv *Server, params json.RawMessage) (json.RawMessage, er
 // For REPL commands (PromQL queries, .scrape, .load, etc.), it uses the REPL
 // engine and sends the result via notifications/execute_line_output.
 func handleExecuteLineStream(srv *Server, args executeLineArgs) (json.RawMessage, error) {
+	if err := checkExecuteLine(args.Line); err != nil {
+		return nil, err
+	}
 	// Always use the REPL engine for command execution. This handles PromQL
 	// queries, ad-hoc commands, and piped queries correctly.
 	beforeMetrics := len(srv.storage.Metrics)

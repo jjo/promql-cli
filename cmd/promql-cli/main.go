@@ -295,6 +295,12 @@ func main() {
 		ShortUsage: "promql-cli mcp [<file.prom>]",
 		ShortHelp:  "Start an MCP server over stdio (JSON-RPC) for AI agent integration",
 		Exec: func(_ context.Context, args []string) error {
+			// Keep the real stdout exclusively for protocol frames: anything else
+			// printed from here on (storage info, init command output, stray
+			// prints) goes to stderr.
+			protoOut := os.Stdout
+			os.Stdout = os.Stderr
+
 			// Apply AI configuration (composite/env/profile)
 			ai.ConfigureAIComposite(map[string]string(aiConfig))
 
@@ -320,7 +326,7 @@ func main() {
 			}
 
 			// Create and run the MCP server on stdin/stdout.
-			server := mcp.NewServer(engine, storage)
+			server := mcp.NewServerWithIO(engine, storage, os.Stdin, protoOut)
 			return server.Run(context.Background())
 		},
 	}

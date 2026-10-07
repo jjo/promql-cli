@@ -1446,6 +1446,14 @@ func splitQueryAndPipe(line string) (string, string, bool) {
 	return line, "", false
 }
 
+// HasShellPipe reports whether line contains a top-level '|' (outside
+// double-quoted strings), i.e. the same condition under which executeOne pipes
+// output to a shell command.
+func HasShellPipe(line string) bool {
+	_, _, ok := splitQueryAndPipe(line)
+	return ok
+}
+
 func getBracketedRangeTemplates() []string {
 	return []string{"[30s]", "[1m]", "[5m]", "[10m]", "[1h]", "[6h]", "[24h]"}
 }

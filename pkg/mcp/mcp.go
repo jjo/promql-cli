@@ -149,15 +149,28 @@ type Server struct {
 	writer      io.Writer
 	initialized atomic.Bool
 	shutdown    atomic.Bool
+
+	// Framing of responses mirrors the first received message; the default
+	// (before any message) is newline-delimited.
+	framingSet           atomic.Bool
+	contentLengthFraming atomic.Bool
+	writeMu              sync.Mutex
 }
 
 // NewServer creates an MCP server over stdin/stdout.
 func NewServer(engine *promql.Engine, storage *sstorage.SimpleStorage) *Server {
+	return NewServerWithIO(engine, storage, os.Stdin, os.Stdout)
+}
+
+// NewServerWithIO creates an MCP server over the given reader/writer. The
+// writer is captured once, so later swaps of os.Stdout (e.g. output capture
+// during execute_line) never affect protocol frames.
+func NewServerWithIO(engine *promql.Engine, storage *sstorage.SimpleStorage, in io.Reader, out io.Writer) *Server {
 	return &Server{
 		engine:  engine,
 		storage: storage,
-		reader:  bufio.NewReader(os.Stdin),
-		writer:  os.Stdout,
+		reader:  bufio.NewReader(in),
+		writer:  out,
 	}
 }
 
@@ -190,44 +203,89 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Transport: Content-Length framing
+// Transport: newline-delimited JSON or Content-Length framing
 // ---------------------------------------------------------------------------
 
-const contentLengthHeader = "Content-Length:"
+const (
+	contentLengthHeader = "Content-Length:"
 
+	// maxMessageSize bounds a single message, whichever the framing.
+	maxMessageSize = 16 << 20
+)
+
+// readLine reads up to and including the next '\n', like ReadString, but
+// fails once the line exceeds maxMessageSize so a client that never sends a
+// newline can't grow memory without bound.
+func (s *Server) readLine() (string, error) {
+	var buf []byte
+	for {
+		chunk, err := s.reader.ReadSlice('\n')
+		buf = append(buf, chunk...)
+		if len(buf) > maxMessageSize {
+			return "", fmt.Errorf("message exceeds %d bytes", maxMessageSize)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return string(buf), err
+	}
+}
+
+// readMessage reads one JSON-RPC message, auto-detecting the framing: a line
+// starting with '{' is a newline-delimited message (MCP stdio spec); anything
+// else is parsed as LSP-style headers followed by a Content-Length body. The
+// framing of the first message received is recorded and reused for responses.
 func (s *Server) readMessage() (json.RawMessage, error) {
 	var contentLength int64
+	haveLength := false
 	for {
-		line, err := s.reader.ReadString('\n')
+		line, err := s.readLine()
 		if err != nil {
+			// A final unterminated newline-delimited message is still valid.
+			if errors.Is(err, io.EOF) && !haveLength && strings.HasPrefix(strings.TrimSpace(line), "{") {
+				s.setFraming(false)
+				return json.RawMessage(strings.TrimSpace(line)), nil
+			}
 			return nil, err
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
 			// Empty line ends the header block.
-			if contentLength > 0 {
+			if haveLength {
 				break
 			}
 			// No Content-Length yet; tolerate leading/trailing blank lines.
 			continue
+		}
+		if !haveLength && strings.HasPrefix(strings.TrimSpace(line), "{") {
+			s.setFraming(false)
+			return json.RawMessage(strings.TrimSpace(line)), nil
 		}
 		if v, ok := cutHeaderCI(line, contentLengthHeader); ok {
 			n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			if err != nil {
 				return nil, fmt.Errorf("invalid Content-Length: %s", line)
 			}
+			if n <= 0 || n > maxMessageSize {
+				return nil, fmt.Errorf("invalid Content-Length: %d (must be 1..%d)", n, int64(maxMessageSize))
+			}
 			contentLength = n
+			haveLength = true
 		}
 	}
-	if contentLength == 0 {
-		return nil, fmt.Errorf("missing Content-Length header")
-	}
+	s.setFraming(true)
 	body := make([]byte, contentLength)
 	if _, err := io.ReadFull(s.reader, body); err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 	return json.RawMessage(body), nil
+}
+
+// setFraming records the framing of the first message received.
+func (s *Server) setFraming(contentLength bool) {
+	if s.framingSet.CompareAndSwap(false, true) {
+		s.contentLengthFraming.Store(contentLength)
+	}
 }
 
 // cutHeaderCI does a case-insensitive prefix match on an HTTP-style header
@@ -243,11 +301,22 @@ func cutHeaderCI(line, prefix string) (string, bool) {
 }
 
 func (s *Server) writeMessage(data []byte) error {
-	if _, err := fmt.Fprintf(s.writer, "Content-Length: %d\r\n\r\n", len(data)); err != nil {
-		return err
-	}
-	if _, err := s.writer.Write(data); err != nil {
-		return err
+	// Serialize writes so concurrent notifications cannot interleave frames.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if s.contentLengthFraming.Load() {
+		if _, err := fmt.Fprintf(s.writer, "Content-Length: %d\r\n\r\n", len(data)); err != nil {
+			return err
+		}
+		if _, err := s.writer.Write(data); err != nil {
+			return err
+		}
+	} else {
+		// json.Marshal output contains no raw newlines, as the spec requires.
+		if _, err := s.writer.Write(append(append(make([]byte, 0, len(data)+1), data...), '\n')); err != nil {
+			return err
+		}
 	}
 	// Flush so the client receives it immediately.
 	if f, ok := s.writer.(*os.File); ok {
