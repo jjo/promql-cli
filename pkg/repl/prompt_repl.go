@@ -20,6 +20,7 @@ import (
 
 	"github.com/c-bata/go-prompt"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	promparser "github.com/prometheus/prometheus/promql/parser"
 	"golang.org/x/sys/unix"
 
 	sstorage "github.com/jjo/promql-cli/pkg/storage"
@@ -44,6 +45,10 @@ var (
 
 // promptCompleter provides completions for go-prompt
 func promptCompleter(d prompt.Document) []prompt.Suggest {
+	// No completion dropdown while searching history with Ctrl-R
+	if isearch.active {
+		return []prompt.Suggest{}
+	}
 	text := d.TextBeforeCursor()
 	trimmedText := strings.TrimSpace(text)
 	emptySuggestions := []prompt.Suggest{}
@@ -185,8 +190,8 @@ func promptCompleter(d prompt.Document) []prompt.Suggest {
 			return emptySuggestions
 		}
 
-		// Check if we're after .load, .save, or .source for file completions
-		if strings.Contains(text, ".load ") || strings.Contains(text, ".save ") || strings.Contains(text, ".source ") {
+		// Check if we're after .load, .save, .source or .rules for file completions
+		if strings.Contains(text, ".load ") || strings.Contains(text, ".save ") || strings.Contains(text, ".source ") || strings.Contains(text, ".rules ") {
 			if lastSpace := strings.LastIndex(text, " "); lastSpace != -1 {
 				pathPrefix := text[lastSpace+1:]
 				return getFileCompletions(pathPrefix)
@@ -403,59 +408,29 @@ func pinatCompletions(prefix string) []prompt.Suggest {
 	return sugg
 }
 
-// getFileCompletions returns file/directory completions
+// getFileCompletions returns file/directory completions. prefix is the typed
+// path; each suggestion keeps the already-typed directory part so that
+// go-prompt, which replaces the whole space-delimited word, does not lose it.
 func getFileCompletions(prefix string) []prompt.Suggest {
-	// Handle empty prefix or just "./"
-	if prefix == "" {
-		prefix = "."
+	prefix = collapseSlashes(prefix)
+	typedDir := ""
+	if i := strings.LastIndex(prefix, "/"); i >= 0 {
+		typedDir = prefix[:i+1]
 	}
-
-	dir := filepath.Dir(prefix)
-	if dir == "" {
-		dir = "."
-	}
-
-	base := filepath.Base(prefix)
-	if prefix == "." || prefix == "./" {
-		base = ""
-	}
-
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		return []prompt.Suggest{}
-	}
-
 	var suggestions []prompt.Suggest
-	for _, f := range files {
-		name := f.Name()
-		// Skip hidden files unless explicitly searching for them
-		if strings.HasPrefix(name, ".") && !strings.HasPrefix(base, ".") {
-			continue
-		}
-		if base == "" || strings.HasPrefix(name, base) {
-			path := filepath.Join(dir, name)
-			if f.IsDir() {
-				suggestions = append(suggestions, prompt.Suggest{
-					Text:        path + "/",
-					Description: "directory",
-				})
-			} else {
-				// Show file extension as description
-				ext := filepath.Ext(name)
-				desc := "file"
-				if ext != "" {
-					desc = ext[1:] + " file"
-				}
-				suggestions = append(suggestions, prompt.Suggest{
-					Text:        path,
-					Description: desc,
-				})
+	for _, e := range listPathEntries(prefix) {
+		desc := "directory"
+		if !e.IsDir {
+			desc = "file"
+			if ext := filepath.Ext(e.Name); ext != "" {
+				desc = ext[1:] + " file"
 			}
 		}
+		suggestions = append(suggestions, prompt.Suggest{Text: typedDir + e.Name, Description: desc})
 	}
 
 	// Sort suggestions with directories first
-	sort.Slice(suggestions, func(i, j int) bool {
+	sort.SliceStable(suggestions, func(i, j int) bool {
 		iIsDir := strings.HasSuffix(suggestions[i].Text, "/")
 		jIsDir := strings.HasSuffix(suggestions[j].Text, "/")
 		if iIsDir != jIsDir {
@@ -463,82 +438,138 @@ func getFileCompletions(prefix string) []prompt.Suggest {
 		}
 		return suggestions[i].Text < suggestions[j].Text
 	})
-
 	return suggestions
 }
 
-// getFunctionSuggests returns PromQL function completions based on prefix
-func getFunctionSuggests(prefix string) []prompt.Suggest {
-	functions := []prompt.Suggest{
-		{Text: "abs(", Description: "absolute value"},
-		{Text: "absent(", Description: "check if metrics are absent"},
-		{Text: "absent_over_time(", Description: "check if absent over time range"},
-		{Text: "avg(", Description: "average value"},
-		{Text: "avg_over_time(", Description: "average over time range"},
-		{Text: "ceil(", Description: "round up to nearest integer"},
-		{Text: "changes(", Description: "number of value changes"},
-		{Text: "clamp(", Description: "clamp values to range"},
-		{Text: "clamp_max(", Description: "clamp to maximum value"},
-		{Text: "clamp_min(", Description: "clamp to minimum value"},
-		{Text: "count(", Description: "count number of series"},
-		{Text: "count_over_time(", Description: "count samples over time"},
-		{Text: "day_of_month(", Description: "day of the month"},
-		{Text: "day_of_week(", Description: "day of the week"},
-		{Text: "days_in_month(", Description: "number of days in month"},
-		{Text: "delta(", Description: "difference between first and last value"},
-		{Text: "deriv(", Description: "derivative using linear regression"},
-		{Text: "exp(", Description: "exponential function"},
-		{Text: "floor(", Description: "round down to nearest integer"},
-		{Text: "histogram_quantile(", Description: "calculate quantile from histogram"},
-		{Text: "holt_winters(", Description: "Holt-Winters double exponential smoothing"},
-		{Text: "hour(", Description: "hour of the day"},
-		{Text: "idelta(", Description: "instant delta"},
-		{Text: "increase(", Description: "increase in value over time range"},
-		{Text: "irate(", Description: "instant rate of increase"},
-		{Text: "label_join(", Description: "join label values"},
-		{Text: "label_replace(", Description: "replace label values"},
-		{Text: "ln(", Description: "natural logarithm"},
-		{Text: "log10(", Description: "base-10 logarithm"},
-		{Text: "log2(", Description: "base-2 logarithm"},
-		{Text: "max(", Description: "maximum value"},
-		{Text: "max_over_time(", Description: "maximum over time range"},
-		{Text: "min(", Description: "minimum value"},
-		{Text: "min_over_time(", Description: "minimum over time range"},
-		{Text: "minute(", Description: "minute of the hour"},
-		{Text: "month(", Description: "month of the year"},
-		{Text: "predict_linear(", Description: "predict value using linear regression"},
-		{Text: "quantile(", Description: "calculate quantile"},
-		{Text: "quantile_over_time(", Description: "quantile over time range"},
-		{Text: "rate(", Description: "per-second rate of increase"},
-		{Text: "resets(", Description: "number of counter resets"},
-		{Text: "round(", Description: "round to nearest integer"},
-		{Text: "scalar(", Description: "convert single-element vector to scalar"},
-		{Text: "sgn(", Description: "sign of value (-1, 0, or 1)"},
-		{Text: "sort(", Description: "sort values in ascending order"},
-		{Text: "sort_desc(", Description: "sort values in descending order"},
-		{Text: "sqrt(", Description: "square root"},
-		{Text: "stddev(", Description: "standard deviation"},
-		{Text: "stddev_over_time(", Description: "standard deviation over time"},
-		{Text: "stdvar(", Description: "standard variance"},
-		{Text: "stdvar_over_time(", Description: "standard variance over time"},
-		{Text: "sum(", Description: "sum of values"},
-		{Text: "sum_over_time(", Description: "sum over time range"},
-		{Text: "time(", Description: "current evaluation timestamp"},
-		{Text: "timestamp(", Description: "timestamp of each sample"},
-		{Text: "topk(", Description: "top k elements"},
-		{Text: "vector(", Description: "create vector from scalar"},
-		{Text: "year(", Description: "year"},
-	}
+// promqlAggregators are the aggregation operators: they are part of the PromQL
+// grammar, not entries in promparser.Functions, so they are listed here.
+var promqlAggregators = map[string]string{
+	"avg":          "average value",
+	"bottomk":      "bottom k elements",
+	"count":        "count number of series",
+	"count_values": "count series per distinct value",
+	"group":        "group series (value 1)",
+	"limit_ratio":  "deterministic sample of a ratio of series [experimental]",
+	"limitk":       "k sample series per group [experimental]",
+	"max":          "maximum value",
+	"min":          "minimum value",
+	"quantile":     "calculate quantile",
+	"stddev":       "standard deviation",
+	"stdvar":       "standard variance",
+	"sum":          "sum of values",
+	"topk":         "top k elements",
+}
 
-	// Filter based on the prefix
-	filtered := []prompt.Suggest{}
-	for _, f := range functions {
-		if strings.HasPrefix(f.Text, prefix) {
-			filtered = append(filtered, f)
+// promqlFunctionDocs holds short descriptions for well-known functions; any
+// other function (including experimental ones) gets its signature instead.
+var promqlFunctionDocs = map[string]string{
+	"abs":                "absolute value",
+	"absent":             "check if metrics are absent",
+	"absent_over_time":   "check if absent over time range",
+	"avg_over_time":      "average over time range",
+	"ceil":               "round up to nearest integer",
+	"changes":            "number of value changes",
+	"clamp":              "clamp values to range",
+	"clamp_max":          "clamp to maximum value",
+	"clamp_min":          "clamp to minimum value",
+	"count_over_time":    "count samples over time",
+	"day_of_month":       "day of the month",
+	"day_of_week":        "day of the week",
+	"days_in_month":      "number of days in month",
+	"delta":              "difference between first and last value",
+	"deriv":              "derivative using linear regression",
+	"exp":                "exponential function",
+	"floor":              "round down to nearest integer",
+	"histogram_quantile": "calculate quantile from histogram",
+	"hour":               "hour of the day",
+	"idelta":             "instant delta",
+	"increase":           "increase in value over time range",
+	"irate":              "instant rate of increase",
+	"label_join":         "join label values",
+	"label_replace":      "replace label values",
+	"ln":                 "natural logarithm",
+	"log10":              "base-10 logarithm",
+	"log2":               "base-2 logarithm",
+	"max_over_time":      "maximum over time range",
+	"min_over_time":      "minimum over time range",
+	"minute":             "minute of the hour",
+	"month":              "month of the year",
+	"predict_linear":     "predict value using linear regression",
+	"quantile_over_time": "quantile over time range",
+	"rate":               "per-second rate of increase",
+	"resets":             "number of counter resets",
+	"round":              "round to nearest integer",
+	"scalar":             "convert single-element vector to scalar",
+	"sgn":                "sign of value (-1, 0, or 1)",
+	"sort":               "sort values in ascending order",
+	"sort_desc":          "sort values in descending order",
+	"sqrt":               "square root",
+	"stddev_over_time":   "standard deviation over time",
+	"stdvar_over_time":   "standard variance over time",
+	"sum_over_time":      "sum over time range",
+	"time":               "current evaluation timestamp",
+	"timestamp":          "timestamp of each sample",
+	"vector":             "create vector from scalar",
+	"year":               "year",
+}
+
+// getFunctionSuggests returns PromQL function and aggregator completions based on
+// prefix. Functions come from promparser.Functions, the same table the parser
+// uses, so experimental and newly added functions are always offered.
+func getFunctionSuggests(prefix string) []prompt.Suggest {
+	var out []prompt.Suggest
+	for name, doc := range promqlAggregators {
+		if strings.HasPrefix(name, prefix) {
+			out = append(out, prompt.Suggest{Text: name + "(", Description: doc})
 		}
 	}
+	for name, fn := range promparser.Functions {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		doc, ok := promqlFunctionDocs[name]
+		if !ok {
+			doc = functionSignature(fn)
+		}
+		if fn.Experimental {
+			doc += " [experimental]"
+		}
+		out = append(out, prompt.Suggest{Text: name + "(", Description: doc})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Text < out[j].Text })
+	return out
+}
 
-	return filtered
+// functionSignature renders a function's arguments and return type, e.g.
+// "(range-vector, scalar) -> instant-vector"; optional arguments get a "?".
+func functionSignature(fn *promparser.Function) string {
+	args := make([]string, 0, len(fn.ArgTypes))
+	optionalFrom := len(fn.ArgTypes)
+	if fn.Variadic > 0 {
+		optionalFrom = len(fn.ArgTypes) - fn.Variadic
+	}
+	for i, t := range fn.ArgTypes {
+		a := valueTypeName(t)
+		switch {
+		case fn.Variadic < 0 && i == len(fn.ArgTypes)-1:
+			a += "..."
+		case i >= optionalFrom:
+			a += "?"
+		}
+		args = append(args, a)
+	}
+	return "(" + strings.Join(args, ", ") + ") -> " + valueTypeName(fn.ReturnType)
+}
+
+func valueTypeName(t promparser.ValueType) string {
+	switch t {
+	case promparser.ValueTypeMatrix:
+		return "range-vector"
+	case promparser.ValueTypeVector:
+		return "instant-vector"
+	default:
+		return string(t)
+	}
 }
 
 // getMetricSuggests returns metric suggestions based on prefix
@@ -654,8 +685,20 @@ var (
 	inMultiLine     bool     // Whether we're in multi-line mode
 )
 
+// discardMultiLine drops any accumulated multi-line input.
+func discardMultiLine() {
+	multiLineBuffer = nil
+	inMultiLine = false
+}
+
+// activePrompt is the main REPL prompt (used to reset go-prompt's internal history).
+var activePrompt *prompt.Prompt
+
 // promptExecutor handles command execution
 func promptExecutor(s string) {
+	// go-prompt already added this Enter to its internal history; drop it,
+	// replHistory is the only history (and never holds continuation fragments).
+	clearPromptHistory(activePrompt)
 	// If AI selection was active, clear it upon any command submission
 	aiSelectionActive = false
 	// Any command submission exits dropdown mode
@@ -669,14 +712,24 @@ func promptExecutor(s string) {
 	if strings.Contains(s, "\n") {
 		// Process multi-line PromQL query
 		// Replace newlines with spaces for PromQL parsing
-		s = strings.ReplaceAll(s, "\n", " ")
-		s = strings.TrimSpace(s)
+		if strings.HasPrefix(strings.TrimSpace(s), "!") {
+			s = strings.ReplaceAll(s, "\n", " ")
+			s = strings.TrimSpace(s)
+		} else {
+			// Strip '#' comments per line so one cannot swallow the rest
+			s = joinContinuation(strings.Split(strings.ReplaceAll(s, "\r", ""), "\n"))
+		}
 		if s == "" {
 			return
 		}
 	} else {
 		s = strings.TrimSpace(s)
-		if s == "" && !inMultiLine {
+		if s == "" {
+			if inMultiLine {
+				// An empty line while accumulating aborts the multi-line input
+				discardMultiLine()
+				fmt.Println(multiLineDiscardedMsg)
+			}
 			return
 		}
 
@@ -690,13 +743,15 @@ func promptExecutor(s string) {
 			return
 		}
 
-		// If we're in multi-line mode from backslash continuation, combine all lines
-		if inMultiLine {
+		// Auto-continuation: keep accumulating while brackets or strings are open
+		if inMultiLine || inputIncomplete(s) {
 			multiLineBuffer = append(multiLineBuffer, s)
-			s = strings.Join(multiLineBuffer, " ")
-			multiLineBuffer = nil
-			inMultiLine = false
-			s = strings.TrimSpace(s)
+			inMultiLine = true
+			if inputIncomplete(strings.Join(multiLineBuffer, "\n")) {
+				return
+			}
+			s = joinContinuation(multiLineBuffer)
+			discardMultiLine()
 			if s == "" {
 				return
 			}
@@ -1023,6 +1078,10 @@ func (r *promptREPL) Run() error {
 	// Load history from file
 	loadHistory()
 
+	// Capture the cooked terminal state before go-prompt's first Setup (see
+	// cookedTermState) so commands can run with working Ctrl-C/Ctrl-Z.
+	captureCookedTerminal()
+
 	// Save terminal state before starting
 	originalState := saveTerminalState()
 	globalOriginalState = originalState // Store globally for .quit handler
@@ -1033,7 +1092,7 @@ func (r *promptREPL) Run() error {
 
 	go func() {
 		for {
-			<-sigChan
+			sig := <-sigChan
 			// If an AI request is in-flight, cancel it instead of exiting
 			if aiCancelRequest != nil {
 				// Clear flags immediately in signal handler to update prompt
@@ -1042,6 +1101,11 @@ func (r *promptREPL) Run() error {
 				aiCancelRequest = nil
 				cancelFunc()
 				fmt.Println("\nAI request canceled")
+				continue
+			}
+			// While a command runs the terminal is cooked, so Ctrl-C raises
+			// SIGINT; the command's own handler cancels it, don't exit.
+			if sig == os.Interrupt && commandRunning.Load() {
 				continue
 			}
 			// Otherwise exit cleanly
@@ -1059,8 +1123,19 @@ func (r *promptREPL) Run() error {
 
 	// Create the prompt with proper options
 	opts := []prompt.Option{
+		prompt.OptionParser(newLineSplitParser(prompt.NewStandardInputParser())),
 		prompt.OptionPrefix("PromQL> "),
 		prompt.OptionTitle("PromQL CLI"),
+		// go-prompt runs its built-in emacs bindings AND the custom ones for the
+		// same key, so a custom Ctrl-W/Ctrl-D/... would apply on top of the
+		// default and delete twice. Use the common bindings only and define
+		// every emacs key we need below.
+		prompt.OptionSwitchKeyBindMode(prompt.CommonKeyBind),
+		prompt.OptionAddKeyBind(
+			prompt.KeyBind{Key: prompt.ControlH, Fn: func(buf *prompt.Buffer) { buf.DeleteBeforeCursor(1) }},
+			prompt.KeyBind{Key: prompt.ControlF, Fn: func(buf *prompt.Buffer) { buf.CursorRight(1) }},
+			prompt.KeyBind{Key: prompt.ControlB, Fn: func(buf *prompt.Buffer) { buf.CursorLeft(1) }},
+		),
 		// We implement our own prefix-based history on arrow keys
 		prompt.OptionPrefixTextColor(prompt.Blue),
 		// Use a live prefix that updates based on state
@@ -1068,8 +1143,11 @@ func (r *promptREPL) Run() error {
 			if aiInProgress {
 				return "AI...> ", true
 			}
+			if p, ok := isearch.prompt(); ok {
+				return p, true
+			}
 			if inMultiLine {
-				return "      > ", true // Continuation prompt
+				return continuationPrompt, true // Continuation prompt
 			}
 			if pinnedEvalTime != nil {
 				return "PromQL(pinat)> ", true
@@ -1095,6 +1173,7 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.Up,
 			Fn: func(buf *prompt.Buffer) {
+				isearch.leave()
 				// If user has edited since last insertion from history, restart nav
 				if historyActive && buf.Text() != historyLastLine {
 					resetHistoryState()
@@ -1138,6 +1217,7 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.Down,
 			Fn: func(buf *prompt.Buffer) {
+				isearch.leave()
 				// If dropdown is active and suggestions exist, let go-prompt handle arrow keys
 				if dropdownActive {
 					if comps := promptCompleter(*buf.Document()); len(comps) > 0 {
@@ -1171,6 +1251,16 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlC,
 			Fn: func(buf *prompt.Buffer) {
+				if inMultiLine {
+					// Abort multi-line accumulation
+					discardMultiLine()
+					fmt.Println(multiLineDiscardedMsg)
+				}
+				if isearch.active {
+					// Cancel the search and restore the original text
+					setBufferText(buf, isearch.cancel())
+					return
+				}
 				if aiCancelRequest != nil {
 					aiCancelRequest()
 					return
@@ -1195,6 +1285,7 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlA,
 			Fn: func(buf *prompt.Buffer) {
+				isearch.leave()
 				// Move to beginning of line
 				x := []rune(buf.Document().CurrentLineBeforeCursor())
 				buf.CursorLeft(len(x))
@@ -1203,6 +1294,7 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlE,
 			Fn: func(buf *prompt.Buffer) {
+				isearch.leave()
 				// If recently pressed Ctrl-X, treat this as Ctrl-X Ctrl-E chord
 				if ctrlXCtrlETriggered(lastCtrlX, time.Now(), 1500*time.Millisecond) {
 					lastCtrlX = time.Time{}
@@ -1230,91 +1322,20 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddASCIICodeBind(
 			prompt.ASCIICodeBind{
 				ASCIICode: []byte{0x1b, 0x66}, // ESC + f
-				Fn: func(buf *prompt.Buffer) {
-					// Move forward one word
-					doc := buf.Document()
-					text := doc.Text
-					pos := len(doc.TextBeforeCursor())
-
-					// Skip current word
-					for pos < len(text) && !isWordBoundaryRune(rune(text[pos])) {
-						pos++
-					}
-					// Skip separators
-					for pos < len(text) && isWordBoundaryRune(rune(text[pos])) {
-						pos++
-					}
-					// Move cursor
-					moveCount := pos - len(doc.TextBeforeCursor())
-					if moveCount > 0 {
-						buf.CursorRight(moveCount)
-					}
-				},
+				Fn:        editMoveToNextWord,
 			},
 		),
 		// Alt-B: Backward one word (ESC+b)
 		prompt.OptionAddASCIICodeBind(
 			prompt.ASCIICodeBind{
 				ASCIICode: []byte{0x1b, 0x62}, // ESC + b
-				Fn: func(buf *prompt.Buffer) {
-					// Move backward one word
-					doc := buf.Document()
-					text := doc.Text
-					pos := len(doc.TextBeforeCursor())
-
-					if pos == 0 {
-						return
-					}
-
-					// Skip separators backward
-					for pos > 0 && isWordBoundaryRune(rune(text[pos-1])) {
-						pos--
-					}
-					// Skip word backward
-					for pos > 0 && !isWordBoundaryRune(rune(text[pos-1])) {
-						pos--
-					}
-					// Move cursor
-					moveCount := len(doc.TextBeforeCursor()) - pos
-					if moveCount > 0 {
-						buf.CursorLeft(moveCount)
-					}
-				},
+				Fn:        editMoveToPrevWord,
 			},
 		),
 		// Ctrl-W: Delete word before cursor (with PromQL word boundaries)
 		prompt.OptionAddKeyBind(prompt.KeyBind{
 			Key: prompt.ControlW,
-			Fn: func(buf *prompt.Buffer) {
-				// Delete word before cursor using PromQL separators
-				text := buf.Text()
-				pos := len(buf.Document().TextBeforeCursor())
-				if pos == 0 {
-					return
-				}
-
-				// Find word boundary with PromQL-specific separators
-				start := pos - 1
-				// Skip trailing separators
-				for start >= 0 && isWordBoundaryRune(rune(text[start])) {
-					start--
-				}
-				// If we only found separators and reached start, delete just the separators
-				if start < 0 {
-					buf.DeleteBeforeCursor(pos)
-					return
-				}
-				// Find beginning of word
-				for start >= 0 && !isWordBoundaryRune(rune(text[start])) {
-					start--
-				}
-				start++ // Move to first char of word
-
-				// Delete from start to current position
-				if start < pos {
-					buf.DeleteBeforeCursor(pos - start)
-				}
-			},
+			Fn:  editBackEscapeWord,
 		}),
 		// Ctrl-U: Delete from cursor to beginning of line
 		prompt.OptionAddKeyBind(prompt.KeyBind{
@@ -1346,57 +1367,14 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddASCIICodeBind(
 			prompt.ASCIICodeBind{
 				ASCIICode: []byte{0x1b, 0x64}, // ESC + d
-				Fn: func(buf *prompt.Buffer) {
-					// Delete word forward
-					doc := buf.Document()
-					text := doc.Text
-					pos := len(doc.TextBeforeCursor())
-					end := pos
-
-					// Advance to end of current word but do NOT consume following separators
-					for end < len(text) && !isWordBoundaryRune(rune(text[end])) {
-						end++
-					}
-					// Delete only the word; keep the next separator (e.g., '(', '{', space) intact
-					deleteCount := end - pos
-					if deleteCount > 0 {
-						buf.Delete(deleteCount)
-					}
-				},
+				Fn:        editDeleteWord,
 			},
 		),
 		// Alt-Backspace: Delete word backward (ESC+Backspace)
 		prompt.OptionAddASCIICodeBind(
 			prompt.ASCIICodeBind{
 				ASCIICode: []byte{0x1b, 0x7f}, // ESC + DEL/Backspace
-				Fn: func(buf *prompt.Buffer) {
-					// Delete word before cursor (same as Ctrl-W)
-					text := buf.Text()
-					pos := len(buf.Document().TextBeforeCursor())
-					if pos == 0 {
-						return
-					}
-
-					start := pos - 1
-					// Skip trailing separators
-					for start >= 0 && isWordBoundaryRune(rune(text[start])) {
-						start--
-					}
-					// If we only found separators and reached start, delete just the separators
-					if start < 0 {
-						buf.DeleteBeforeCursor(pos)
-						return
-					}
-					// Find beginning of word
-					for start >= 0 && !isWordBoundaryRune(rune(text[start])) {
-						start--
-					}
-					start++
-
-					if start < pos {
-						buf.DeleteBeforeCursor(pos - start)
-					}
-				},
+				Fn:        editBackEscapeWord,
 			},
 		),
 		// Ctrl-T: Transpose characters (swap current with previous)
@@ -1473,77 +1451,21 @@ func (r *promptREPL) Run() error {
 		prompt.OptionAddASCIICodeBind(
 			prompt.ASCIICodeBind{
 				ASCIICode: []byte{0x1b, 0x75}, // ESC + u
-				Fn: func(buf *prompt.Buffer) {
-					doc := buf.Document()
-					text := doc.Text
-					pos := len(doc.TextBeforeCursor())
-					end := pos
-
-					// Find end of current word
-					for end < len(text) && !isWordBoundaryRune(rune(text[end])) {
-						end++
-					}
-
-					if end > pos {
-						wordLen := end - pos
-						buf.Delete(wordLen)
-						buf.InsertText(strings.ToUpper(text[pos:end]), false, true)
-					}
-				},
+				Fn:        func(buf *prompt.Buffer) { replaceWordAtCursor(buf, strings.ToUpper) },
 			},
 		),
 		// Alt-Lowercase: Convert word to lowercase (ESC+l)
 		prompt.OptionAddASCIICodeBind(
 			prompt.ASCIICodeBind{
 				ASCIICode: []byte{0x1b, 0x6c}, // ESC + l
-				Fn: func(buf *prompt.Buffer) {
-					doc := buf.Document()
-					text := doc.Text
-					pos := len(doc.TextBeforeCursor())
-					end := pos
-
-					// Find end of current word
-					for end < len(text) && !isWordBoundaryRune(rune(text[end])) {
-						end++
-					}
-
-					if end > pos {
-						wordLen := end - pos
-						buf.Delete(wordLen)
-						buf.InsertText(strings.ToLower(text[pos:end]), false, true)
-					}
-				},
+				Fn:        func(buf *prompt.Buffer) { replaceWordAtCursor(buf, strings.ToLower) },
 			},
 		),
 		// Alt-Capitalize: Capitalize current word (ESC+c)
 		prompt.OptionAddASCIICodeBind(
 			prompt.ASCIICodeBind{
 				ASCIICode: []byte{0x1b, 0x63}, // ESC + c
-				Fn: func(buf *prompt.Buffer) {
-					doc := buf.Document()
-					text := doc.Text
-					pos := len(doc.TextBeforeCursor())
-					end := pos
-
-					// Find end of current word
-					for end < len(text) && !isWordBoundaryRune(rune(text[end])) {
-						end++
-					}
-
-					if end > pos {
-						word := text[pos:end]
-						if len(word) > 0 {
-							var capitalized string
-							if len(word) > 1 {
-								capitalized = strings.ToUpper(string(word[0])) + strings.ToLower(word[1:])
-							} else {
-								capitalized = strings.ToUpper(word)
-							}
-							buf.Delete(len(word))
-							buf.InsertText(capitalized, false, true)
-						}
-					}
-				},
+				Fn:        func(buf *prompt.Buffer) { replaceWordAtCursor(buf, capitalizeWord) },
 			},
 		),
 		// Alt+. (ESC+.): Insert last argument from previous command
@@ -1585,6 +1507,16 @@ func (r *promptREPL) Run() error {
 		),
 	}
 
+	// Ctrl-R reverse history search and Ctrl-Z suspend
+	opts = append(opts, isearchOptions()...)
+	opts = append(opts, prompt.OptionAddKeyBind(prompt.KeyBind{
+		Key: prompt.ControlZ,
+		Fn: func(_ *prompt.Buffer) {
+			isearch.leave()
+			suspendPrompt()
+		},
+	}))
+
 	// Add option to show completions at start only if eager completion is enabled
 	if eagerCompletion {
 		opts = append(opts, prompt.OptionShowCompletionAtStart())
@@ -1594,10 +1526,12 @@ func (r *promptREPL) Run() error {
 	fetchMetrics()
 
 	r.prompt = prompt.New(
-		promptExecutor,
+		runPromptCommand,
 		promptCompleter,
 		opts...,
 	)
+
+	activePrompt = r.prompt
 
 	// Run the prompt - this will handle terminal restoration on exit
 	r.prompt.Run()

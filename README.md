@@ -313,7 +313,8 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 | `promql-cli query [file.prom]` | Start interactive REPL (optionally load metrics file) |
 | `promql-cli load <file.prom>` | Parse and load metrics file (shows summary) |
 | `promql-cli mcp [file.prom]` | Start MCP server over stdio for AI agent integration |
-| `promql-cli version` | Show version information |
+| `promql-cli version` | Show version information (same as `--version`) |
+| `promql-cli completion <bash\|zsh\|fish>` | Print a shell completion script |
 
 ### CLI Options
 
@@ -329,6 +330,22 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 | `--ai "key=value,..."` | Configure AI settings in one flag | Query suggestions, learning PromQL | `--ai "provider=claude,model=opus"` |
 | `--log.level {debug,info,warn,error}` | Set log verbosity | Debugging, quiet CI runs | `--log.level=debug` |
 | `--log.format {text,json}` | Set log output format | Structured logging, log aggregation | `--log.format=json` |
+| `--version` | Print version information and exit | Bug reports, scripting | `promql-cli --version` |
+
+### Shell Completion
+
+Completion scripts are generated from the CLI definition, so they always match your installed version:
+
+```bash
+# bash
+source <(promql-cli completion bash)
+
+# zsh (any directory in $fpath works)
+promql-cli completion zsh > "${fpath[1]}/_promql-cli"
+
+# fish
+promql-cli completion fish > ~/.config/fish/completions/promql-cli.fish
+```
 
 ### 🔌 MCP Server Mode
 
@@ -364,7 +381,7 @@ promql-cli mcp /tmp/snapshot.prom
 | `list_metrics` | List metric names in the loaded dataset | `prefix` (opt) |
 | `list_labels` | List label names for a metric | `metric_name` (opt), `prefix` (opt) |
 | `load_metrics` | Load exposition-format metrics dynamically | `data` (req) |
-| `execute_line` | Run any REPL command with full engine support | `line` (req) |
+| `execute_line` | Run any REPL command with full engine support (rejects shell `!` commands, shell pipes, `.ai`, `.edit`, `.source`) | `line` (req) |
 
 **MCP Capabilities advertised:** `tools`, `resources`, `prompts`, `logging` — all four are announced in `initialize`, so clients can discover and use them.
 
@@ -506,7 +523,8 @@ Or register promql-cli persistently in mcporter's config (`./config/mcporter.jso
 After saving, `mcporter list promql-cli-live` shows the same 6 tools available to call directly.
 
 **Protocol details:**
-- Transport: stdio with Content-Length framing
+- Transport: stdio, newline-delimited JSON-RPC per the MCP stdio spec; legacy `Content-Length` framing is auto-detected and mirrored; messages are bounded to 16 MiB
+- `execute_line` rejects shell `!` commands, shell pipes (`|` outside quotes), `.ai`, `.edit` and `.source`
 - Protocol version: `2024-11-05`
 - The server loads metrics from the provided file at startup; the `load_metrics` tool can load additional data at runtime.
 - Use `execute_line` with `.scrape`, `.load`, or `.prom_scrape` to pull from live endpoints at runtime.
@@ -518,7 +536,7 @@ After saving, `mcporter list promql-cli-live` shows the same 6 tools available t
 
 | Command | What it does | Example |
 |---------|--------------|---------|
-| `.load <file> [timestamp=...] [regex='...']` | Load metrics from file | `.load metrics.prom` |
+| `.load <file> [timestamp=...] [regex='...'] [pinat=...]` | Load metrics from file | `.load metrics.prom` |
 | `.scrape <url> [regex] [count] [delay]` | Fetch live metrics from HTTP endpoint | `.scrape http://localhost:9100/metrics` |
 | `.prom_scrape <api> 'query' [...]` | Import instant data from Prometheus API | `.prom_scrape http://prom:9090 'up'` |
 | `.source <file>` | Run queries from a file | `.source queries.promql` |
@@ -545,7 +563,7 @@ After saving, `mcporter list promql-cli-live` shows the same 6 tools available t
 
 | Command | What it does | Example |
 |---------|--------------|---------|
-| `.save <file> [timestamp=...] [regex='...']` | Export metrics to file | `.save snapshot.prom timestamp=remove` |
+| `.save <file> [timestamp=...] [regex='...']` | Export metrics to file (records the pinned time as a `# promql-cli: pinat=` header) | `.save snapshot.prom timestamp=remove` |
 | `.rename <old> <new>` | Rename a metric | `.rename old_name new_name` |
 | `.drop <regex>` | Delete metrics matching regex | `.drop test_.*` |
 | `.keep <regex>` | Keep only matching metrics | `.keep important_.*` |
@@ -585,7 +603,7 @@ The go-prompt backend provides context-aware PromQL suggestions (enable with `--
 - **🎯 Context-aware**: Suggests metrics, functions, and labels based on what you're typing
 - **📚 Documentation**: Shows help text and function signatures
 - **🔄 Dynamic updates**: Refreshes automatically after loading new data
-- **⌨️ Multi-line support**: Backslash continuation
+- **⌨️ Multi-line support**: input auto-continues while `(`/`[`/`{` or a quote is open (`...> ` prompt, pasting works, the joined query runs once and is saved as one history entry; an empty line or `Ctrl-C` discards); backslash continuation still works. Available in both backends
 
 ```promql
 # Examples of smart completion:
@@ -606,14 +624,17 @@ Enable with `--repl=prompt` for full keyboard support.
 | Jump to start/end of line | `Ctrl-A` / `Ctrl-E` | Like bash/emacs |
 | Move by word | `Alt-B` / `Alt-F` | Backward/Forward |
 | Search history (prefix) | `↑` / `↓` | Type prefix first, then arrow keys |
+| Reverse history search | `Ctrl-R` | Incremental, bash-style: type to narrow, `Ctrl-R` again for older matches, `Enter` runs, `Esc`/`Ctrl-G` cancels |
+| Suspend / resume | `Ctrl-Z` then `fg` | Works at the prompt and while a command runs (`Ctrl-C` cancels a running `.scrape`) |
 | Insert last argument | `Alt-.` | Cycles through previous args (bash-style) |
 | **Editing** |
 | Delete to line end/start | `Ctrl-K` / `Ctrl-U` | Kill to end/beginning |
-| Delete previous word | `Ctrl-W` or `Ctrl-Backspace` | PromQL-aware (respects `(){},.`) |
+| Delete previous word | `Ctrl-W` or `Ctrl-Backspace` | Words are `[A-Za-z0-9]` runs: `_ : . [` and quotes stop it (same in both backends) |
 | Delete forward word | `Alt-D` | |
 | Delete backward word | `Alt-Backspace` | |
 | **Multi-line Queries** |
-| Line continuation | `\` (backslash at end) | Continue query on next line |
+| Auto-continuation | open `(` `[` `{` or quote, then `Enter` | `...> ` prompt; pasting works; the joined query runs once and is one history entry; empty line or `Ctrl-C` discards |
+| Line continuation | `\` (backslash at end) | Still works; continue query on next line |
 | Literal newline | `Alt-Enter` | Insert actual newline |
 | **AI & External Tools** |
 | Paste AI suggestion | `Ctrl-Y` | After `.ai edit N` |
@@ -625,7 +646,7 @@ Enable with `--repl=prompt` for full keyboard support.
 💡 **Pro tips:**
 - Type a metric name prefix + `↑` to search history for queries with that metric
 - Use `Alt-.` repeatedly to cycle through arguments from previous commands
-- `Ctrl-W` understands PromQL syntax (e.g., stops at `{` when deleting in `metric_name{label="value"}`)
+- Word-wise editing (`Ctrl-W`, `Alt-Backspace`, `Alt-B`/`Alt-F`/`Alt-D`) matches the readline backend: words are `[A-Za-z0-9]` runs, so in `metric_name{label="value"}` it stops at `_`, `{`, `=` and quotes
 
 ### 🤖 AI Configuration
 
@@ -730,6 +751,8 @@ Notes:
 
 - PROM_API_URI can be the root (http://host:9090), the API root (`/api/v1`), or full endpoint (`/api/v1/query[_range]`).
 - count repeats the import N times; delay waits between repeats (e.g., 10s).
+- Durations (`start`/`end` offsets, `step`, `delay`) accept Prometheus units including `d`, `w`, `y` (e.g. `now-7d`, step `1d`).
+- `.prom_scrape` takes `[count] [delay]` only; range-style arguments (`start end step`) are rejected with a pointer to `.prom_scrape_range`.
 - If auth is omitted, it will be inferred from provided credentials (user/pass => basic, org_id/api_key => mimir).
 - HTTP errors now display detailed error messages from the Prometheus API (e.g., "parse error: unexpected character")
 
@@ -805,9 +828,11 @@ Both `.save` and `.load` accept an optional timestamp argument to control timest
 
 - Syntax: `timestamp={now|remove|<timespec>}`
 - `<timespec>` supports the same formats as `.pinat`/`.at`:
-  - `now`, `now-<duration>` (e.g., `now-5m`, `now+1h`)
+  - `now`, `now-<duration>` (e.g., `now-5m`, `now+1h`, `now-7d`)
   - RFC3339 (e.g., `2025-10-01T12:00:00Z`)
   - Unix seconds or milliseconds
+
+Durations accept the Prometheus units `ms`, `s`, `m`, `h`, `d`, `w`, `y` (e.g. `now-7d`, step `1d`).
 
 Examples:
 
@@ -822,6 +847,28 @@ Notes:
 
 - For `.load`, the timestamp override applies only to the samples loaded by that command; existing samples are unchanged.
 - For `.save`, the timestamp override affects how timestamps are written to the output file; it does not modify in-memory data.
+
+#### Reproducible snapshots: saving and restoring the pinned time
+
+When an evaluation time is pinned (`.pinat`), `.save` writes it as a first-line comment, still valid Prometheus text format:
+
+```
+# promql-cli: pinat=2026-10-07T19:38:47.000Z
+```
+
+`.load` restores it automatically, so a bug report can ship the data together with the moment to evaluate at:
+
+```bash
+# reporter
+.pinat node_load1            # pin to the newest sample of node_load1
+.save incident.prom
+
+# maintainer
+.load incident.prom          # "Pinned evaluation time: ... (restored from incident.prom)"
+topk(1, max_over_time(robust_zscore(node_load1)[6h:30s]))
+```
+
+`.load <file> pinat=<value>` overrides the header (`last`/`first`: newest/oldest sample loaded by that command; `none`: do not pin and ignore the header; otherwise the same time or selector grammar as `.pinat`). The header is skipped, with a note, when `timestamp=` rewrites the loaded samples, and `.save timestamp=...` does not write it. `promql-cli query|load|mcp <file>` honour the header too. A bad `pinat=` value keeps the previous pin; the data still loads.
 
 #### Series regex filter
 
@@ -1036,7 +1083,7 @@ promql-cli query --ai "provider=claude" \
 
 ```bash
 # Create test query suite
-cat > queries-to-validate.promql <<EOF
+cat > queries-to-validate.promql <<'EOF'
 # Health checks
 up{job="api"} == 1
 up{job="database"} == 1
@@ -1046,15 +1093,22 @@ rate(http_requests_total[5m]) > 0
 histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) < 1
 EOF
 
-# Run in CI pipeline
-promql-cli query -f queries-to-validate.promql test-metrics.prom > results.txt
-if [ $? -eq 0 ]; then
-  echo "✅ All queries validated successfully"
-else
-  echo "❌ Query validation failed"
-  exit 1
-fi
+# Run in CI pipeline: one query per expression, fail on error or empty result
+# (note: `query -f` always exits 0, even on errors/empty results, so don't rely on its status)
+fail=0
+while IFS= read -r expr; do
+  [[ -z $expr || $expr == \#* ]] && continue
+  if promql-cli query -s -o json -q "$expr" test-metrics.prom |
+     jq -e '.data.result | length > 0' >/dev/null; then
+    echo "✅ $expr"
+  else
+    echo "❌ $expr"; fail=1
+  fi
+done < queries-to-validate.promql
+exit $fail
 ```
+
+See `talks/promcon26-lightning/ci/check.sh` for a complete script.
 
 ### Workflow 6: Comparing Metrics Across Environments
 
@@ -1137,6 +1191,8 @@ promql-cli --log.level=debug query --ai "provider=claude" metrics.prom
 # 3. Verify timestamp alignment
 > .timestamps http_requests_total
 > .pinat now              # Pin evaluation time to now
+> .load file.prom pinat=last   # or evaluate at the data's own time (newest sample)
+> .pinat some_metric           # pin to that metric's latest sample
 
 # 4. Check if metrics have history for rate() queries
 > .seed http_requests_total 20 30s    # Generate test history
@@ -1163,16 +1219,12 @@ promql-cli query --repl=prompt metrics.prom
 echo $TERM    # Should be xterm-256color or similar
 ```
 
-### Ctrl-W Deletes Entire Metric Name
+### Ctrl-W Deletes More (or Less) Than Expected
 
-**Problem:** `Ctrl-W` deletes too much when editing queries.
+**Problem:** `Ctrl-W` / `Alt-Backspace` stop at unexpected places.
 
-**Solution:**
-This is an issue that has been worked-around in the (default) readline backend. Try the prompt backend:
-
-```bash
-promql-cli query --repl=prompt metrics.prom
-```
+**Explanation:**
+Word-wise editing (`Ctrl-W`, `Alt-Backspace`, `Alt-B`/`Alt-F`, `Alt-D`) behaves the same in both backends: a word is a run of `[A-Za-z0-9]`, so `_`, `:`, `.`, `[` and quotes all stop it. Deleting `http_requests_total` takes three `Ctrl-W` presses.
 
 ### Docker Container Can't Access Host Services
 

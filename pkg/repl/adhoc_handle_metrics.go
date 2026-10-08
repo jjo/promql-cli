@@ -414,7 +414,7 @@ func handleAdhocSeed(query string, storage *sstorage.SimpleStorage) bool {
 		}
 		if strings.HasPrefix(a, "step=") {
 			v := strings.TrimPrefix(a, "step=")
-			if d, err := time.ParseDuration(v); err == nil {
+			if d, err := parseDuration(v); err == nil {
 				step = d
 			}
 			continue
@@ -428,7 +428,7 @@ func handleAdhocSeed(query string, storage *sstorage.SimpleStorage) bool {
 			}
 		}
 		if posIdx <= 1 { // allow step to be set even if steps was invalid
-			if d, err := time.ParseDuration(a); err == nil {
+			if d, err := parseDuration(a); err == nil {
 				step = d
 				posIdx = 2
 				continue

@@ -115,11 +115,53 @@ func main() {
 	// Initialise logging before any output
 	initLogging(extractLogFlags())
 
+	if v := resolveVersion(readBuildInfo()).version; v != "dev" {
+		mcp.SetServerVersion(v)
+	}
+
+	root := newRootCommand()
+
+	// Normalize GNU-style long options ("--long") to stdlib format ("-long")
+	norm := normalizeLongOpts(os.Args[1:])
+
+	// Parse first so --version can short-circuit regardless of any subcommand.
+	if err := root.Parse(norm); err != nil {
+		// -h/--help: the flag package already printed the matching (sub)command
+		// usage while parsing, so don't print the root usage again.
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fatal(root, err)
+	}
+	if v, ok := root.FlagSet.Lookup("version").Value.(flag.Getter); ok && v.Get() == any(true) {
+		printVersion()
+		return
+	}
+	if err := root.Run(context.Background()); err != nil {
+		fatal(root, err)
+	}
+}
+
+// fatal reports err and exits non-zero. For flag.ErrHelp the usage has already
+// been printed (by the flag package while parsing, or by ffcli's Run when an
+// Exec returns it), so it only exits.
+func fatal(_ *ffcli.Command, err error) {
+	if errors.Is(err, flag.ErrHelp) {
+		os.Exit(1)
+	}
+	slog.Error("fatal", "err", err)
+	os.Exit(1)
+}
+
+// newRootCommand builds the full command tree (root flags and subcommands)
+// together with the shared storage and engine the subcommands operate on.
+func newRootCommand() *ffcli.Command {
 	// Root (global) flags
 	rootFlags := flag.NewFlagSet("promql-cli", flag.ContinueOnError)
 	replBackend := rootFlags.String("repl", "readline", "REPL backend: prompt|readline")
 	silent := rootFlags.Bool("silent", false, "suppress startup output")
 	rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
+	rootFlags.Bool("version", false, "print version information and exit")
 
 	// Logging flags — consumed by initLogging above; registered here so flag parser doesn't reject them
 	logLevel := rootFlags.String("log.level", "info", "log level (debug|info|warn|error)")
@@ -231,7 +273,8 @@ func main() {
 					now := time.Now()
 					// Store active rules for REPL auto-evaluation on updates
 					repl.SetActiveRules(files, *rulesSpec)
-					added, alerts, err := repl.EvaluateRulesOnStorage(engine, storage, files, now, func(s string) { fmt.Println(s) })
+					var alertLines []string
+					added, alerts, err := repl.EvaluateRulesOnStorage(engine, storage, files, now, func(s string) { alertLines = append(alertLines, s) })
 					if err != nil {
 						return fmt.Errorf("rules evaluation failed: %w", err)
 					}
@@ -245,6 +288,10 @@ func main() {
 						}
 						fmt.Printf("Total: %d metrics, %d samples\n\n", tm, ts)
 					}
+					// Alerts are results, not status: print them after the summary.
+					for _, l := range alertLines {
+						fmt.Println(l)
+					}
 				}
 			}
 
@@ -257,7 +304,7 @@ func main() {
 
 			if *oneOffQuery != "" {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				q, err := engine.NewInstantQuery(ctx, storage, nil, *oneOffQuery, time.Now())
+				q, err := engine.NewInstantQuery(ctx, storage, nil, *oneOffQuery, repl.EvalTimeOrNow())
 				if err != nil {
 					cancel()
 					return fmt.Errorf("error creating query: %w", err)
@@ -331,34 +378,41 @@ func main() {
 		},
 	}
 
-	root := &ffcli.Command{
+	// completion subcommand: shell completion scripts generated from the command tree
+	var root *ffcli.Command
+	completionCmd := &ffcli.Command{
+		Name:       "completion",
+		ShortUsage: "promql-cli completion <bash|zsh|fish>",
+		ShortHelp:  "Print a shell completion script",
+		LongHelp: `Print a shell completion script for bash, zsh or fish to stdout.
+
+Install:
+  bash:  source <(promql-cli completion bash)
+  zsh:   promql-cli completion zsh > "${fpath[1]}/_promql-cli"
+  fish:  promql-cli completion fish > ~/.config/fish/completions/promql-cli.fish`,
+		Exec: func(_ context.Context, args []string) error {
+			if len(args) != 1 {
+				return fmt.Errorf("completion requires a shell argument: bash, zsh or fish")
+			}
+			return writeCompletion(os.Stdout, args[0], root)
+		},
+	}
+
+	root = &ffcli.Command{
 		Name:       "promql-cli",
 		ShortUsage: "promql-cli [--repl=prompt|readline] <subcommand> [flags]",
 		FlagSet:    rootFlags,
 		Subcommands: []*ffcli.Command{
-			loadCmd, queryCmd, versionCmd, mcpCmd,
+			loadCmd, queryCmd, versionCmd, mcpCmd, completionCmd,
 		},
 		Exec: func(_ context.Context, _ []string) error { return flag.ErrHelp },
 	}
-
-	// Normalize GNU-style long options ("--long") to stdlib format ("-long")
-	norm := normalizeLongOpts(os.Args[1:])
-	// Parse args and run
-	if err := root.ParseAndRun(context.Background(), norm); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			root.FlagSet.Usage()
-			os.Exit(1)
-		}
-		slog.Error("fatal", "err", err)
-		os.Exit(1)
-	}
+	return root
 }
 
 // printVersion prints a human-readable version string.
 func printVersion() {
-	fmt.Printf("promql-cli %s\n", version)
-	fmt.Printf("  commit: %s\n", commit)
-	fmt.Printf("  date:   %s\n", date)
+	fmt.Print(formatVersion(resolveVersion(readBuildInfo())))
 }
 
 // loadMetricsFromFile loads metrics from a file into the provided storage.
@@ -418,6 +472,9 @@ func loadMetricsFromFile(storage *sstorage.SimpleStorage, filename string, times
 		}
 		repl.ApplyFilteredLoad(storage, tmp, re, tsMode, tsFixed)
 	}
+
+	// Restore the evaluation time saved by .save (unless timestamps were rewritten).
+	repl.ApplyLoadPin(os.Stderr, storage, beforeCounts, filename, "", false, tsMode != "keep")
 
 	return nil
 }
