@@ -43,6 +43,14 @@ func handleAdhocSave(query string, storage *sstorage.SimpleStorage) bool {
 		return true
 	}
 	defer func() { _ = f.Close() }()
+	// Record the pinned evaluation time so the file is reproducible; skipped when
+	// timestamps are rewritten on save, as the pinned time would no longer match.
+	if pinnedEvalTime != nil && tsMode == "keep" {
+		if _, err := fmt.Fprintln(f, formatPinHeader(*pinnedEvalTime)); err != nil {
+			fmt.Printf("Failed to save metrics to %s: %v\n", path, err)
+			return true
+		}
+	}
 	opts := sstorage.SaveOptions{TimestampMode: tsMode, FixedTimestamp: tsFixed}
 	if re != nil {
 		opts.SeriesRegex = re
@@ -509,6 +517,8 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 
 	afterMetrics, afterSamples := storeTotals(storage)
 	fmt.Printf("Loaded %s: +%d metrics, +%d samples (total: %d metrics, %d samples)\n", path, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
+	pinatVal, hasPinat := ParsePinatArg(args)
+	ApplyLoadPin(os.Stdout, storage, beforeCounts, path, pinatVal, hasPinat, tsMode != "keep")
 
 	// Evaluate active rules after TSDB update
 	if added, alerts, err := EvaluateActiveRules(storage); err != nil {

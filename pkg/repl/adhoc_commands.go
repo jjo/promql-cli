@@ -66,9 +66,12 @@ var AdHocCommands = []AdHocCommand{
 	{
 		Command:     ".load",
 		Description: "Load metrics from a Prometheus text-format file",
-		Usage:       ".load <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
+		Usage:       ".load <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>'] [pinat={last|first|none|<time>|<selector>}]",
 		Examples: []string{
 			".load metrics.prom",
+			".load incident.prom                 # restores the '# promql-cli: pinat=' time saved by .save",
+			".load metrics.prom pinat=last       # pin evaluation time to the newest loaded sample",
+			".load metrics.prom pinat=node_load1 # pin to the newest sample of a selector",
 			".load metrics.prom timestamp=now",
 			".load metrics.prom timestamp=2025-09-28T12:00:00Z",
 			".load metrics.prom timestamp=remove",
@@ -86,7 +89,7 @@ var AdHocCommands = []AdHocCommand{
 	},
 	{
 		Command:     ".save",
-		Description: "Save current store to a Prometheus text-format file",
+		Description: "Save current store to a Prometheus text-format file (records a pinned .pinat time in a '# promql-cli: pinat=' header)",
 		Usage:       ".save <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
 		Examples: []string{
 			".save snapshot.prom",

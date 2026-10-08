@@ -235,6 +235,17 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			return yankLastArgCycle(cleanLine, cleanPos, false)
 		}
 
+		// A "/" typed right after a completed directory in a file path argument
+		// is dropped (it would produce "dir//"). readline has already inserted it.
+		if key == '/' && pos >= 2 && pos <= len(line) && line[pos-1] == '/' && shouldSwallowSlash(string(line[:pos])[:len(string(line[:pos]))-1]) {
+			nl := make([]rune, 0, len(line)-1)
+			nl = append(nl, line[:pos-1]...)
+			nl = append(nl, line[pos:]...)
+			prevLine = append(prevLine[:0], nl...)
+			prevPos = pos - 1
+			return nl, pos - 1, true
+		}
+
 		// Helper: strip certain control runes (e.g., ^X, ^E) from a rune slice
 		stripCtrl := func(rs []rune) []rune {
 			if len(rs) == 0 {
@@ -571,9 +582,11 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		HistoryFile:     historyPath,
 		AutoComplete:    createAutoCompleter(storage), // Dynamic tab completion
 		InterruptPrompt: "^C",
-		EOFPrompt:       "exit",
-		Listener:        readline.FuncListener(listener),
-		Stdin:           rlInputGate.Reader(),
+		// History is saved explicitly (joined multi-line input is recorded once)
+		DisableAutoSaveHistory: true,
+		EOFPrompt:              "exit",
+		Listener:               readline.FuncListener(listener),
+		Stdin:                  rlInputGate.Reader(),
 	})
 	if err != nil {
 		slog.Warn("readline init failed, falling back to basic input", "err", err)
@@ -599,7 +612,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			return "AI...> "
 		}
 		if mlActive {
-			return "      > "
+			return continuationPrompt
 		}
 		if pinnedEvalTime != nil {
 			return "PromQL(pinat)> "
@@ -629,6 +642,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 					continue
 				}
 				// On Ctrl-C during multi-line, cancel accumulation
+				if mlActive {
+					fmt.Println(multiLineDiscardedMsg)
+				}
 				mlActive = false
 				mlParts = nil
 				continue
@@ -642,8 +658,7 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		// Multi-line continuation if line ends with a single backslash
 		trimmedRight := strings.TrimRight(line, " \t")
 		if strings.HasSuffix(trimmedRight, "\\") && !strings.HasSuffix(trimmedRight, "\\\\") {
-			part := strings.TrimSuffix(trimmedRight, "\\")
-			part = strings.TrimSpace(part)
+			part := strings.TrimSpace(strings.TrimSuffix(trimmedRight, "\\"))
 			if part != "" {
 				mlParts = append(mlParts, part)
 			}
@@ -652,27 +667,36 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 			continue
 		}
 
-		// Keep our in-memory history in sync (readline persists to file separately)
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			userHistory = append(userHistory, trimmed)
-		}
-
 		query := strings.TrimSpace(line)
-		if query == "" && !mlActive {
+		if query == "" {
+			if mlActive {
+				// An empty line while accumulating aborts the multi-line input
+				mlActive = false
+				mlParts = nil
+				fmt.Println(multiLineDiscardedMsg)
+			}
 			continue
 		}
 
-		if mlActive {
-			if s := strings.TrimSpace(query); s != "" {
-				mlParts = append(mlParts, s)
+		// Auto-continuation: keep accumulating while brackets or strings are open
+		if mlActive || inputIncomplete(query) {
+			mlParts = append(mlParts, query)
+			mlActive = true
+			if inputIncomplete(strings.Join(mlParts, "\n")) {
+				continue
 			}
-			query = strings.TrimSpace(strings.Join(mlParts, " "))
+			query = joinContinuation(mlParts)
 			mlActive = false
 			mlParts = nil
 			if query == "" {
 				continue
 			}
 		}
+
+		// Record the final (joined) line once; auto-save is disabled so
+		// continuation fragments never reach the history file.
+		userHistory = append(userHistory, query)
+		_ = rl.SaveHistory(query)
 
 		if query == "quit" || query == ".quit" {
 			break
@@ -719,40 +743,101 @@ type PrometheusAutoCompleter struct {
 	opts    AutoCompleteOptions
 }
 
-// getFilePathCompletions returns filesystem path candidates for a given path string and current last-segment word.
-func (pac *PrometheusAutoCompleter) getFilePathCompletions(pathSoFar, _ string) []string {
-	// Expand ~ to home
-	expandTilde := func(p string) string {
-		if strings.HasPrefix(p, "~") {
-			if home, err := os.UserHomeDir(); err == nil {
-				return filepath.Join(home, strings.TrimPrefix(p, "~"))
-			}
+// fileArgCommands are the dot commands whose argument is a filesystem path.
+var fileArgCommands = []string{".load ", ".save ", ".source ", ".rules "}
+
+// fileArgAfterCommand returns the text typed after a file-taking dot command
+// (e.g. ".rules ./ru" -> "./ru") and whether line starts with one.
+func fileArgAfterCommand(line string) (string, bool) {
+	for _, cmd := range fileArgCommands {
+		if strings.HasPrefix(line, cmd) {
+			return line[len(cmd):], true
 		}
-		return p
 	}
-	p := expandTilde(pathSoFar)
-	dir, base := filepath.Split(p)
-	if dir == "" {
+	return "", false
+}
+
+// collapseSlashes folds runs of "/" into a single one ("talks//x///y" ->
+// "talks/x/y"), so a doubled slash typed or pasted after a completed directory
+// still completes from the right place.
+func collapseSlashes(p string) string {
+	for strings.Contains(p, "//") {
+		p = strings.ReplaceAll(p, "//", "/")
+	}
+	return p
+}
+
+// shouldSwallowSlash reports whether a typed "/" must be ignored: the cursor
+// sits in the path argument of a file-taking dot command and the previous
+// character is already "/" (typically right after Tab completed a directory).
+// PromQL and URL arguments (.scrape http://...) are never affected.
+func shouldSwallowSlash(beforeCursor string) bool {
+	if !strings.HasSuffix(beforeCursor, "/") {
+		return false
+	}
+	_, ok := fileArgAfterCommand(strings.TrimLeft(beforeCursor, " \t"))
+	return ok
+}
+
+// pathEntry is a directory entry offered for path completion.
+type pathEntry struct {
+	Name  string // base name, with a trailing "/" for directories
+	IsDir bool
+}
+
+// listPathEntries lists the entries matching a typed path argument. The
+// argument is split at its LAST "/" into a directory part (relative to the
+// cwd, absolute, or "~/"-prefixed) and a base prefix; entries of that directory
+// whose name starts with the prefix are returned, sorted by name. Hidden
+// entries are only returned when the prefix itself starts with ".".
+func listPathEntries(arg string) []pathEntry {
+	arg = collapseSlashes(arg)
+	dirPart, base := "", arg
+	if i := strings.LastIndex(arg, "/"); i >= 0 {
+		dirPart, base = arg[:i+1], arg[i+1:]
+	}
+	dir := dirPart
+	switch {
+	case dir == "":
 		dir = "."
+	case dir == "~/" || strings.HasPrefix(dir, "~/"):
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = filepath.Join(home, dir[2:])
+		}
 	}
-	// List directory entries
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
-	var out []string
-	low := strings.ToLower(base)
+	var out []pathEntry
 	for _, e := range ents {
 		name := e.Name()
-		if !strings.HasPrefix(strings.ToLower(name), low) {
+		if !strings.HasPrefix(name, base) || (strings.HasPrefix(name, ".") && !strings.HasPrefix(base, ".")) {
 			continue
 		}
-		if e.IsDir() {
+		isDir := e.IsDir()
+		if !isDir && e.Type()&os.ModeSymlink != 0 {
+			if st, err := os.Stat(filepath.Join(dir, name)); err == nil && st.IsDir() {
+				isDir = true
+			}
+		}
+		if isDir {
 			name += "/"
 		}
-		out = append(out, name)
+		out = append(out, pathEntry{Name: name, IsDir: isDir})
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// getFilePathCompletions returns the base names matching the last path segment
+// of pathSoFar (the readline completer replaces only the current word, which
+// is that last segment).
+func (pac *PrometheusAutoCompleter) getFilePathCompletions(pathSoFar, _ string) []string {
+	var out []string
+	for _, e := range listPathEntries(pathSoFar) {
+		out = append(out, e.Name)
+	}
 	return out
 }
 
@@ -991,18 +1076,8 @@ func (pac *PrometheusAutoCompleter) getCompletions(line string, pos int, current
 		if trimmed == ".help" || trimmed == ".metrics" || strings.HasPrefix(trimmed, ".help ") || strings.HasPrefix(trimmed, ".metrics ") {
 			return []string{}
 		}
-		// If after ".load ", ".save ", or ".source ", complete filesystem paths (current word = base name)
-		if strings.HasPrefix(trimmed, ".load ") || strings.HasPrefix(trimmed, ".save ") || strings.HasPrefix(trimmed, ".source ") {
-			// Extract the path substring after the command token
-			var pathSoFar string
-			switch {
-			case strings.HasPrefix(trimmed, ".load "):
-				pathSoFar = trimmed[len(".load "):]
-			case strings.HasPrefix(trimmed, ".save "):
-				pathSoFar = trimmed[len(".save "):]
-			default:
-				pathSoFar = trimmed[len(".source "):]
-			}
+		// If after a file-taking dot command, complete filesystem paths (current word = base name)
+		if pathSoFar, ok := fileArgAfterCommand(trimmed); ok {
 			return pac.getFilePathCompletions(pathSoFar, currentWord)
 		}
 		// If after ".scrape ", ".prom_scrape ", or ".prom_scrape_range ", offer URL examples
@@ -1416,28 +1491,29 @@ func getAggregatorCompletions(prefix string) []string {
 // splitQueryAndPipe splits a line into query and pipe command on a '|' that is outside double-quoted strings.
 // Returns (query, cmd, true) when a top-level pipe is found; otherwise (line, "", false).
 func splitQueryAndPipe(line string) (string, string, bool) {
-	inStr := false
+	// PromQL strings may use "...", '...' or `...` (raw, no escapes); a '|'
+	// inside any of them (e.g. a regex like 'a|b') is not a shell pipe.
+	var quote rune
 	esc := false
 	for i, r := range line {
-		if inStr {
+		if quote != 0 {
 			if esc {
 				esc = false
 				continue
 			}
-			if r == '\\' {
+			if r == '\\' && quote != '`' {
 				esc = true
 				continue
 			}
-			if r == '"' {
-				inStr = false
+			if r == quote {
+				quote = 0
 			}
 			continue
 		}
-		if r == '"' {
-			inStr = true
-			continue
-		}
-		if r == '|' {
+		switch r {
+		case '"', '\'', '`':
+			quote = r
+		case '|':
 			left := strings.TrimSpace(line[:i])
 			right := strings.TrimSpace(line[i+1:])
 			return left, right, true
@@ -1447,7 +1523,7 @@ func splitQueryAndPipe(line string) (string, string, bool) {
 }
 
 // HasShellPipe reports whether line contains a top-level '|' (outside
-// double-quoted strings), i.e. the same condition under which executeOne pipes
+// quoted strings), i.e. the same condition under which executeOne pipes
 // output to a shell command.
 func HasShellPipe(line string) bool {
 	_, _, ok := splitQueryAndPipe(line)
@@ -1663,7 +1739,7 @@ func parseEvalTime(tok string) (time.Time, error) {
 			return time.Time{}, fmt.Errorf("unsupported time format: %s", tok)
 		}
 		durStr := strings.TrimSpace(tok[4:])
-		d, err := time.ParseDuration(durStr)
+		d, err := parseDuration(durStr)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -1863,6 +1939,8 @@ func CaptureQueryLine(engine *promql.Engine, storage *sstorage.SimpleStorage, li
 
 // executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
 func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line string) {
+	// Rule alerts fired while running this line are printed last.
+	defer FlushRuleAlerts()
 	orig := strings.TrimSpace(line)
 	if orig == "" {
 		return

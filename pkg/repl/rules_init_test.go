@@ -103,3 +103,36 @@ func TestAdhocRules_NoEngineReportsError(t *testing.T) {
 		t.Fatalf("expected .rules to report the missing engine, got: %s", out)
 	}
 }
+
+func TestFormatAlertLine(t *testing.T) {
+	got := formatAlertLine("JobDown", map[string]string{"__name__": "ALERTS", "alertname": "JobDown", "alertstate": "firing", "job": "db", "severity": "page"}, 0)
+	if want := `ALERT JobDown firing {job="db", severity="page"} value=0`; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Alert lines must come after the command's status output: EvaluateActiveRules
+// buffers them and FlushRuleAlerts (deferred by executeOne) prints them.
+func TestEvaluateActiveRules_DefersAlertOutput(t *testing.T) {
+	resetRulesState(t)
+	pendingRuleAlerts = nil
+	t.Cleanup(func() { pendingRuleAlerts = nil })
+	store := sstorage.NewSimpleStorage()
+	ts := time.Date(2026, 10, 7, 19, 38, 47, 0, time.UTC)
+	store.AddSample(map[string]string{"__name__": "up", "job": "db"}, 0, ts.UnixMilli())
+	SetEvalEngine(promql.NewEngine(promql.EngineOpts{MaxSamples: 1000, Timeout: 10 * time.Second, LookbackDelta: 5 * time.Minute}))
+	SetActiveRules([]string{writeAlertRule(t)}, "alerts.yaml")
+	pinnedEvalTime = &ts
+
+	during := captureStdout(t, func() { _, _, _ = EvaluateActiveRules(store) })
+	if strings.Contains(during, "ALERT ") {
+		t.Fatalf("alert printed during evaluation: %q", during)
+	}
+	after := captureStdout(t, FlushRuleAlerts)
+	if !strings.Contains(after, `ALERT JobDown firing {job="db", severity="page"}`) {
+		t.Fatalf("flush did not print the alert: %q", after)
+	}
+	if again := captureStdout(t, FlushRuleAlerts); again != "" {
+		t.Fatalf("flush must clear the buffer, got %q", again)
+	}
+}

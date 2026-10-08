@@ -69,7 +69,11 @@ func EvaluateActiveRules(storage *sstorage.SimpleStorage) (added int, alerts int
 	if pinnedEvalTime != nil {
 		t = *pinnedEvalTime
 	}
-	return EvaluateRulesOnStorage(evalEngine, storage, activeRuleFiles, t, func(s string) { fmt.Println(s) })
+	// Alert lines are buffered and printed by FlushRuleAlerts once the whole
+	// command is done, so they come after the operational status output.
+	return EvaluateRulesOnStorage(evalEngine, storage, activeRuleFiles, t, func(s string) {
+		pendingRuleAlerts = append(pendingRuleAlerts, s)
+	})
 }
 
 // collectRecordingRuleNames parses the files and returns all recording rule names.
@@ -111,4 +115,17 @@ func collectAlertingRules(files []string) []AlertRule {
 		}
 	}
 	return out
+}
+
+// pendingRuleAlerts holds alert lines from EvaluateActiveRules until
+// FlushRuleAlerts prints them at the end of the current command.
+var pendingRuleAlerts []string
+
+// FlushRuleAlerts prints and clears the alert lines buffered by
+// EvaluateActiveRules.
+func FlushRuleAlerts() {
+	for _, l := range pendingRuleAlerts {
+		fmt.Println(l)
+	}
+	pendingRuleAlerts = nil
 }

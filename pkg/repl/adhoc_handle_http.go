@@ -60,7 +60,7 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 			}
 		}
 		if !delaySet {
-			if d, err := time.ParseDuration(tok); err == nil {
+			if d, err := parseDuration(tok); err == nil {
 				delay = d
 				if delay < 0 {
 					delay = 0
@@ -553,7 +553,7 @@ func parsePromScrapeArgs(rest string) (uri string, query string, count int, dela
 		for j < len(rest) && rest[j] != ' ' && rest[j] != '\t' {
 			j++
 		}
-		if d, errD := time.ParseDuration(rest[i:j]); errD == nil {
+		if d, errD := parseDuration(rest[i:j]); errD == nil {
 			delay = d
 			i = j
 			skipSpaces()
@@ -580,8 +580,18 @@ func parsePromScrapeArgs(rest string) (uri string, query string, count int, dela
 				orgID = v
 			case "api_key", "apikey":
 				apiKey = v
+			default:
+				return uri, query, count, delay, authMode, user, pass, orgID, apiKey, fmt.Errorf("unknown option %q", tok)
 			}
+			continue
 		}
+		// Anything else used to be silently ignored, so a mistaken
+		// ".prom_scrape URI 'q' now-1d now 1m" imported one instant vector.
+		err = fmt.Errorf("unexpected argument %q", tok)
+		if _, terr := parseEvalTime(tok); terr == nil {
+			err = fmt.Errorf("unexpected argument %q: .prom_scrape takes [count] [delay]; for a <start> <end> <step> range use .prom_scrape_range", tok)
+		}
+		return uri, query, count, delay, authMode, user, pass, orgID, apiKey, err
 	}
 	return uri, query, count, delay, authMode, user, pass, orgID, apiKey, err
 }
@@ -807,7 +817,7 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 		i++
 	}
 	stepStr := rest[stStart:i]
-	step, err = time.ParseDuration(stepStr)
+	step, err = parseDuration(stepStr)
 	if err != nil {
 		err = fmt.Errorf("invalid step duration %q: %w", stepStr, err)
 		return uri, query, start, end, step, count, delay, authMode, user, pass, orgID, apiKey, err
@@ -833,7 +843,7 @@ func parsePromScrapeRangeArgs(rest string) (uri string, query string, start time
 		for j < len(rest) && rest[j] != ' ' && rest[j] != '\t' {
 			j++
 		}
-		if d, errD := time.ParseDuration(rest[i:j]); errD == nil {
+		if d, errD := parseDuration(rest[i:j]); errD == nil {
 			delay = d
 			i = j
 			skipSpaces()

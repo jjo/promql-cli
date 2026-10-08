@@ -50,6 +50,10 @@ var (
 	serverVersion = "0.1.0"
 )
 
+// SetServerVersion overrides the version reported in the MCP initialize
+// response (e.g. with the version resolved from build info at runtime).
+func SetServerVersion(v string) { serverVersion = v }
+
 // ---------------------------------------------------------------------------
 // JSON-RPC 2.0 types
 // ---------------------------------------------------------------------------

@@ -220,7 +220,7 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 			storage.AddSample(lbls, 1.0, t.UnixMilli())
 
 			if printFn != nil {
-				printFn(fmt.Sprintf("ALERT %s firing labels=%v value=%v", r.Alert, lbls, smpl.F))
+				printFn(formatAlertLine(r.Alert, lbls, smpl.F))
 			}
 		}
 	case promql.Scalar:
@@ -240,9 +240,24 @@ func evalAlertingRule(engine *promql.Engine, storage *sstorage.SimpleStorage, r 
 			storage.AddSample(lbls, 1.0, t.UnixMilli())
 
 			if printFn != nil {
-				printFn(fmt.Sprintf("ALERT %s firing (scalar) value=%v", r.Alert, v.V))
+				printFn(formatAlertLine(r.Alert, lbls, v.V))
 			}
 		}
 	}
 	return fires, nil
+}
+
+// formatAlertLine renders a firing alert like a PromQL sample:
+// ALERT <name> firing {k="v", ...} value=<v>, without the labels that are
+// implied by the line itself (__name__, alertname, alertstate).
+func formatAlertLine(alert string, lbls map[string]string, value float64) string {
+	shown := make(map[string]string, len(lbls))
+	for k, v := range lbls {
+		switch k {
+		case "__name__", "alertname", "alertstate":
+			continue
+		}
+		shown[k] = v
+	}
+	return fmt.Sprintf("ALERT %s firing %s value=%v", alert, labels.FromMap(shown).String(), value)
 }
