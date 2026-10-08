@@ -95,6 +95,15 @@ promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"
 promql-cli query -s -q 'up' -o json examples/example.prom
 ```
 
+## 🎤 Talks
+
+- **promql-cli, a full PromQL cli-only engine ✨ .. but WHY?!**, lightning talk at PromCon EU 2026 ([slides, PDF](https://github.com/jjo/talks/blob/master/2026/2026-10-08-PromCon26-LightningPromCLIbutWHY/lightning-promql-cli-deck.pdf), [demo kit](https://github.com/jjo/talks/tree/master/2026/2026-10-08-PromCon26-LightningPromCLIbutWHY)): five reasons in under five minutes:
+  - PromQL without a Prometheus;
+  - CI for your exporters with `promql-cli check`;
+  - a `.prom` file as a bug report reproducer;
+  - a playground for new engine functions;
+  - alerts tested on prod data before they page.
+
 ## 🎯 Why Use promql-cli?
 
 ### 🚀 Exporter Development
