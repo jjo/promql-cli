@@ -17,6 +17,7 @@ var (
 		"repl":       {"prompt", "readline"},
 		"log.level":  {"debug", "info", "warn", "error"},
 		"log.format": {"text", "json"},
+		"format":     {"text", "tap", "junit", "json"},
 		"output":     {"json"},
 		"o":          {"json"},
 	}
@@ -64,13 +65,24 @@ func writeCompletion(w io.Writer, shell string, root *ffcli.Command) error {
 func collectScopes(root *ffcli.Command) []cScope {
 	scopes := []cScope{{flags: collectFlags(root.FlagSet)}}
 	for _, sub := range root.Subcommands {
-		sc := cScope{name: sub.Name, help: sub.ShortHelp, flags: collectFlags(sub.FlagSet), posFiles: true}
+		sc := cScope{name: sub.Name, help: subcommandHelp(sub), flags: collectFlags(sub.FlagSet), posFiles: true}
 		if sub.Name == "completion" {
 			sc.posValues, sc.posFiles = completionShells, false
 		}
 		scopes = append(scopes, sc)
 	}
 	return scopes
+}
+
+// subcommandHelp returns a non-empty description: ShortHelp, else ShortUsage, else the name,
+// since shells (zsh _describe in particular) mishandle entries without one.
+func subcommandHelp(sub *ffcli.Command) string {
+	for _, h := range []string{sub.ShortHelp, sub.ShortUsage, sub.Name} {
+		if h = strings.TrimSpace(h); h != "" {
+			return h
+		}
+	}
+	return sub.Name
 }
 
 func collectFlags(fs *flag.FlagSet) []cFlag {

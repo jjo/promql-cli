@@ -605,36 +605,39 @@ func (s *SimpleStorage) SaveToWriter(w io.Writer) error {
 	return s.SaveToWriterWithOptions(w, SaveOptions{TimestampMode: "keep"})
 }
 
+// LatestTimestamp returns the newest sample timestamp (ms), only among series matching re
+// when it is non-nil (the "name{labels}" signature used by SaveOptions.SeriesRegex).
+func (s *SimpleStorage) LatestTimestamp(re *regexp.Regexp) (int64, bool) {
+	var latest int64
+	found := false
+	for _, samples := range s.Metrics {
+		for _, sample := range samples {
+			if re != nil {
+				name := sample.Labels["__name__"]
+				seriesSig := name
+				if labelStr := formatLabelsForLine(sample.Labels); labelStr != "" {
+					seriesSig = fmt.Sprintf("%s{%s}", name, labelStr)
+				}
+				if !re.MatchString(seriesSig) {
+					continue
+				}
+			}
+			if !found || sample.Timestamp > latest {
+				latest = sample.Timestamp
+				found = true
+			}
+		}
+	}
+	return latest, found
+}
+
 // SaveToWriterWithOptions writes the store content with additional formatting options.
 func (s *SimpleStorage) SaveToWriterWithOptions(w io.Writer, opts SaveOptions) error {
 	// Calculate timestamp offset if in "set" mode
 	var timestampOffset int64
 	if opts.TimestampMode == "set" {
-		// Find the latest timestamp across all samples
-		var latestTimestamp int64
-		hasSamples := false
-		for _, samples := range s.Metrics {
-			for _, sample := range samples {
-				// Apply series filter if present
-				if opts.SeriesRegex != nil {
-					name := sample.Labels["__name__"]
-					seriesSig := name
-					labelStr := formatLabelsForLine(sample.Labels)
-					if labelStr != "" {
-						seriesSig = fmt.Sprintf("%s{%s}", name, labelStr)
-					}
-					if !opts.SeriesRegex.MatchString(seriesSig) {
-						continue
-					}
-				}
-				if !hasSamples || sample.Timestamp > latestTimestamp {
-					latestTimestamp = sample.Timestamp
-					hasSamples = true
-				}
-			}
-		}
-		if hasSamples {
-			timestampOffset = opts.FixedTimestamp - latestTimestamp
+		if latest, ok := s.LatestTimestamp(opts.SeriesRegex); ok {
+			timestampOffset = opts.FixedTimestamp - latest
 		}
 	}
 

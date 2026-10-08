@@ -64,7 +64,7 @@ func TestParseQueriesFromContent_BackslashContinuation(t *testing.T) {
 		t.Fatalf("expected 1 query, got %d", len(queries))
 	}
 
-	expected := `up{job="prometheus"}    +  up{job="node"}`
+	expected := `up{job="prometheus"} + up{job="node"}`
 	if queries[0].query != expected {
 		t.Errorf("expected '%s', got '%s'", expected, queries[0].query)
 	}
@@ -218,7 +218,7 @@ count(down)`
 	}
 
 	// First query has trailing space before the backslash was removed
-	if queries[0].query != "sum(up) " {
+	if queries[0].query != "sum(up)" {
 		t.Errorf("query 0: expected 'sum(up) ', got '%s'", queries[0].query)
 	}
 	if queries[1].query != "count(down)" {
@@ -237,7 +237,7 @@ func TestParseQueriesFromContent_TrailingBackslashAtEOF(t *testing.T) {
 	}
 
 	// Trailing space before backslash is preserved
-	if queries[0].query != "sum(up) " {
+	if queries[0].query != "sum(up)" {
 		t.Errorf("expected 'sum(up) ', got '%s'", queries[0].query)
 	}
 }
@@ -275,7 +275,7 @@ count(memory)`
 	}
 
 	// Lines are joined with single space
-	expected := `sum( rate(cpu[5m]) )  by (instance)`
+	expected := `sum( rate(cpu[5m]) ) by (instance)`
 	if queries[0].query != expected {
 		t.Errorf("expected '%s', got '%s'", expected, queries[0].query)
 	}
@@ -357,7 +357,7 @@ count(up == 1)`
 		t.Errorf("query 1: expected '%s', got '%s'", expectedQ2, queries[1].query)
 	}
 
-	expectedQ3 := "avg( rate(cpu_seconds_total[5m]) ) by (instance)    /  avg( node_load1 ) by (instance)"
+	expectedQ3 := "avg( rate(cpu_seconds_total[5m]) ) by (instance) / avg( node_load1 ) by (instance)"
 	if queries[2].query != expectedQ3 {
 		t.Errorf("query 2: expected '%s', got '%s'", expectedQ3, queries[2].query)
 	}
@@ -384,7 +384,7 @@ count(down)`
 	queries := parseQueriesFromContent(content)
 
 	// All three lines are joined into one query
-	// Line 1: "sum(up) " (backslash removed)
+	// Line 1: "sum(up)" (backslash removed)
 	// Line 2: "" (just backslash, removed, empty string not added)
 	// Line 3: "count(down)"
 	if len(queries) != 1 {

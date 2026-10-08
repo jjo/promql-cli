@@ -32,6 +32,12 @@ func TestInputIncomplete(t *testing.T) {
 		{"closer then opener", ")(", true},
 		{"shell line", "!echo (", false},
 		{"shell line indented", "  !echo \"", false},
+		{"trailing backslash", `.prom_scrape_range $PROM \`, true},
+		{"trailing backslash inside quotes", "up{a=\"x|\\", true},
+		{"trailing backslash then spaces", "up \\  ", true},
+		{"escaped backslash is not a continuation", `up{a="x\\"}`, false},
+		{"continued then complete", "up \\\n  + 1", false},
+		{"shell line with backslash", `!echo a \`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -54,6 +60,16 @@ func TestJoinContinuation(t *testing.T) {
 		{"hash in quotes kept", []string{`up{a="#x"}`, "# c"}, `up{a="#x"}`},
 		{"escaped quote then hash", []string{`up{a="\"#"} # c`}, `up{a="\"#"}`},
 		{"empty", nil, ""},
+		{
+			"backslash joins without space",
+			[]string{`.prom_scrape_range $PROM '{__name__=~"node_load1|\`, `    node_netstat_Tcp_RetransSegs|\`, `    kubelet_volume_stats_available_bytes"}' now-6h now 30s`},
+			`.prom_scrape_range $PROM '{__name__=~"node_load1|node_netstat_Tcp_RetransSegs|kubelet_volume_stats_available_bytes"}' now-6h now 30s`,
+		},
+		{"space before backslash inside a string is kept", []string{`{__name__=~"foo \`, `    bar"}`}, `{__name__=~"foo bar"}`},
+		{"space before backslash outside a string is dropped", []string{`up  \`, "or vector(0)"}, "up or vector(0)"},
+		{"backslash outside strings keeps a space", []string{`.prom_scrape_range $PROM \`, `  'up' now-1h now 30s`}, `.prom_scrape_range $PROM 'up' now-1h now 30s`},
+		{"backslash outside strings never merges tokens", []string{`up\`, "or vector(0)"}, "up or vector(0)"},
+		{"backslash then comment line", []string{`sum(\`, "# c", "up)"}, "sum( up)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

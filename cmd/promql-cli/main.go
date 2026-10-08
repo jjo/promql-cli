@@ -131,15 +131,34 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
 		}
-		fatal(root, err)
+		fatal(root, parseFailure(root, err))
 	}
 	if v, ok := root.FlagSet.Lookup("version").Value.(flag.Getter); ok && v.Get() == any(true) {
 		printVersion()
 		return
 	}
+	if v, ok := root.FlagSet.Lookup("repl-raw").Value.(flag.Getter); ok && v.Get() == any(true) {
+		repl.SetRawOutput(true)
+	}
 	if err := root.Run(context.Background()); err != nil {
 		fatal(root, err)
 	}
+}
+
+// parseFailure maps a command-line parse error to the error main reports. Flag
+// errors of `check` (unknown flag, bad or missing value) exit 2, like the other
+// usage errors of that subcommand, so CI can tell them from "a check failed" (1).
+// The flag package has already printed the message and usage, so nothing more is
+// printed. Other commands keep the generic failure.
+func parseFailure(root *ffcli.Command, err error) error {
+	// Only a failure in check's own flags maps to exit 2: ffcli parses a
+	// subcommand's FlagSet only after the root flags parsed cleanly.
+	for _, sub := range root.Subcommands {
+		if sub.Name == "check" && sub.FlagSet != nil && sub.FlagSet.Parsed() {
+			return &exitError{code: exitCheckError}
+		}
+	}
+	return err
 }
 
 // fatal reports err and exits non-zero. For flag.ErrHelp the usage has already
@@ -149,8 +168,31 @@ func fatal(_ *ffcli.Command, err error) {
 	if errors.Is(err, flag.ErrHelp) {
 		os.Exit(1)
 	}
+	if code, ok := exitCodeOf(err); ok {
+		var ee *exitError
+		if errors.As(err, &ee) && ee.err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "promql-cli: %v\n", ee.err)
+		}
+		os.Exit(code)
+	}
 	slog.Error("fatal", "err", err)
 	os.Exit(1)
+}
+
+// newEngine builds the PromQL engine shared by all subcommands.
+func newEngine() *promql.Engine {
+	return promql.NewEngine(promql.EngineOpts{
+		Logger:                   nil,
+		Reg:                      nil,
+		MaxSamples:               50000000,
+		Timeout:                  30 * time.Second,
+		LookbackDelta:            5 * time.Minute,
+		EnableAtModifier:         true,
+		EnableNegativeOffset:     true,
+		NoStepSubqueryIntervalFn: func(_ int64) int64 { return 60 * 1000 },
+		// Without an explicit parser the engine defaults to one with experimental functions disabled.
+		Parser: promparser.NewParser(promparser.Options{EnableExperimentalFunctions: true}),
+	})
 }
 
 // newRootCommand builds the full command tree (root flags and subcommands)
@@ -162,6 +204,7 @@ func newRootCommand() *ffcli.Command {
 	silent := rootFlags.Bool("silent", false, "suppress startup output")
 	rootFlags.BoolVar(silent, "s", *silent, "shorthand for --silent")
 	rootFlags.Bool("version", false, "print version information and exit")
+	rootFlags.Bool("repl-raw", false, "raw REPL output on a terminal too: no value highlighting, no common-labels header")
 
 	// Logging flags — consumed by initLogging above; registered here so flag parser doesn't reject them
 	logLevel := rootFlags.String("log.level", "info", "log level (debug|info|warn|error)")
@@ -175,24 +218,14 @@ func newRootCommand() *ffcli.Command {
 
 	// Prepare shared state
 	storage := sstorage.NewSimpleStorage()
-	engine := promql.NewEngine(promql.EngineOpts{
-		Logger:                   nil,
-		Reg:                      nil,
-		MaxSamples:               50000000,
-		Timeout:                  30 * time.Second,
-		LookbackDelta:            5 * time.Minute,
-		EnableAtModifier:         true,
-		EnableNegativeOffset:     true,
-		NoStepSubqueryIntervalFn: func(_ int64) int64 { return 60 * 1000 },
-		// Without an explicit parser the engine defaults to one with experimental functions disabled.
-		Parser: promparser.NewParser(promparser.Options{EnableExperimentalFunctions: true}),
-	})
+	engine := newEngine()
 
 	// load subcommand
 	loadFlags := flag.NewFlagSet("load", flag.ContinueOnError)
 	loadCmd := &ffcli.Command{
 		Name:       "load",
 		ShortUsage: "promql-cli [--repl=...] load <file.prom>",
+		ShortHelp:  "Load a .prom file and print a summary of its metrics",
 		FlagSet:    loadFlags,
 		Exec: func(_ context.Context, args []string) error {
 			// Apply AI configuration (composite/env/profile)
@@ -231,6 +264,7 @@ func newRootCommand() *ffcli.Command {
 	queryCmd := &ffcli.Command{
 		Name:       "query",
 		ShortUsage: "promql-cli [--repl=...] query [flags] [<file.prom>]",
+		ShortHelp:  "Query metrics interactively (REPL) or one-shot with -q/-f",
 		FlagSet:    queryFlags,
 		Exec: func(_ context.Context, args []string) error {
 			// Apply AI configuration (composite/env/profile)
@@ -332,8 +366,9 @@ func newRootCommand() *ffcli.Command {
 
 	// version subcommand
 	versionCmd := &ffcli.Command{
-		Name: "version",
-		Exec: func(_ context.Context, _ []string) error { printVersion(); return nil },
+		Name:      "version",
+		ShortHelp: "Print version information",
+		Exec:      func(_ context.Context, _ []string) error { printVersion(); return nil },
 	}
 
 	// mcp subcommand: MCP server over stdio
@@ -378,6 +413,8 @@ func newRootCommand() *ffcli.Command {
 		},
 	}
 
+	checkCmd := newCheckCommand(engine, storage)
+
 	// completion subcommand: shell completion scripts generated from the command tree
 	var root *ffcli.Command
 	completionCmd := &ffcli.Command{
@@ -403,7 +440,7 @@ Install:
 		ShortUsage: "promql-cli [--repl=prompt|readline] <subcommand> [flags]",
 		FlagSet:    rootFlags,
 		Subcommands: []*ffcli.Command{
-			loadCmd, queryCmd, versionCmd, mcpCmd, completionCmd,
+			loadCmd, queryCmd, checkCmd, versionCmd, mcpCmd, completionCmd,
 		},
 		Exec: func(_ context.Context, _ []string) error { return flag.ErrHelp },
 	}

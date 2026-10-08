@@ -122,6 +122,18 @@ func handleAdHocFunction(query string, storage *sstorage.SimpleStorage) bool {
 		}
 	}
 
+	// Handle .common_labels [on|off]
+	if strings.HasPrefix(trimmed, ".common_labels ") || trimmed == ".common_labels" {
+		return handleAdhocCommonLabels(trimmed)
+	}
+
+	// Handle .assert <expr>
+	if strings.HasPrefix(trimmed, ".assert ") || trimmed == ".assert" {
+		if handled := handleAdhocAssert(trimmed, storage); handled {
+			return true
+		}
+	}
+
 	// Handle .pinat <time|now|remove>
 	if strings.HasPrefix(trimmed, ".pinat") {
 		if handled := handleAdhocPinAt(trimmed, storage); handled {

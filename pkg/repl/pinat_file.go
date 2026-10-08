@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +16,45 @@ import (
 // evaluation time is pinned, so a saved file carries the time to evaluate at.
 // It is a plain Prometheus text-format comment, ignored by any other parser.
 const pinHeaderPrefix = "# promql-cli: pinat="
+
+// pinFromHeader is the file whose header restored the current pin, "" when the
+// pin was set explicitly (or there is none). Such a pin only says where that
+// file's data ends, so it is dropped once newer samples are added.
+var pinFromHeader string
+
+// sampleCounts returns the per-metric sample counts, the "before" snapshot taken
+// ahead of an operation that may add samples (see newSampleTimes).
+func sampleCounts(storage *sstorage.SimpleStorage) map[string]int {
+	counts := make(map[string]int, len(storage.Metrics))
+	for name, ss := range storage.Metrics {
+		counts[name] = len(ss)
+	}
+	return counts
+}
+
+// dropHeaderPinIfNewer unpins the evaluation time when it was restored from a
+// file header and samples newer than it were added since beforeCounts. An
+// explicit pin (.pinat, pinat=) is never dropped.
+// SampleCounts and DropHeaderPinIfNewer let other packages (the MCP server) apply the
+// same "a header-restored pin never hides newer data" rule after importing samples.
+func SampleCounts(storage *sstorage.SimpleStorage) map[string]int { return sampleCounts(storage) }
+
+// DropHeaderPinIfNewer is the exported form of dropHeaderPinIfNewer.
+func DropHeaderPinIfNewer(out io.Writer, storage *sstorage.SimpleStorage, beforeCounts map[string]int) {
+	dropHeaderPinIfNewer(out, storage, beforeCounts)
+}
+
+func dropHeaderPinIfNewer(out io.Writer, storage *sstorage.SimpleStorage, beforeCounts map[string]int) {
+	if pinFromHeader == "" || pinnedEvalTime == nil {
+		return
+	}
+	_, last, ok := newSampleTimes(storage, beforeCounts)
+	if !ok || last <= pinnedEvalTime.UnixMilli() {
+		return
+	}
+	_, _ = fmt.Fprintf(out, "Unpinned evaluation time (it was restored from %s; newer data was added)\n", pinFromHeader)
+	pinnedEvalTime, pinFromHeader = nil, ""
+}
 
 // formatPinHeader returns the header line (without trailing newline) for t.
 func formatPinHeader(t time.Time) string {
@@ -60,6 +100,18 @@ func ParsePinatArg(args []string) (string, bool) {
 	return "", false
 }
 
+// saveEvalTime returns the time `.save` records in the pinat header: the pinned
+// evaluation time, else the newest sample among the series being saved.
+func saveEvalTime(storage *sstorage.SimpleStorage, re *regexp.Regexp) (time.Time, bool) {
+	if pinnedEvalTime != nil {
+		return *pinnedEvalTime, true
+	}
+	if ms, ok := storage.LatestTimestamp(re); ok {
+		return time.UnixMilli(ms).UTC(), true
+	}
+	return time.Time{}, false
+}
+
 // newSampleTimes returns the oldest and newest timestamps among samples added
 // since beforeCounts was captured.
 func newSampleTimes(storage *sstorage.SimpleStorage, beforeCounts map[string]int) (first, last int64, ok bool) {
@@ -88,20 +140,23 @@ func newSampleTimes(storage *sstorage.SimpleStorage, beforeCounts map[string]int
 // leaves the pin alone and ignores any header, anything else follows the
 // `.pinat` command grammar. Without pinat, a `# promql-cli: pinat=` header of
 // the file is restored, unless tsRewritten (timestamps were rewritten on load,
-// making the saved time meaningless). Errors leave the previous pin unchanged.
+// making the saved time meaningless). A pin restored from a header is dropped
+// again when a later load without header (or pinat=) adds newer samples.
+// Errors leave the previous pin unchanged.
 // Messages go to out.
 func ApplyLoadPin(out io.Writer, storage *sstorage.SimpleStorage, beforeCounts map[string]int, path, pinat string, hasPinat, tsRewritten bool) {
 	if !hasPinat {
 		t, ok := ReadPinHeader(path)
-		if !ok {
-			return
-		}
-		if tsRewritten {
+		switch {
+		case ok && !tsRewritten:
+			pinnedEvalTime, pinFromHeader = &t, path
+			_, _ = fmt.Fprintf(out, "Pinned evaluation time: %s (restored from %s)\n", t.UTC().Format(pinTimeLayout), path)
+		case ok:
 			_, _ = fmt.Fprintf(out, "Note: %s has a saved pinat=%s, not restored because timestamp= rewrote the samples\n", path, t.UTC().Format(pinTimeLayout))
-			return
+			dropHeaderPinIfNewer(out, storage, beforeCounts)
+		default:
+			dropHeaderPinIfNewer(out, storage, beforeCounts)
 		}
-		pinnedEvalTime = &t
-		_, _ = fmt.Fprintf(out, "Pinned evaluation time: %s (restored from %s)\n", t.UTC().Format(pinTimeLayout), path)
 		return
 	}
 
@@ -137,7 +192,7 @@ func ApplyLoadPin(out io.Writer, storage *sstorage.SimpleStorage, beforeCounts m
 			t = lt
 		}
 	}
-	pinnedEvalTime = &t
+	pinnedEvalTime, pinFromHeader = &t, ""
 	_, _ = fmt.Fprintf(out, "Pinned evaluation time: %s (from pinat=%s)\n", t.UTC().Format(pinTimeLayout), pinat)
 }
 
@@ -149,3 +204,15 @@ func EvalTimeOrNow() time.Time {
 	}
 	return time.Now()
 }
+
+// PinnedEvalTime returns the pinned evaluation time, if one is set.
+func PinnedEvalTime() (time.Time, bool) {
+	if pinnedEvalTime == nil {
+		return time.Time{}, false
+	}
+	return *pinnedEvalTime, true
+}
+
+// ParseEvalTime parses a time as accepted by .at and .pinat: now, now-5m,
+// RFC3339 or unix seconds/millis.
+func ParseEvalTime(s string) (time.Time, error) { return parseEvalTime(s) }

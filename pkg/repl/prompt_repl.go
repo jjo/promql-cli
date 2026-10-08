@@ -734,9 +734,8 @@ func promptExecutor(s string) {
 		}
 
 		// Check for line continuation (backslash at end)
-		if strings.HasSuffix(s, "\\") && !strings.HasSuffix(s, "\\\\") {
-			// Remove the backslash and store the line
-			s = strings.TrimSuffix(s, "\\")
+		if endsWithContinuation(s) {
+			// Keep the backslash: joinContinuation decides whether to glue or space-join
 			multiLineBuffer = append(multiLineBuffer, s)
 			inMultiLine = true
 			// The prompt will show again for the next line

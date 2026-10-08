@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -28,6 +29,10 @@ import (
 var lastExecutedCommand string
 
 var replTimeout = 60 * time.Second
+
+// queryFailures counts PromQL queries that failed to parse or evaluate in executeOne,
+// so batch callers (query -f) can report a non-zero exit status.
+var queryFailures atomic.Int64
 
 // promParser is a package-level PromQL parser instance, initialised by InitParser.
 // Falls back to a default parser (with experimental functions enabled) if not explicitly set.
@@ -656,12 +661,9 @@ func runInteractiveQueries(engine *promql.Engine, storage *sstorage.SimpleStorag
 		}
 
 		// Multi-line continuation if line ends with a single backslash
-		trimmedRight := strings.TrimRight(line, " \t")
-		if strings.HasSuffix(trimmedRight, "\\") && !strings.HasSuffix(trimmedRight, "\\\\") {
-			part := strings.TrimSpace(strings.TrimSuffix(trimmedRight, "\\"))
-			if part != "" {
-				mlParts = append(mlParts, part)
-			}
+		if endsWithContinuation(line) {
+			// Keep the backslash: joinContinuation decides whether to glue or space-join
+			mlParts = append(mlParts, strings.TrimSpace(line))
 			mlActive = true
 			// Continue reading next line with continuation prompt
 			continue
@@ -1939,6 +1941,11 @@ func CaptureQueryLine(engine *promql.Engine, storage *sstorage.SimpleStorage, li
 
 // executeOne runs a single command line. Supports ad-hoc dot-commands and PromQL (including .at <time> <query>).
 func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line string) {
+	// Ad-hoc commands such as .assert and .source use the global engine; make sure it is
+	// set on every path that executes lines (-f, -c, REPL, check, MCP).
+	if engine != nil && replEngine != engine {
+		replEngine = engine
+	}
 	// Rule alerts fired while running this line are printed last.
 	defer FlushRuleAlerts()
 	orig := strings.TrimSpace(line)
@@ -2051,6 +2058,7 @@ func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line str
 	if err != nil {
 		slog.Debug("executeOne — query creation failed", "query", query, "elapsed", time.Since(start), "err", err)
 		fmt.Printf("Error creating query: %v\n", err)
+		queryFailures.Add(1)
 		return
 	}
 
@@ -2059,6 +2067,7 @@ func executeOne(engine *promql.Engine, storage *sstorage.SimpleStorage, line str
 	if result.Err != nil {
 		slog.Debug("executeOne — query execution failed", "query", query, "elapsed", elapsed, "err", result.Err)
 		fmt.Printf("Error: %v\n", result.Err)
+		queryFailures.Add(1)
 		return
 	}
 	slog.Debug("executeOne — PromQL query succeeded", "query", query, "elapsed", elapsed)

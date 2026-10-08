@@ -3,7 +3,9 @@ package repl
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -84,6 +86,42 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 		}
 	}
 
+	// Refresh the completion cache on every return path: an error or Ctrl-C part
+	// way through still leaves the samples of the earlier scrapes in the store.
+	defer refreshCompletionCache(storage)
+
+	if err := ScrapeEndpoint(os.Stdout, storage, uri, re, count, delay); err != nil {
+		if !errors.Is(err, errScrapeInterrupted) {
+			fmt.Println(err)
+		}
+	}
+	return true
+}
+
+// refreshCompletionCache refreshes the metrics cache used for autocompletion (prompt backend only).
+func refreshCompletionCache(storage *sstorage.SimpleStorage) {
+	if refreshMetricsCache != nil {
+		refreshMetricsCache(storage)
+	}
+}
+
+// finishSampleImport is deferred by the commands that import samples: it drops a
+// header-restored pin the new samples outdate and refreshes the completion cache.
+func finishSampleImport(storage *sstorage.SimpleStorage, beforeCounts map[string]int) {
+	dropHeaderPinIfNewer(os.Stdout, storage, beforeCounts)
+	refreshCompletionCache(storage)
+}
+
+// errScrapeInterrupted is returned by ScrapeEndpoint when Ctrl-C stopped the scrape.
+var errScrapeInterrupted = errors.New("scraping interrupted")
+
+// ScrapeEndpoint fetches a Prometheus/OpenMetrics text endpoint count times, delay apart,
+// loading each response into storage (only metric names matching re, when set) and
+// re-evaluating the active rules after each scrape. Progress lines go to w.
+func ScrapeEndpoint(w io.Writer, storage *sstorage.SimpleStorage, uri string, re *regexp.Regexp, count int, delay time.Duration) error {
+	// Fresh samples make a pin restored from a file header stale.
+	defer dropHeaderPinIfNewer(w, storage, sampleCounts(storage))
+
 	// Create a context that can be canceled by Ctrl-C
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,7 +134,7 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 	go func() {
 		select {
 		case <-sigChan:
-			fmt.Println("\nScraping interrupted")
+			mustFprintln(w, "\nScraping interrupted")
 			cancel()
 		case <-ctx.Done():
 		}
@@ -106,7 +144,7 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 	for i := 0; i < count; i++ {
 		// Check if context was canceled
 		if ctx.Err() != nil {
-			break
+			return errScrapeInterrupted
 		}
 
 		beforeMetrics := len(storage.Metrics)
@@ -117,47 +155,45 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 		if err != nil {
-			fmt.Printf("Failed to create request for %s: %v\n", uri, err)
-			return true
+			return fmt.Errorf("failed to create request for %s: %w", uri, err)
 		}
 
 		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
-				// Context was canceled, stop silently
-				break
+				return errScrapeInterrupted
 			}
-			fmt.Printf("Failed to scrape %s: %v\n", uri, err)
-			return true
+			return fmt.Errorf("failed to scrape %s: %w", uri, err)
 		}
-		func() {
+		err = func() error {
 			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				fmt.Printf("Failed to scrape %s: HTTP %d\n", uri, resp.StatusCode)
-				return
+				return fmt.Errorf("failed to scrape %s: HTTP %d", uri, resp.StatusCode)
 			}
+			var lerr error
 			if re != nil {
-				if err := storage.LoadFromReaderWithFilter(resp.Body, func(name string) bool { return re.MatchString(name) }); err != nil {
-					fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
-					return
-				}
+				lerr = storage.LoadFromReaderWithFilter(resp.Body, func(name string) bool { return re.MatchString(name) })
 			} else {
-				if err := storage.LoadFromReader(resp.Body); err != nil {
-					fmt.Printf("Failed to parse metrics from %s: %v\n", uri, err)
-					return
-				}
+				lerr = storage.LoadFromReader(resp.Body)
 			}
+			if lerr != nil {
+				return fmt.Errorf("failed to parse metrics from %s: %w", uri, lerr)
+			}
+			return nil
 		}()
+		if err != nil {
+			return err
+		}
 
 		afterMetrics, afterSamples := storeTotals(storage)
-		fmt.Printf("Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
+		mustFprintf(w, "Scraped %s (%d/%d): +%d metrics, +%d samples (total: %d metrics, %d samples)\n",
 			uri, i+1, count, afterMetrics-beforeMetrics, afterSamples-beforeSamples, afterMetrics, afterSamples)
 
 		// Evaluate active rules after each scrape update
 		if added, alerts, err := EvaluateActiveRules(storage); err != nil {
-			fmt.Printf("Rules evaluation failed: %v\n", err)
+			mustFprintf(w, "Rules evaluation failed: %v\n", err)
 		} else if added > 0 || alerts > 0 {
-			fmt.Printf("Rules: added %d samples; %d alerts\n", added, alerts)
+			mustFprintf(w, "Rules: added %d samples; %d alerts\n", added, alerts)
 		}
 
 		if i < count-1 && delay > 0 {
@@ -165,17 +201,11 @@ func handleAdhocScrape(query string, storage *sstorage.SimpleStorage) bool {
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
-				break
+				return errScrapeInterrupted
 			}
 		}
 	}
-
-	// Refresh metrics cache for autocompletion if using prompt backend
-	if refreshMetricsCache != nil {
-		refreshMetricsCache(storage)
-	}
-
-	return true
+	return nil
 }
 
 // handleAdhocPromScrapeCommand parses and executes .prom_scrape, importing results from a remote Prometheus API.
@@ -204,6 +234,10 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 	if delay < 0 {
 		delay = 0
 	}
+
+	// Imported samples may make a header-restored pin stale; refresh the completion
+	// cache on every return path.
+	defer finishSampleImport(storage, sampleCounts(storage))
 
 	// Create a context that can be canceled by Ctrl-C
 	ctx, cancel := context.WithCancel(context.Background())
@@ -302,11 +336,6 @@ func handleAdhocPromScrapeCommand(input string, storage *sstorage.SimpleStorage)
 				break
 			}
 		}
-	}
-
-	// Refresh metrics cache for autocompletion if using prompt backend
-	if refreshMetricsCache != nil {
-		refreshMetricsCache(storage)
 	}
 
 	return true
@@ -621,6 +650,10 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 		delay = 0
 	}
 
+	// Imported samples may make a header-restored pin stale; refresh the completion
+	// cache on every return path.
+	defer finishSampleImport(storage, sampleCounts(storage))
+
 	// Create a context that can be canceled by Ctrl-C
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -720,9 +753,6 @@ func handleAdhocPromScrapeRangeCommand(input string, storage *sstorage.SimpleSto
 		}
 	}
 
-	if refreshMetricsCache != nil {
-		refreshMetricsCache(storage)
-	}
 	return true
 }
 

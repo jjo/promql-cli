@@ -1,0 +1,5 @@
+# services are up
+up == 1
+
+# traffic exists
+sum(http_requests_total) > 0

@@ -77,6 +77,8 @@ test-gofumpt:
 test-examples: build-binary
 	@# Test code examples in documentation: nuke stdin, don't use repl=prompt, and set silent query mode
 	grep -E ^promql-cli README_examples.md | sed -e 's,^promql-cli,bin/$(APP),' -e 's,$$, </dev/null,' -e 's/--repl=prompt //' -e 's/query/query -s/' | grep -v EOF | bash -x >/dev/null
+	@# The example contract passes against the example data (exit 0, deterministic, no network)
+	bin/$(APP) check examples/example.contract.promql examples/example.prom >/dev/null
 
 test-mcp: build-binary
 	@# Test MCP server functionality
