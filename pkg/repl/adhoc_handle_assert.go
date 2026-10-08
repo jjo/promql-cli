@@ -21,6 +21,7 @@ func handleAdhocAssert(query string, storage *sstorage.SimpleStorage) bool {
 	expr := strings.TrimSpace(strings.TrimPrefix(query, ".assert"))
 	if expr == "" {
 		fmt.Println(GetAdHocCommandByName(".assert").Usage)
+		queryFailures.Add(1) // a bare .assert in a -f file must not pass silently
 		return true
 	}
 	if replEngine == nil {

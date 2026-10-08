@@ -419,12 +419,15 @@ func handleAdhocSource(query string, storage *sstorage.SimpleStorage) bool {
 	// Check if replEngine is set
 	if replEngine == nil {
 		fmt.Println("Error: PromQL engine not available")
+		queryFailures.Add(1)
 		return true
 	}
 
-	// Use the exported function
+	// Use the exported function; count a failure so `query -f` with a broken
+	// .source does not exit 0
 	if _, _, err := executeQueriesFromFile(replEngine, storage, path); err != nil {
 		fmt.Printf("Error: %v\n", err)
+		queryFailures.Add(1)
 	}
 
 	return true

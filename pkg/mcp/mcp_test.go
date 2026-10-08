@@ -995,6 +995,7 @@ func TestLoadMetricsDropsHeaderPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	repl.ApplyLoadPin(io.Discard, store, before, snap, "", false, false)
+	t.Cleanup(func() { repl.ApplyLoadPin(io.Discard, store, nil, "", "remove", true, false) })
 	if _, ok := repl.PinnedEvalTime(); !ok {
 		t.Fatal("expected the header pin to be restored")
 	}

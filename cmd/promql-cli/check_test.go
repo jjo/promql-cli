@@ -219,6 +219,8 @@ func TestQueryFileAssertExitStatus(t *testing.T) {
 	}{
 		{"failing assert", write("fail.promql", ".assert vector(1) > 5\n"), true},
 		{"passing assert", write("pass.promql", ".assert vector(1)\n"), false},
+		{"bare assert", write("bare.promql", ".assert\n"), true},
+		{"unreadable .source", write("src.promql", ".source "+filepath.Join(dir, "missing.promql")+"\n"), true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := newRootCommand()
