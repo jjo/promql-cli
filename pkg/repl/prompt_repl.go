@@ -694,6 +694,15 @@ func discardMultiLine() {
 // activePrompt is the main REPL prompt (used to reset go-prompt's internal history).
 var activePrompt *prompt.Prompt
 
+// newDropdownAwareParser returns the stdin parser for the prompt backend: pasted
+// chunks are split into lines, and Enter on a selected dropdown suggestion only
+// accepts it instead of also running the line.
+func newDropdownAwareParser() *lineSplitParser {
+	l := newLineSplitParser(prompt.NewStandardInputParser())
+	l.completing = func() bool { return promptCompleting(activePrompt) }
+	return l
+}
+
 // promptExecutor handles command execution
 func promptExecutor(s string) {
 	// go-prompt already added this Enter to its internal history; drop it,
@@ -1122,7 +1131,7 @@ func (r *promptREPL) Run() error {
 
 	// Create the prompt with proper options
 	opts := []prompt.Option{
-		prompt.OptionParser(newLineSplitParser(prompt.NewStandardInputParser())),
+		prompt.OptionParser(newDropdownAwareParser()),
 		prompt.OptionPrefix("PromQL> "),
 		prompt.OptionTitle("PromQL CLI"),
 		// go-prompt runs its built-in emacs bindings AND the custom ones for the

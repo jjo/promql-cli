@@ -173,7 +173,22 @@ func joinLines(lines []string) string {
 type lineSplitParser struct {
 	prompt.ConsoleParser
 	queue [][]byte
+	// completing reports whether a dropdown suggestion is selected; nil disables the check.
+	completing func() bool
 }
+
+// acceptKey is what an Enter on a selected suggestion is turned into: go-prompt
+// applies the suggestion for any key that isn't a completion key, but on Enter it
+// also executes the line in the same keystroke. F12 is bound to nothing, so the
+// suggestion is applied and the line stays open for a second Enter.
+var acceptKey = func() []byte {
+	for _, s := range prompt.ASCIISequences {
+		if s.Key == prompt.F12 {
+			return append([]byte(nil), s.ASCIICode...)
+		}
+	}
+	return nil
+}()
 
 func newLineSplitParser(p prompt.ConsoleParser) *lineSplitParser {
 	return &lineSplitParser{ConsoleParser: p}
@@ -190,7 +205,24 @@ func (l *lineSplitParser) Read() ([]byte, error) {
 	}
 	out := l.queue[0]
 	l.queue = l.queue[1:]
+	if acceptKey != nil && len(out) == 1 && (out[0] == '\r' || out[0] == '\n') && l.completing != nil && l.completing() {
+		return acceptKey, nil
+	}
 	return out, nil
+}
+
+// promptCompleting reports whether p's completion dropdown has a selected
+// suggestion (an unexported field of go-prompt v0.2.6; false if the layout differs).
+func promptCompleting(p *prompt.Prompt) bool {
+	if p == nil {
+		return false
+	}
+	c := reflect.ValueOf(p).Elem().FieldByName("completion")
+	if !c.IsValid() || c.Kind() != reflect.Pointer || c.IsNil() {
+		return false
+	}
+	sel := c.Elem().FieldByName("selected")
+	return sel.IsValid() && sel.Kind() == reflect.Int && sel.Int() != -1
 }
 
 // splitChunkLines splits a raw input chunk into text segments and "\r"

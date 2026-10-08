@@ -1,6 +1,12 @@
 package repl
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+	"unsafe"
+
+	prompt "github.com/c-bata/go-prompt"
+)
 
 func TestInputIncomplete(t *testing.T) {
 	tests := []struct {
@@ -105,5 +111,83 @@ func TestSplitChunkLines(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// fakeParser returns the queued chunks one per Read.
+type fakeParser struct {
+	prompt.ConsoleParser
+	chunks [][]byte
+}
+
+func (f *fakeParser) Read() ([]byte, error) {
+	if len(f.chunks) == 0 {
+		return nil, nil
+	}
+	b := f.chunks[0]
+	f.chunks = f.chunks[1:]
+	return b, nil
+}
+
+func TestLineSplitParserEnterOnSelectedSuggestion(t *testing.T) {
+	if acceptKey == nil || prompt.GetKey(acceptKey) != prompt.F12 {
+		t.Fatalf("acceptKey %q must decode to go-prompt's F12", acceptKey)
+	}
+	tests := []struct {
+		name       string
+		chunk      string
+		completing func() bool
+		want       []string // successive Read results
+	}{
+		{"Enter with a selection", "\r", func() bool { return true }, []string{string(acceptKey)}},
+		{"Ctrl-J with a selection", "\n", func() bool { return true }, []string{string(acceptKey)}},
+		{"Enter without a selection", "\r", func() bool { return false }, []string{"\r"}},
+		{"no completing callback", "\r", nil, []string{"\r"}},
+		{"Alt+Enter is untouched", "\x1b\r", func() bool { return true }, []string{"\x1b\r"}},
+		{"other input is untouched", "x", func() bool { return true }, []string{"x"}},
+		{"paste chunk with a selection", "a\rb", func() bool { return true }, []string{"a", string(acceptKey), "b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := newLineSplitParser(&fakeParser{chunks: [][]byte{[]byte(tt.chunk)}})
+			l.completing = tt.completing
+			for i, want := range tt.want {
+				if got, _ := l.Read(); string(got) != want {
+					t.Fatalf("Read #%d = %q, want %q", i+1, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestPromptCompletingSeesGoPromptInternals fails if a go-prompt upgrade changes the
+// unexported fields promptCompleting reads, instead of the fix silently turning off.
+// prompt.New needs /dev/tty, so the Prompt is built by hand around a real
+// CompletionManager.
+func TestPromptCompletingSeesGoPromptInternals(t *testing.T) {
+	cm := prompt.NewCompletionManager(func(prompt.Document) []prompt.Suggest {
+		return []prompt.Suggest{{Text: "5m]"}, {Text: "1h]"}}
+	}, 5)
+	p := &prompt.Prompt{}
+	f := reflect.ValueOf(p).Elem().FieldByName("completion")
+	if !f.IsValid() || f.Type() != reflect.TypeOf(cm) {
+		t.Fatal("go-prompt Prompt has no *CompletionManager field named completion")
+	}
+	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Set(reflect.ValueOf(cm))
+
+	cm.Update(*prompt.NewDocument())
+	if promptCompleting(p) {
+		t.Fatal("no suggestion selected yet: want false")
+	}
+	cm.Next() // what Tab does
+	if !promptCompleting(p) {
+		t.Fatal("a suggestion is selected: want true (go-prompt's completion.selected changed?)")
+	}
+	cm.Reset()
+	if promptCompleting(p) {
+		t.Fatal("after Reset: want false")
+	}
+	if promptCompleting(nil) || promptCompleting(&prompt.Prompt{}) {
+		t.Fatal("nil prompt or nil completion manager must report false")
 	}
 }
