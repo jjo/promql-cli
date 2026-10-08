@@ -206,6 +206,8 @@ func isearchOptions() []prompt.Option {
 		// Enter executes the buffer (the match) as usual; just leave the mode.
 		prompt.OptionAddKeyBind(prompt.KeyBind{Key: prompt.ControlM, Fn: leave}),
 		prompt.OptionAddKeyBind(prompt.KeyBind{Key: prompt.ControlJ, Fn: leave}),
+		// An Enter that accepted a dropdown suggestion arrives as F12 (see acceptKey).
+		prompt.OptionAddKeyBind(prompt.KeyBind{Key: prompt.F12, Fn: leave}),
 		prompt.OptionAddKeyBind(prompt.KeyBind{Key: prompt.Left, Fn: leave}),
 		prompt.OptionAddKeyBind(prompt.KeyBind{Key: prompt.Right, Fn: leave}),
 	}
