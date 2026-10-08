@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/peterbourgon/ff/v3/ffcli"
 )
 
 func generate(t *testing.T, shell string) string {
@@ -137,4 +139,53 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// zsh _describe collapses entries without a description onto one line, so every
+// subcommand (including the ones that do not set ShortHelp) must carry one.
+func TestZshSubcommandsHaveDescriptions(t *testing.T) {
+	root := newRootCommand()
+	out := generate(t, "zsh")
+	for _, sub := range root.Subcommands {
+		var found bool
+		for line := range strings.SplitSeq(out, "\n") {
+			if desc, ok := strings.CutPrefix(strings.TrimSpace(line), "'"+sub.Name+":"); ok {
+				found = true
+				if strings.Trim(desc, "'") == "" {
+					t.Errorf("zsh completion for %q has an empty description", sub.Name)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("zsh completion lacks an entry for %q", sub.Name)
+		}
+	}
+}
+
+func TestSubcommandHelpFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  *ffcli.Command
+		want string
+	}{
+		{"short help wins", &ffcli.Command{Name: "x", ShortUsage: "usage", ShortHelp: "help"}, "help"},
+		{"falls back to usage", &ffcli.Command{Name: "x", ShortUsage: "usage"}, "usage"},
+		{"falls back to name", &ffcli.Command{Name: "x"}, "x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := subcommandHelp(tt.cmd); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckFormatCompletion(t *testing.T) {
+	out := generate(t, "bash")
+	for _, v := range []string{"tap", "junit"} {
+		if !strings.Contains(out, v) {
+			t.Errorf("bash completion lacks --format value %q", v)
+		}
+	}
 }

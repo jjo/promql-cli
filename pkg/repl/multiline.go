@@ -56,12 +56,24 @@ func scanOutsideQuotes(s string, fn func(i int, r rune)) (openString bool) {
 	return quote != 0
 }
 
+// endsWithContinuation reports whether the last line of s ends with a
+// continuation backslash (an odd number of trailing backslashes).
+func endsWithContinuation(s string) bool {
+	last := strings.TrimRight(s[strings.LastIndexByte(s, '\n')+1:], " \t")
+	n := len(last) - len(strings.TrimRight(last, `\`))
+	return n%2 == 1
+}
+
 // inputIncomplete reports whether s is a PromQL expression that is still
-// open: an unclosed ( [ { or an unterminated string. Extra closers are not
-// "incomplete" (the parser reports them). Shell lines (!cmd) never continue.
+// open: an unclosed ( [ { or an unterminated string, or a last line ending
+// with a continuation backslash. Extra closers are not "incomplete" (the
+// parser reports them). Shell lines (!cmd) never continue.
 func inputIncomplete(s string) bool {
 	if strings.HasPrefix(strings.TrimSpace(s), "!") {
 		return false
+	}
+	if endsWithContinuation(s) {
+		return true
 	}
 	depth := 0
 	open := scanOutsideQuotes(s, func(_ int, r rune) {
@@ -114,16 +126,44 @@ func stripComment(line string) string {
 }
 
 // joinContinuation joins the accumulated lines into a single line: comments
-// are stripped (so one cannot swallow the rest of the query), each line is
-// trimmed and the parts are joined with single spaces.
+// are stripped (so one cannot swallow the rest of the query), then the lines
+// are joined as joinLines does.
 func joinContinuation(lines []string) string {
-	parts := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if t := strings.TrimSpace(stripComment(l)); t != "" {
-			parts = append(parts, t)
-		}
+	stripped := make([]string, len(lines))
+	for i, l := range lines {
+		stripped[i] = stripComment(l)
 	}
-	return strings.Join(parts, " ")
+	return joinLines(stripped)
+}
+
+// joinLines trims each line and joins them with single spaces. A line ending
+// with a continuation backslash inside an open string is joined to the next
+// one with no space, keeping everything before the backslash verbatim (only the
+// backslash and the next line's indentation go), so a long string or regex can
+// be split across indented lines; outside strings the backslash is dropped and
+// a space is kept, so tokens never merge.
+func joinLines(lines []string) string {
+	var b strings.Builder
+	glue := false
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		if b.Len() > 0 && !glue {
+			b.WriteByte(' ')
+		}
+		glue = false
+		if endsWithContinuation(t) {
+			t = t[:len(t)-1]
+			glue = scanOutsideQuotes(b.String()+t, func(int, rune) {})
+			if !glue {
+				t = strings.TrimRight(t, " \t")
+			}
+		}
+		b.WriteString(t)
+	}
+	return b.String()
 }
 
 // lineSplitParser wraps a go-prompt ConsoleParser so a pasted chunk containing

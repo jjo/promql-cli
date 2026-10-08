@@ -312,6 +312,7 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 |---------|-------------|
 | `promql-cli query [file.prom]` | Start interactive REPL (optionally load metrics file) |
 | `promql-cli load <file.prom>` | Parse and load metrics file (shows summary) |
+| `promql-cli check <contract.promql> [file.prom ...]` | Check that every expression of a contract returns a result (CI for exporters, see below) |
 | `promql-cli mcp [file.prom]` | Start MCP server over stdio for AI agent integration |
 | `promql-cli version` | Show version information (same as `--version`) |
 | `promql-cli completion <bash\|zsh\|fish>` | Print a shell completion script |
@@ -330,7 +331,12 @@ promql-cli query --repl=prompt --ai "provider=claude" tutorial.prom
 | `--ai "key=value,..."` | Configure AI settings in one flag | Query suggestions, learning PromQL | `--ai "provider=claude,model=opus"` |
 | `--log.level {debug,info,warn,error}` | Set log verbosity | Debugging, quiet CI runs | `--log.level=debug` |
 | `--log.format {text,json}` | Set log output format | Structured logging, log aggregation | `--log.format=json` |
+| `--repl-raw` | Raw output on a terminal too: no value highlighting, no common-labels header | Copying output, screenshots, terminals that mangle ANSI | `--repl-raw query data.prom` |
 | `--version` | Print version information and exit | Bug reports, scripting | `promql-cli --version` |
+
+On an interactive terminal, sample values are highlighted (bold on grey). Output that is piped, captured (`... | grep`) or JSON stays plain; set `NO_COLOR=1` or `TERM=dumb` to turn the highlight off, or `--repl-raw` to turn off both the highlight and the common-labels header below.
+
+Also on an interactive terminal, labels shared by every series of a result are printed once as a `# common_labels: {...}` header and shown as `…` on each line, and a timestamp shared by every sample is printed once as `# common_timestamp: ...` instead of `@ ...` on each line. Piped, captured and JSON output keep full labels; `.common_labels off` turns it off in the REPL. With colors on, the part of each remaining label value that differs between series is underlined (`instance="172.16.16.7`<u>`5`</u>`:9100"`).
 
 ### Shell Completion
 
@@ -346,6 +352,63 @@ promql-cli completion zsh > "${fpath[1]}/_promql-cli"
 # fish
 promql-cli completion fish > ~/.config/fish/completions/promql-cli.fish
 ```
+
+### CI your exporter metrics
+
+`promql-cli check` turns a list of PromQL expressions into a CI gate. A contract file holds one expression per line; blank lines and `#` comments are ignored, and the comment right above an expression names the check. A non-empty result passes, an empty one fails:
+
+```promql
+# it is alive, and it tells us what it is
+node_exporter_build_info{version!=""}
+
+# counters actually count (needs >= 2 scrapes)
+sum(rate(node_cpu_seconds_total[1m])) > 0
+
+# violations are written as absent(<bad thing>)
+absent(resets(node_cpu_seconds_total[1m]) > 0)
+
+# cardinality budget: the whole exporter stays under 1000 series
+count({__name__=~"node_.+"}) < 1000
+```
+
+```bash
+promql-cli check --scrape http://localhost:9100/metrics --count 2 --interval 5s node-exporter.contract.promql
+promql-cli check contract.promql snapshot.prom                  # saved file; evaluated at its pinned/newest sample time
+```
+
+```text
+PASS  it is alive, and it tells us what it is
+FAIL  cardinality budget: the whole exporter stays under 1000 series
+      count({__name__=~"node_.+"}) < 1000
+      got: count({__name__=~"node_.+"}) = 1116, want < 1000
+3 passed, 1 failed, 0 errors (evaluated at 2026-10-08T09:30:00Z)
+```
+
+| Flag | Description |
+|------|-------------|
+| `--scrape <url>` | Scrape an endpoint into the store (repeatable) |
+| `--count N`, `--interval D` | Scrapes per URL (default 1) and delay between them (default 5s); `rate()` needs at least 2 |
+| `--at <time>` | Evaluation time. Default: the pinned time of the loaded file, else its newest sample, else now |
+| `--format text\|tap\|junit\|json` | Report format on stdout (default `text`); progress and diagnostics go to stderr |
+| `-c "<cmds>"` | Pre-commands, e.g. `.rules rules.yaml` so contracts can use recording rules and `ALERTS` |
+
+Flags go before the contract and data files (`check --format junit c.promql f.prom`, not `check c.promql f.prom --format junit`). Exit status: `0` all checks passed, `1` at least one failed, `2` usage, I/O, scrape or expression errors, including command-line flag errors such as an unknown flag (the other checks still run; `-h` exits `0`). Without `--at`, `check` evaluates at the pinned time of a loaded file, else at the newest sample; a scrape drops a pin restored from a file header, so the fresh samples are what gets evaluated. A failure explains itself: comparisons show the left-hand value against the threshold, `absent(x)` lists the offending series.
+
+GitHub Actions:
+
+```yaml
+- name: Check exporter metrics
+  run: |
+    promql-cli check --scrape http://localhost:9100/metrics --count 2 \
+      --format junit node-exporter.contract.promql > report.xml
+- uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    name: metrics-contract
+    path: report.xml
+```
+
+The same check is available in the REPL as `.assert <expr>`, evaluated at the current (`.pinat`) time. Unlike `check`, `.assert` evaluates at the pin else now, like any REPL query; when it fails and that time is more than the 5m lookback after the newest sample, it adds a `hint:` line suggesting `.pinat <metric>`. Under `query -f` a failing `.assert` makes the exit status non-zero.
 
 ### 🔌 MCP Server Mode
 
@@ -558,12 +621,13 @@ After saving, `mcporter list promql-cli-live` shows the same 6 tools available t
 | `.seed <metric> [steps] [interval]` | Generate test data history | `.seed http_requests_total 20 30s` |
 | `.pinat <time\|selector>` | Lock evaluation time (for testing); a metric selector pins to its latest sample | `.pinat now-1h`, `.pinat node_load1` |
 | `.at <time> <query>` | Run query at specific time | `.at now-5m rate(cpu[1m])` |
+| `.assert <expr>` | PASS if the query returns a result, else FAIL with why (at the `.pinat` time) | `.assert count(up) > 3` |
 
 #### **Managing Metrics**
 
 | Command | What it does | Example |
 |---------|--------------|---------|
-| `.save <file> [timestamp=...] [regex='...']` | Export metrics to file (records the pinned time as a `# promql-cli: pinat=` header) | `.save snapshot.prom timestamp=remove` |
+| `.save <file> [timestamp=...] [regex='...']` | Export metrics to file (records the pinned time, or the newest saved sample, as a `# promql-cli: pinat=` header) | `.save snapshot.prom timestamp=remove` |
 | `.rename <old> <new>` | Rename a metric | `.rename old_name new_name` |
 | `.drop <regex>` | Delete metrics matching regex | `.drop test_.*` |
 | `.keep <regex>` | Keep only matching metrics | `.keep important_.*` |
@@ -850,7 +914,7 @@ Notes:
 
 #### Reproducible snapshots: saving and restoring the pinned time
 
-When an evaluation time is pinned (`.pinat`), `.save` writes it as a first-line comment, still valid Prometheus text format:
+`.save` writes the evaluation time as a first-line comment, still valid Prometheus text format: the pinned time when one is set (`.pinat`), otherwise the newest saved sample (where the data ends), so loading the file later doesn't evaluate at "now" and find nothing:
 
 ```
 # promql-cli: pinat=2026-10-07T19:38:47.000Z
@@ -868,7 +932,7 @@ When an evaluation time is pinned (`.pinat`), `.save` writes it as a first-line 
 topk(1, max_over_time(robust_zscore(node_load1)[6h:30s]))
 ```
 
-`.load <file> pinat=<value>` overrides the header (`last`/`first`: newest/oldest sample loaded by that command; `none`: do not pin and ignore the header; otherwise the same time or selector grammar as `.pinat`). The header is skipped, with a note, when `timestamp=` rewrites the loaded samples, and `.save timestamp=...` does not write it. `promql-cli query|load|mcp <file>` honour the header too. A bad `pinat=` value keeps the previous pin; the data still loads.
+`.load <file> pinat=<value>` overrides the header (`last`/`first`: newest/oldest sample loaded by that command; `none`: do not pin and ignore the header; otherwise the same time or selector grammar as `.pinat`). The header is skipped, with a note, when `timestamp=` rewrites the loaded samples, and `.save timestamp=...` does not write it. `promql-cli query|load|mcp <file>` honour the header too. A bad `pinat=` value keeps the previous pin; the data still loads. A pin restored from a header only says where that file's data ends, so it is dropped (with an `Unpinned evaluation time (it was restored from ...)` note) when `.scrape`, `.prom_scrape`, `.prom_scrape_range` or a `.load` of a file without header adds newer samples; a pin set with `.pinat` or `pinat=` is never dropped. For `query|load|mcp <file>` the `Pinned evaluation time` message goes to stderr, so stdout carries only results.
 
 #### Series regex filter
 
@@ -1093,22 +1157,11 @@ rate(http_requests_total[5m]) > 0
 histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) < 1
 EOF
 
-# Run in CI pipeline: one query per expression, fail on error or empty result
-# (note: `query -f` always exits 0, even on errors/empty results, so don't rely on its status)
-fail=0
-while IFS= read -r expr; do
-  [[ -z $expr || $expr == \#* ]] && continue
-  if promql-cli query -s -o json -q "$expr" test-metrics.prom |
-     jq -e '.data.result | length > 0' >/dev/null; then
-    echo "✅ $expr"
-  else
-    echo "❌ $expr"; fail=1
-  fi
-done < queries-to-validate.promql
-exit $fail
+# Run in CI: every expression must return a non-empty result
+promql-cli check queries-to-validate.promql test-metrics.prom
 ```
 
-See `talks/promcon26-lightning/ci/check.sh` for a complete script.
+See [CI your exporter metrics](#ci-your-exporter-metrics) for the contract format, exit codes and CI report formats.
 
 ### Workflow 6: Comparing Metrics Across Environments
 

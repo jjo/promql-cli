@@ -29,7 +29,7 @@ func handleAdhocPinAt(query string, storage *sstorage.SimpleStorage) bool {
 		return true
 	}
 	if strings.EqualFold(arg, "remove") {
-		pinnedEvalTime = nil
+		pinnedEvalTime, pinFromHeader = nil, ""
 		fmt.Println("Pinned evaluation time: removed")
 		return true
 	}
@@ -45,11 +45,11 @@ func handleAdhocPinAt(query string, storage *sstorage.SimpleStorage) bool {
 			fmt.Printf("Invalid .pinat argument %q: not a time (%v), nor a usable metric selector (%v)\n", arg, err, selErr)
 			return true
 		}
-		pinnedEvalTime = &lt
+		pinnedEvalTime, pinFromHeader = &lt, ""
 		fmt.Printf("Pinned evaluation time: %s (latest sample of %s, %d series)\n", lt.UTC().Format(pinTimeLayout), arg, n)
 		return true
 	}
-	pinnedEvalTime = &t
+	pinnedEvalTime, pinFromHeader = &t, ""
 	fmt.Printf("Pinned evaluation time: %s\n", t.UTC().Format(pinTimeLayout))
 	return true
 }

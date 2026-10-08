@@ -1,0 +1,8 @@
+# exporter is alive
+up
+
+# cardinality budget
+count(up) > 10
+
+# no 500s at all
+absent(http_requests_total{code="500"})

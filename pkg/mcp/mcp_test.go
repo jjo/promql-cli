@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	repl "github.com/jjo/promql-cli/pkg/repl"
 
 	"github.com/prometheus/prometheus/promql"
 
@@ -977,5 +980,41 @@ func TestProtocolWriterIgnoresStdoutSwap(t *testing.T) {
 	}
 	if got := buf.String(); got != `{"jsonrpc":"2.0","id":1,"result":{}}`+"\n" {
 		t.Fatalf("unexpected protocol output: %q", got)
+	}
+}
+
+func TestLoadMetricsDropsHeaderPin(t *testing.T) {
+	dir := t.TempDir()
+	snap := filepath.Join(dir, "snap.prom")
+	if err := os.WriteFile(snap, []byte("# promql-cli: pinat=1970-01-01T00:16:40.000Z\nm 1 1000000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := sstorage.NewSimpleStorage()
+	before := repl.SampleCounts(store)
+	if err := store.LoadFromReader(strings.NewReader("m 1 1000000\n")); err != nil {
+		t.Fatal(err)
+	}
+	repl.ApplyLoadPin(io.Discard, store, before, snap, "", false, false)
+	if _, ok := repl.PinnedEvalTime(); !ok {
+		t.Fatal("expected the header pin to be restored")
+	}
+
+	h := newMCPTestHarness(t, newTestEngine(), store)
+	h.send(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		"params": map[string]any{"protocolVersion": "2024-11-05"},
+	})
+	h.recv()
+	h.send(map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "load_metrics",
+			"arguments": map[string]any{"data": "m 2 2000000\n"},
+		},
+	})
+	resp := h.recv()
+	assertNoError(t, resp)
+	if _, ok := repl.PinnedEvalTime(); ok {
+		t.Fatal("a header-restored pin must be dropped when load_metrics adds newer samples")
 	}
 }

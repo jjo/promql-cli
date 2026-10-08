@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
+	"golang.org/x/term"
 )
 
 // mustFprintf and mustFprintln intentionally ignore write errors, e.g. when piping to a closed consumer.
@@ -25,7 +26,40 @@ func PrintUpstreamQueryResult(result *promql.Result) {
 	PrintUpstreamQueryResultToWriter(result, os.Stdout)
 }
 
+// isTerminal reports whether w is an interactive terminal; a variable so tests can override it.
+var isTerminal = func(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// valueStyle highlights values: bold bright white on a 256-color grey, readable on dark and light themes.
+const valueStyle = "\x1b[1;97;48;5;240m"
+
+// rawOutput disables every terminal-only output nicety (value highlighting, the
+// common-labels header), so a terminal shows exactly what a pipe would get.
+var rawOutput bool
+
+// SetRawOutput sets raw output mode (the --repl-raw flag).
+func SetRawOutput(raw bool) { rawOutput = raw }
+
+// ColorEnabled reports whether ANSI styling is appropriate for w: an interactive terminal,
+// without --repl-raw, NO_COLOR (https://no-color.org) or TERM=dumb set.
+func ColorEnabled(w io.Writer) bool {
+	return !rawOutput && isTerminal(w) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+}
+
+// valueFormatter returns how sample values are rendered: highlighted when ColorEnabled(w),
+// plain when piped or captured.
+func valueFormatter(w io.Writer) func(float64) string {
+	plain := func(f float64) string { return strconv.FormatFloat(f, 'g', -1, 64) }
+	if !ColorEnabled(w) {
+		return plain
+	}
+	return func(f float64) string { return valueStyle + plain(f) + "\x1b[0m" }
+}
+
 func PrintUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
+	val := valueFormatter(w)
 	switch v := result.Value.(type) {
 	case promql.Vector:
 		if len(v) == 0 {
@@ -33,15 +67,31 @@ func PrintUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 			return
 		}
 		mustFprintf(w, "Vector (%d samples):\n", len(v))
+		sets := make([]labels.Labels, len(v))
 		for i, sample := range v {
-			mustFprintf(w, "  [%d] %s => %g @ %s\n",
+			sets[i] = sample.Metric
+		}
+		header, lbls := labelFormatter(w, sets)
+		if header != "" {
+			mustFprintf(w, "  %s\n", header)
+		}
+		commonTS := commonTimestamp(w, v)
+		if commonTS != "" {
+			mustFprintf(w, "  # common_timestamp: %s\n", commonTS)
+		}
+		for i, sample := range v {
+			if commonTS != "" {
+				mustFprintf(w, "  [%d] %s => %s\n", i+1, lbls(sample.Metric), val(sample.F))
+				continue
+			}
+			mustFprintf(w, "  [%d] %s => %s @ %s\n",
 				i+1,
-				sample.Metric,
-				sample.F,
+				lbls(sample.Metric),
+				val(sample.F),
 				model.Time(sample.T).Time().Format(time.RFC3339))
 		}
 	case promql.Scalar:
-		mustFprintf(w, "Scalar: %g @ %s\n", v.V, model.Time(v.T).Time().Format(time.RFC3339))
+		mustFprintf(w, "Scalar: %s @ %s\n", val(v.V), model.Time(v.T).Time().Format(time.RFC3339))
 	case promql.String:
 		mustFprintf(w, "String: %s\n", v.V)
 	case promql.Matrix:
@@ -50,10 +100,18 @@ func PrintUpstreamQueryResultToWriter(result *promql.Result, w io.Writer) {
 			return
 		}
 		mustFprintf(w, "Matrix (%d series):\n", len(v))
+		sets := make([]labels.Labels, len(v))
 		for i, series := range v {
-			mustFprintf(w, "  [%d] %s:\n", i+1, series.Metric)
+			sets[i] = series.Metric
+		}
+		header, lbls := labelFormatter(w, sets)
+		if header != "" {
+			mustFprintf(w, "  %s\n", header)
+		}
+		for i, series := range v {
+			mustFprintf(w, "  [%d] %s:\n", i+1, lbls(series.Metric))
 			for _, point := range series.Floats {
-				mustFprintf(w, "    %g @ %s\n", point.F, model.Time(point.T).Time().Format(time.RFC3339))
+				mustFprintf(w, "    %s @ %s\n", val(point.F), model.Time(point.T).Time().Format(time.RFC3339))
 			}
 		}
 	default:

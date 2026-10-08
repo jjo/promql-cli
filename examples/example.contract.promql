@@ -1,0 +1,17 @@
+# Example contract for `promql-cli check`: every expression must return a
+# non-empty result. Violations are written as absent(<bad thing>) so that
+# "nothing bad" is a non-empty result.
+#
+#   promql-cli check examples/example.contract.promql examples/example.prom
+
+# every service reports up
+up == 1
+
+# traffic is flowing
+sum(http_requests_total) > 0
+
+# no service is down
+absent(up == 0)
+
+# cardinality budget: the example stays small
+count({__name__=~".+"}) < 1000

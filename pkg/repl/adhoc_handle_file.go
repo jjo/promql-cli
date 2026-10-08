@@ -43,12 +43,16 @@ func handleAdhocSave(query string, storage *sstorage.SimpleStorage) bool {
 		return true
 	}
 	defer func() { _ = f.Close() }()
-	// Record the pinned evaluation time so the file is reproducible; skipped when
-	// timestamps are rewritten on save, as the pinned time would no longer match.
-	if pinnedEvalTime != nil && tsMode == "keep" {
-		if _, err := fmt.Fprintln(f, formatPinHeader(*pinnedEvalTime)); err != nil {
-			fmt.Printf("Failed to save metrics to %s: %v\n", path, err)
-			return true
+	// Record the evaluation time so the file is reproducible: the pinned time, or
+	// without a pin the newest saved sample (where the data ends), so a later load
+	// does not evaluate at "now" and find nothing. Skipped when timestamps are
+	// rewritten on save, as the time would no longer match.
+	if tsMode == "keep" {
+		if at, ok := saveEvalTime(storage, re); ok {
+			if _, err := fmt.Fprintln(f, formatPinHeader(at)); err != nil {
+				fmt.Printf("Failed to save metrics to %s: %v\n", path, err)
+				return true
+			}
 		}
 	}
 	opts := sstorage.SaveOptions{TimestampMode: tsMode, FixedTimestamp: tsFixed}
@@ -283,26 +287,39 @@ func seriesSignature(name string, lbls map[string]string) string {
 // This is exported for use by the CLI -f flag
 // Queries are separated by blank lines, EOF is treated as query terminator
 // Supports backslash continuation within queries
+// Every query runs; an error is returned afterwards if any of them failed to parse or evaluate.
 func ExecuteQueriesFromFile(engine *promql.Engine, storage *sstorage.SimpleStorage, path string) error {
+	total, failed, err := executeQueriesFromFile(engine, storage, path)
+	if err != nil {
+		return err
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d queries in %s failed", failed, total, path)
+	}
+	return nil
+}
+
+// executeQueriesFromFile runs the file and returns how many queries it held and how many failed.
+func executeQueriesFromFile(engine *promql.Engine, storage *sstorage.SimpleStorage, path string) (total, failed int, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("failed to read %s: %w", path, err)
+		return 0, 0, fmt.Errorf("failed to read %s: %w", path, err)
 	}
 
 	queries := parseQueriesFromContent(string(data))
 
 	if len(queries) == 0 {
 		fmt.Printf("No expressions found in %s\n", path)
-		return nil
+		return 0, 0, nil
 	}
 
-	// Execute each query
+	before := queryFailures.Load()
 	for _, q := range queries {
 		fmt.Printf("> %s\n", q.query)
 		ExecuteQueryLine(engine, storage, q.query)
 	}
 
-	return nil
+	return len(queries), int(queryFailures.Load() - before), nil
 }
 
 // queryWithLineNum tracks a query and its starting line number for error reporting
@@ -336,15 +353,9 @@ func parseQueriesFromContent(content string) []queryWithLineNum {
 		}
 
 		// Check for backslash continuation (before trimming)
-		trimmedRight := strings.TrimRight(line, " \t")
-		hasBackslash := strings.HasSuffix(trimmedRight, "\\") && !strings.HasSuffix(trimmedRight, "\\\\")
-
-		if hasBackslash {
-			// Remove backslash and accumulate
-			part := strings.TrimSuffix(trimmedRight, "\\")
-			if part != "" {
-				currentLines = append(currentLines, part)
-			}
+		if endsWithContinuation(line) {
+			// Keep the backslash: joinLines decides whether to glue or space-join
+			currentLines = append(currentLines, line)
 			inContinuation = true
 			continue
 		}
@@ -355,7 +366,7 @@ func parseQueriesFromContent(content string) []queryWithLineNum {
 		if trimmed == "" {
 			// Blank line - end current query if any
 			if len(currentLines) > 0 {
-				query := strings.Join(currentLines, " ")
+				query := joinLines(currentLines)
 				queries = append(queries, queryWithLineNum{query: query, startLine: startLine})
 				currentLines = nil
 				inContinuation = false
@@ -368,7 +379,7 @@ func parseQueriesFromContent(content string) []queryWithLineNum {
 		if strings.HasPrefix(trimmed, ".") {
 			// First, flush any accumulated query
 			if len(currentLines) > 0 {
-				query := strings.Join(currentLines, " ")
+				query := joinLines(currentLines)
 				queries = append(queries, queryWithLineNum{query: query, startLine: startLine})
 				currentLines = nil
 			}
@@ -385,7 +396,7 @@ func parseQueriesFromContent(content string) []queryWithLineNum {
 
 	// Handle EOF - treat as query terminator if we have accumulated lines
 	if len(currentLines) > 0 {
-		query := strings.Join(currentLines, " ")
+		query := joinLines(currentLines)
 		queries = append(queries, queryWithLineNum{query: query, startLine: startLine})
 	}
 
@@ -412,7 +423,7 @@ func handleAdhocSource(query string, storage *sstorage.SimpleStorage) bool {
 	}
 
 	// Use the exported function
-	if err := ExecuteQueriesFromFile(replEngine, storage, path); err != nil {
+	if _, _, err := executeQueriesFromFile(replEngine, storage, path); err != nil {
 		fmt.Printf("Error: %v\n", err)
 	}
 

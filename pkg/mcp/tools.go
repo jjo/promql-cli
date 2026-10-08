@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -335,9 +336,12 @@ func handleLoadMetrics(srv *Server, params json.RawMessage) (json.RawMessage, er
 	}
 
 	before := totalSamples(srv.storage)
+	beforeCounts := repl.SampleCounts(srv.storage)
 	if err := srv.storage.LoadFromReader(strings.NewReader(args.Data)); err != nil {
 		return nil, fmt.Errorf("load failed: %w", err)
 	}
+	// stdout carries the MCP protocol: the unpin note goes to stderr
+	repl.DropHeaderPinIfNewer(os.Stderr, srv.storage, beforeCounts)
 	after := totalSamples(srv.storage)
 	added := after - before
 

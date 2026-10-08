@@ -89,7 +89,7 @@ var AdHocCommands = []AdHocCommand{
 	},
 	{
 		Command:     ".save",
-		Description: "Save current store to a Prometheus text-format file (records a pinned .pinat time in a '# promql-cli: pinat=' header)",
+		Description: "Save current store to a Prometheus text-format file (records the pinned .pinat time, or the newest saved sample, in a '# promql-cli: pinat=' header)",
 		Usage:       ".save <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
 		Examples: []string{
 			".save snapshot.prom",
@@ -159,6 +159,25 @@ var AdHocCommands = []AdHocCommand{
 		Description: "Evaluate a query at a specific time",
 		Usage:       ".at <time> <query>",
 		Examples:    []string{".at now-10m sum by (path) (rate(http_requests_total[5m]))"},
+	},
+	{
+		Command:     ".assert",
+		Description: "Check that a query returns a non-empty result: PASS, or FAIL with why (evaluated at the .pinat time)",
+		Usage:       ".assert <expr>",
+		Examples: []string{
+			".assert up",
+			".assert count({__name__=~\"node_.+\"}) < 1000",
+			".assert absent(rate(errors_total[5m]) > 10)",
+		},
+	},
+	{
+		Command:     ".common_labels",
+		Description: "Print labels and timestamps shared by every series once, as # common_labels / # common_timestamp headers (interactive terminal only; on by default)",
+		Usage:       ".common_labels [on|off]",
+		Examples: []string{
+			".common_labels       # show the current setting",
+			".common_labels off   # full labels on every line",
+		},
 	},
 	{
 		Command:     ".pinat",
