@@ -73,14 +73,29 @@ docker run --rm -v "$PWD":/data xjjo/promql-cli:latest query \
 ### Installation
 
 ```bash
-# Go
-go install github.com/jjo/promql-cli@latest
+# From source (go.mod points Prometheus at a fork with a replace directive,
+# which `go install ...@latest` refuses, so build from a checkout)
+git clone https://github.com/jjo/promql-cli && cd promql-cli
+go build -o promql-cli ./cmd/promql-cli
 
 # Docker
 docker pull xjjo/promql-cli:latest
 # or
 docker pull ghcr.io/jjo/promql-cli:latest
 ```
+
+#### No build: run the Docker image as if it were installed
+
+```bash
+alias promql-cli='docker run --rm -it -u $(id -u):$(id -g) -e HOME=$HOME -v $HOME:$HOME -w $PWD xjjo/promql-cli'
+promql-cli --repl=prompt query     # the Docker image, with the 'prompt' REPL
+promql-cli query incident.prom.zst # files under your home directory work as usual
+```
+
+- `-u` runs as you, so files you `.save` are yours; `-v $HOME:$HOME -w $PWD` makes your home directory and current path look the same inside the container.
+- `-e HOME=$HOME` lets the REPL keep its history in your real `~/.promql-cli_history`, shared with a natively built promql-cli.
+- `--rm` removes each container on exit, so they don't pile up.
+- The container has its own network: `localhost` there is the container, not your machine. To `.scrape` an exporter running on your machine, use a native build, or point it at an address the container can reach.
 
 ### Try it in 30 seconds
 
