@@ -456,7 +456,7 @@ func printVersion() {
 // It handles file opening, reading, and error reporting.
 // Options like timestamp and regex can be provided to filter/transform the loaded data.
 func loadMetricsFromFile(storage *sstorage.SimpleStorage, filename string, timestampSpec string, regexSpec string) error {
-	file, err := os.Open(filename)
+	file, err := sstorage.OpenMaybeCompressed(filename)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}

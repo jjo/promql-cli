@@ -95,6 +95,16 @@ promql-cli query -c ".scrape http://localhost:9100/metrics; .metrics"
 promql-cli query -s -q 'up' -o json examples/example.prom
 ```
 
+## 🎤 Talks
+
+- **promql-cli, a full PromQL cli-only engine ✨ .. but WHY?!**, lightning talk at PromCon EU 2026 ([recording](https://www.youtube.com/watch?v=BDryNblRXUE&t=27840s), [slides, PDF](https://github.com/jjo/talks/blob/master/2026/2026-10-08-PromCon26-LightningPromCLIbutWHY/lightning-promql-cli-deck.pdf), [demo kit](https://github.com/jjo/talks/tree/master/2026/2026-10-08-PromCon26-LightningPromCLIbutWHY)): five reasons in under five minutes:
+  - PromQL without a Prometheus;
+  - CI for your exporters with `promql-cli check`;
+  - a `.prom` file as a bug report reproducer;
+  - a playground for new engine functions;
+  - alerts tested on prod data before they page.
+- **Shaving the PromQL Yak**, PromCon EU 2026 ([recording](https://www.youtube.com/watch?v=kTD1sjPWrsU&t=19860s), [slides](https://github.com/jjo/talks/tree/master/2026/2026-10-08-PromCon26-ShavingThePromQLYak)): the new PromQL functions (`time_to_threshold`, `robust_zscore`, `correlation_over_time`, `regression_over_time`, …) that the lightning talk runs in promql-cli.
+
 ## 🎯 Why Use promql-cli?
 
 ### 🚀 Exporter Development
@@ -925,14 +935,25 @@ Notes:
 ```bash
 # reporter
 .pinat node_load1            # pin to the newest sample of node_load1
-.save incident.prom
+.save incident.prom.zst      # zstd/gzip by extension: ~60x smaller, still the text format
 
 # maintainer
-.load incident.prom          # "Pinned evaluation time: ... (restored from incident.prom)"
+.load incident.prom.zst      # compression is detected automatically; "Pinned evaluation time: ... (restored from incident.prom.zst)"
 topk(1, max_over_time(robust_zscore(node_load1)[6h:30s]))
 ```
 
 `.load <file> pinat=<value>` overrides the header (`last`/`first`: newest/oldest sample loaded by that command; `none`: do not pin and ignore the header; otherwise the same time or selector grammar as `.pinat`). The header is skipped, with a note, when `timestamp=` rewrites the loaded samples, and `.save timestamp=...` does not write it. `promql-cli query|load|mcp <file>` honour the header too. A bad `pinat=` value keeps the previous pin; the data still loads. A pin restored from a header only says where that file's data ends, so it is dropped (with an `Unpinned evaluation time (it was restored from ...)` note) when `.scrape`, `.prom_scrape`, `.prom_scrape_range` or a `.load` of a file without header adds newer samples; a pin set with `.pinat` or `pinat=` is never dropped. For `query|load|mcp <file>` the `Pinned evaluation time` message goes to stderr, so stdout carries only results.
+
+#### Compressed snapshots
+
+`.save` compresses by file extension: `.gz` writes gzip, `.zst` (or `.zstd`) writes zstd, anything else plain text. The `# promql-cli: pinat=` header is written inside the compressed stream, so the result is still the standard text format, only smaller (a real 8.9 MB snapshot shrinks to 181 KB with gzip and 149 KB with zstd, about 60x):
+
+```bash
+.save incident.prom.zst
+zstdcat incident.prom.zst | grep node_load1    # or: zcat incident.prom.gz | ...
+```
+
+`.load` and every `<file.prom>` argument (`query`, `load`, `mcp`, `check`) detect gzip and zstd by their magic bytes, not by the file name, so compressed snapshots load transparently, including the `pinat` header. A corrupt or truncated compressed file fails with an error.
 
 #### Series regex filter
 

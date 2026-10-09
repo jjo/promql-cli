@@ -5,6 +5,7 @@ go 1.26.7
 require (
 	github.com/c-bata/go-prompt v0.2.6
 	github.com/chzyer/readline v1.5.1
+	github.com/klauspost/compress v1.20.0
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.3

@@ -312,3 +312,63 @@ func TestQueryPinMessageGoesToStderr(t *testing.T) {
 		t.Errorf("stderr lacks the pin message: %q", stderr)
 	}
 }
+
+func TestCompressedDataFiles(t *testing.T) {
+	data, err := os.ReadFile(exampleProm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	zst := filepath.Join(dir, "example.prom.zst")
+	gz := filepath.Join(dir, "example.prom.gz")
+	for _, p := range []string{zst, gz} {
+		w, err := sstorage.CreateMaybeCompressed(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(data); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	truncated := filepath.Join(dir, "trunc.prom.zst")
+	raw, _ := os.ReadFile(zst)
+	if err := os.WriteFile(truncated, raw[:len(raw)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("check passes on compressed data", func(t *testing.T) {
+		for _, p := range []string{zst, gz} {
+			got := runCheckArgs(t, checkOptions{format: "text", count: 1, args: []string{filepath.Join("testdata", "pass.contract.promql"), p}})
+			if got.code != 0 || !strings.Contains(got.stdout, "2 passed, 0 failed, 0 errors") {
+				t.Errorf("%s: exit %d\nstdout:\n%s\nstderr:\n%s", p, got.code, got.stdout, got.stderr)
+			}
+		}
+	})
+	t.Run("check reports a truncated file", func(t *testing.T) {
+		got := runCheckArgs(t, checkOptions{format: "text", count: 1, args: []string{filepath.Join("testdata", "pass.contract.promql"), truncated}})
+		if got.code == 0 {
+			t.Errorf("expected a non-zero exit for a truncated file\nstdout:\n%s", got.stdout)
+		}
+	})
+	t.Run("positional query load", func(t *testing.T) {
+		t.Cleanup(func() { repl.RunInitCommands(newEngine(), sstorage.NewSimpleStorage(), ".pinat remove", true) })
+		for _, p := range []string{zst, gz} {
+			oldOut := os.Stdout
+			outR, outW, _ := os.Pipe()
+			os.Stdout = outW
+			runErr := newRootCommand().ParseAndRun(context.Background(), []string{"query", "-s", "-q", "count(up)", p})
+			os.Stdout = oldOut
+			_ = outW.Close()
+			stdout, _ := io.ReadAll(outR)
+			if runErr != nil || !strings.Contains(string(stdout), "2") {
+				t.Errorf("%s: err=%v stdout=%q", p, runErr, stdout)
+			}
+		}
+		if err := newRootCommand().ParseAndRun(context.Background(), []string{"query", "-s", "-q", "count(up)", truncated}); err == nil {
+			t.Error("expected an error loading a truncated file")
+		}
+	})
+}
