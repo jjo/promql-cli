@@ -92,7 +92,7 @@ promql-cli --repl=prompt query     # the Docker image, with the 'prompt' REPL
 promql-cli query incident.prom.zst # files under your home directory work as usual
 ```
 
-- `-u` runs as you, so files you `.save` are yours; `-v $HOME:$HOME -w $PWD` makes your home directory and current path look the same inside the container.
+- `-u` runs as you, so files you `.save` are yours; `-v $HOME:$HOME -w $PWD` makes your home directory and current path look the same inside the container. Only your home directory is mounted: run it from somewhere under `$HOME`, or add `-v $PWD:$PWD` when working elsewhere (e.g. in `/tmp`).
 - `-e HOME=$HOME` lets the REPL keep its history in your real `~/.promql-cli_history`, shared with a natively built promql-cli.
 - `--rm` removes each container on exit, so they don't pile up.
 - The container has its own network: `localhost` there is the container, not your machine. To `.scrape` an exporter running on your machine, use a native build, or point it at an address the container can reach.
