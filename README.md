@@ -97,12 +97,13 @@ promql-cli query -s -q 'up' -o json examples/example.prom
 
 ## 🎤 Talks
 
-- **promql-cli, a full PromQL cli-only engine ✨ .. but WHY?!**, lightning talk at PromCon EU 2026 ([slides, PDF](https://github.com/jjo/talks/blob/master/2026/2026-10-08-PromCon26-LightningPromCLIbutWHY/lightning-promql-cli-deck.pdf), [demo kit](https://github.com/jjo/talks/tree/master/2026/2026-10-08-PromCon26-LightningPromCLIbutWHY)): five reasons in under five minutes:
+- **promql-cli, a full PromQL cli-only engine ✨ .. but WHY?!**, lightning talk at PromCon EU 2026 ([recording](https://www.youtube.com/watch?v=BDryNblRXUE&t=27840s), [slides, PDF](https://github.com/jjo/talks/blob/master/2026/2026-10-08-PromCon26-LightningPromCLIbutWHY/lightning-promql-cli-deck.pdf), [demo kit](https://github.com/jjo/talks/tree/master/2026/2026-10-08-PromCon26-LightningPromCLIbutWHY)): five reasons in under five minutes:
   - PromQL without a Prometheus;
   - CI for your exporters with `promql-cli check`;
   - a `.prom` file as a bug report reproducer;
   - a playground for new engine functions;
   - alerts tested on prod data before they page.
+- **Shaving the PromQL Yak**, PromCon EU 2026 ([recording](https://www.youtube.com/watch?v=kTD1sjPWrsU&t=19860s), [slides](https://github.com/jjo/talks/tree/master/2026/2026-10-08-PromCon26-ShavingThePromQLYak)): the new PromQL functions (`time_to_threshold`, `robust_zscore`, `correlation_over_time`, `regression_over_time`, …) that the lightning talk runs in promql-cli.
 
 ## 🎯 Why Use promql-cli?
 
