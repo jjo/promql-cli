@@ -37,30 +37,37 @@ func handleAdhocSave(query string, storage *sstorage.SimpleStorage) bool {
 		return true
 	}
 
-	f, err := os.Create(path)
+	f, err := sstorage.CreateMaybeCompressed(path)
 	if err != nil {
 		fmt.Printf("Failed to open %s for writing: %v\n", path, err)
 		return true
 	}
-	defer func() { _ = f.Close() }()
 	// Record the evaluation time so the file is reproducible: the pinned time, or
 	// without a pin the newest saved sample (where the data ends), so a later load
 	// does not evaluate at "now" and find nothing. Skipped when timestamps are
 	// rewritten on save, as the time would no longer match.
+	var werr error
 	if tsMode == "keep" {
 		if at, ok := saveEvalTime(storage, re); ok {
-			if _, err := fmt.Fprintln(f, formatPinHeader(at)); err != nil {
-				fmt.Printf("Failed to save metrics to %s: %v\n", path, err)
-				return true
-			}
+			_, werr = fmt.Fprintln(f, formatPinHeader(at))
 		}
 	}
-	opts := sstorage.SaveOptions{TimestampMode: tsMode, FixedTimestamp: tsFixed}
-	if re != nil {
-		opts.SeriesRegex = re
+	if werr == nil {
+		opts := sstorage.SaveOptions{TimestampMode: tsMode, FixedTimestamp: tsFixed}
+		if re != nil {
+			opts.SeriesRegex = re
+		}
+		werr = storage.SaveToWriterWithOptions(f, opts)
 	}
-	if err := storage.SaveToWriterWithOptions(f, opts); err != nil {
-		fmt.Printf("Failed to save metrics to %s: %v\n", path, err)
+	// A failed write discards the temporary file, leaving any previous file at
+	// path untouched; Close flushes the compressor and renames it into place.
+	if werr != nil {
+		f.Abort()
+	} else {
+		werr = f.Close()
+	}
+	if werr != nil {
+		fmt.Printf("Failed to save metrics to %s: %v\n", path, werr)
 		return true
 	}
 	fmt.Printf("Saved store to %s\n", path)
@@ -451,7 +458,7 @@ func handleAdhocLoad(query string, storage *sstorage.SimpleStorage) bool {
 		beforeCounts[name] = len(ss)
 	}
 
-	f, err := os.Open(path)
+	f, err := sstorage.OpenMaybeCompressed(path)
 	if err != nil {
 		fmt.Printf("Failed to open %s: %v\n", path, err)
 		return true

@@ -93,6 +93,7 @@ var AdHocCommands = []AdHocCommand{
 		Usage:       ".save <file.prom> [timestamp={now|remove|<timespec>}] [regex='<series regex>']",
 		Examples: []string{
 			".save snapshot.prom",
+			".save snapshot.prom.zst              # zstd by extension (.gz: gzip); .load detects compression",
 			".save snapshot.prom timestamp=now",
 			".save snapshot.prom timestamp=remove",
 			".save snapshot.prom regex='http_requests_total\\{.*code=\"5..\".*\\}'",

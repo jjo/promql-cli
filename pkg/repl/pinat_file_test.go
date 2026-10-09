@@ -296,3 +296,62 @@ func TestScrapeRefreshesCompletionCacheOnError(t *testing.T) {
 		t.Errorf("refresh calls = %d (want 1), out=%q", calls, out)
 	}
 }
+
+func TestSaveLoadCompressedRoundTrip(t *testing.T) {
+	pin := time.UnixMilli(1700000000123)
+	for _, ext := range []string{".prom", ".prom.gz", ".prom.zst", ".prom.zstd"} {
+		t.Run(ext, func(t *testing.T) {
+			st := pinTestStore(t)
+			setPin(t, &pin)
+			p := filepath.Join(t.TempDir(), "snap"+ext)
+			out := captureStdout(t, func() { handleAdhocSave(".save "+p, st) })
+			if !strings.Contains(out, "Saved store to") {
+				t.Fatalf("save failed: %s", out)
+			}
+
+			// the pin header is readable through the compression layer
+			if at, ok := ReadPinHeader(p); !ok || at.UnixMilli() != pin.UnixMilli() {
+				t.Fatalf("ReadPinHeader = %v, %v", at, ok)
+			}
+
+			got := sstorage.NewSimpleStorage()
+			pinnedEvalTime = nil
+			handleAdhocLoad(".load "+p, got)
+			if pinnedEvalTime == nil || pinnedEvalTime.UnixMilli() != pin.UnixMilli() {
+				t.Fatalf("pin not restored: %v", pinnedEvalTime)
+			}
+			if n, want := countSamples(got), countSamples(st); n != want || n != 3 {
+				t.Fatalf("loaded %d samples, want %d", n, want)
+			}
+		})
+	}
+}
+
+func TestLoadCorruptCompressedFile(t *testing.T) {
+	good := filepath.Join(t.TempDir(), "good.prom.zst")
+	captureStdout(t, func() { handleAdhocSave(".save "+good, pinTestStore(t)) })
+	raw, err := os.ReadFile(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(t.TempDir(), "bad.prom.zst")
+	if err := os.WriteFile(bad, raw[:len(raw)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := sstorage.NewSimpleStorage()
+	out := captureStdout(t, func() { handleAdhocLoad(".load "+bad, st) })
+	if !strings.Contains(out, "Failed to load metrics from") {
+		t.Fatalf("expected a load failure message, got %q", out)
+	}
+	if countSamples(st) != 0 {
+		t.Fatalf("truncated file must not load samples, got %d", countSamples(st))
+	}
+}
+
+func countSamples(st *sstorage.SimpleStorage) int {
+	n := 0
+	for _, ss := range st.Metrics {
+		n += len(ss)
+	}
+	return n
+}

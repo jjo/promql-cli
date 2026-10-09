@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -64,7 +63,7 @@ func formatPinHeader(t time.Time) string {
 // ReadPinHeader returns the pinned evaluation time recorded in the leading
 // comment lines of the file at path, if any.
 func ReadPinHeader(path string) (time.Time, bool) {
-	f, err := os.Open(path)
+	f, err := sstorage.OpenMaybeCompressed(path)
 	if err != nil {
 		return time.Time{}, false
 	}
