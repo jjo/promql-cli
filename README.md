@@ -938,7 +938,7 @@ Notes:
 .save incident.prom.zst      # zstd/gzip by extension: ~60x smaller, still the text format
 
 # maintainer
-.load incident.prom.zst      # compression is detected automatically; "Pinned evaluation time: ... (restored from incident.prom)"
+.load incident.prom.zst      # compression is detected automatically; "Pinned evaluation time: ... (restored from incident.prom.zst)"
 topk(1, max_over_time(robust_zscore(node_load1)[6h:30s]))
 ```
 
