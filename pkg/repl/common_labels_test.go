@@ -5,7 +5,9 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
 )
@@ -56,7 +58,7 @@ func TestPrintVectorCommonLabelsOnTerminal(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		`  # common_labels: {job="node", namespace="monitoring"}`,
-		"  # common_timestamp: 1970-01-01T",
+		"  # common_timestamp: " + model.Time(0).Time().Format(time.RFC3339) + "\n", // local time: TZ-independent
 		"  [1] {…, instance=\"a:9100\"} => 1\n",
 		"  [2] {…, instance=\"b:9100\"} => 2\n",
 	} {
