@@ -12,7 +12,7 @@ require (
 	github.com/prometheus/common v0.72.0
 	github.com/prometheus/prometheus v0.315.0
 	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.46.0
+	golang.org/x/term v0.47.0
 )
 
 require (
