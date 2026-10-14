@@ -1606,7 +1606,7 @@ func fetchMetrics() {
 		evalTime = *pinnedEvalTime
 	}
 
-	lbls, _, err := client.LabelValues(ctx, "__name__", []string{}, evalTime.Add(-time.Hour), evalTime)
+	lbls, _, _, err := client.LabelValues(ctx, "__name__", []string{}, evalTime.Add(-time.Hour), evalTime) // warnings and infos are irrelevant for completion
 	if err != nil {
 		return
 	}
